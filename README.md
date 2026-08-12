@@ -30,6 +30,8 @@ lisjongは、日本式立直麻雀AIを自作し、ローカル対局からオ�
 Mortalやpython-studyのコード・modelをlisjongの内部実装として取り込むことは
 初期目標に含めません。
 
+責務と依存方向の詳細は[Architecture](docs/architecture.md)を参照してください。
+
 ## 開発方針
 
 - 初期実装はPython 3.12を基準とする
@@ -37,12 +39,42 @@ Mortalやpython-studyのコード・modelをlisjongの内部実装として取�
 - 各プレイヤーから観測可能な情報だけを判断へ使用する
 - Policyは合法手からactionを選択し、外部送信前にも合法手を検証する
 - 再現可能なseed、version、評価条件を記録する
-- AIの強さより先に、接続の正しさ、半荘完走、テスト可能性を確立する
+- AIの強さより先に、接続の正しさ、半荘完走、test可能性を確立する
 - Rustは先行導入せず、profilingで必要性が確認された処理に限って検討する
+
+## 開発環境
+
+初期基準はPython 3.12です。repositoryを取得後、次のコマンドで開発環境を
+準備します。
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+```
+
+macOS / Linuxでは、activateコマンドを次のように読み替えます。
+
+```bash
+source .venv/bin/activate
+```
+
+### 品質確認
+
+ローカルとCIで同じコマンドを使用します。
+
+```text
+python -m ruff format --check .
+python -m ruff check .
+python -m unittest discover -s tests -v
+```
+
+現時点のtestはpackageをimportできることだけを確認します。RiichiEnvなどの依存は
+調査Issueで実APIと利用条件を確認してから追加します。
 
 ## ロードマップ
 
-1. Python package、テスト、CI、文書の初期整備
+1. Python package、test、CI、文書の初期整備
 2. RiichiEnvの実API・依存条件の調査
 3. 共通Policy境界の設計
 4. 学習modelを使わない最小Policyの実装
@@ -67,8 +99,8 @@ hashなどを確認し、repository本体とは分離して管理します。
 
 ## 開発状況
 
-package構成、install方法、実行方法、テストコマンドは初期整備Issueで確定します。
-現時点では、READMEに記載できる実行可能なAI実装はまだありません。
+Python 3.12の最小package、import test、Ruff、GitHub Actions CIを初期開発基盤と
+しています。Policy、RiichiEnv Adapter、RiichiLab Clientはまだ実装していません。
 
 ## License
 

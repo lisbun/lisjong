@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lisjong"
+version = "0.1.0"
+description = "Personal Japanese riichi mahjong AI for RiichiEnv and RiichiLab"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+authors = [{ name = "lisbun" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
