@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# lisjong: local secrets and environment-specific configuration
+.env.*
+!.env.example
+
+# lisjong: model weights and exported models
+*.pth
+*.pt
+*.onnx
+
+# lisjong: local datasets and experiment outputs
+/models/
+/data/raw/
+/artifacts/
+/runs/
