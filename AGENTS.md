@@ -16,7 +16,8 @@ Issueまたはユーザーの明示的な指示が本書と異なる場合は、
 
 ## 実装規則
 
-- Python 3.12を初期基準とする
+- 通常版CPython 3.14を初期基準とし、free-threaded build（3.14t）は互換性を
+  個別に検証するまで対象外とする
 - RiichiEnvやRiichiLab固有の型・protocolをPolicyへ持ち込まない
 - Policyへ渡す情報を当該seatの観測可能範囲に限定する
 - 調査前に将来の構造を過剰設計しない
