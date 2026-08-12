@@ -34,7 +34,7 @@ Mortalやpython-studyのコード・modelをlisjongの内部実装として取�
 
 ## 開発方針
 
-- 初期実装はPython 3.12を基準とする
+- 初期実装は通常版CPython 3.14を基準とする
 - RiichiEnv、RiichiLabなど外部環境の型・protocolをAI Policyから分離する
 - 各プレイヤーから観測可能な情報だけを判断へ使用する
 - Policyは合法手からactionを選択し、外部送信前にも合法手を検証する
@@ -44,8 +44,13 @@ Mortalやpython-studyのコード・modelをlisjongの内部実装として取�
 
 ## 開発環境
 
-初期基準はPython 3.12です。repositoryを取得後、次のコマンドで開発環境を
-準備します。
+初期基準は通常版CPython 3.14です。[RiichiLabの公式Local Testing要件](https://riichi.dev/docs/local-testing)
+であるPython 3.12以上を満たし、[RiichiEnvの配布package](https://pypi.org/project/riichienv/#files)
+に含まれるCPython 3.14向けwheelを利用します。
+free-threaded build（3.14t）は、依存libraryを含む互換性を個別に検証するまで
+対象外とします。
+
+repositoryを取得後、次のコマンドで開発環境を準備します。
 
 ```powershell
 python -m venv .venv
@@ -99,7 +104,7 @@ hashなどを確認し、repository本体とは分離して管理します。
 
 ## 開発状況
 
-Python 3.12の最小package、import test、Ruff、GitHub Actions CIを初期開発基盤と
+Python 3.14の最小package、import test、Ruff、GitHub Actions CIを初期開発基盤と
 しています。Policy、RiichiEnv Adapter、RiichiLab Clientはまだ実装していません。
 
 ## License
