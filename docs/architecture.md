@@ -52,10 +52,13 @@ RiichiEnv Adapterは、seat別のRiichiEnv外部型とlisjong内部型の間を�
 - Policyの選択結果を外部環境へ返す前に、元の合法手に対して再検証する
 - `Observation.to_dict()`やevent履歴を無加工・全量でPolicyへ渡さない
 - 対局loop、環境の生成・初期化、学習アルゴリズム、Policy固有の判断を所有しない
+- Policyを呼び出さず、Policy判断の実行順序や複数seatのオーケストレーションを
+  所有しない
 
-Adapterは単一の「現在手番player」を前提にしない。一方、複数player分の要求を
-まとめて進行させる責務はLocal game runnerに置き、AdapterとPolicyは各seatを
-独立した変換・判断単位として扱う。
+Adapterの変換・検証はseat単位で行い、単一の「現在手番player」を前提にしない。
+Local game runnerまたはRiichiLab Clientが、AdapterとPolicy contractをそれぞれ
+利用してPolicy判断を実行し、選択結果をAdapterへ戻して対応付け・再検証する。
+Adapter自身はPolicy呼び出しを仲介しない。
 
 変換後の具体的なPolicy入力、内部Action、action identityの規則はIssue #11で
 確定する。
@@ -69,10 +72,13 @@ Local game runnerは、RiichiEnvを使用するローカル対局のライフサ
 - `reset()`、`step()`、`done()`を呼び出し、対局loopを進行する
 - `reset()`または`step()`が返した、Action選択を要求されているplayerから
   seat別`Observation`へのmapを処理する
-- 各ObservationをRiichiEnv Adapterへ渡し、seatごとに独立してPolicy判断を
-  実行する
+- 各seatのObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
+  Policy入力と合法な内部action候補へ変換する
+- Policy contractを通じて、seatごとに独立したPolicy判断を実行する
+- Policyの選択結果をRiichiEnv Adapterへ戻し、同じseatの合法なRiichiEnv
+  `Action`へ対応付けて再検証する
 - 複数playerへ同時にActionが要求された場合、各seatのObservationと合法手を
-  混同せず、必要なAction集合を組み立てて環境へ返す
+  混同せず、検証済みのAction集合を組み立てて`step()`へ返す
 - `env.done()`を対局終了判定の正本とし、局情報から独自に終了を推測しない
 - 対局終了後のscores、ranks等の結果を取得する
 - 必要に応じて完全対局ログを記録・評価等のPolicy外用途へ渡す
@@ -86,10 +92,15 @@ Local game runnerはRiichiEnv外部型からPolicy内部型への変換やPolicy
 RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycleを担当する。
 
 - 認証、接続、受信、送信、timeout・time budget、ack、終了処理を担当する
-- `request_action`に含まれるserialized observationをRiichiEnvの
-  `Observation`として復元し、RiichiEnv Adapterへ渡す
-- `request_id`と`possible_actions`を管理し、Policyの選択結果を送信前に
-  再検証する
+- `request_action`を受信し、必要なRiichiEnv SDK機能を使ってserialized
+  observationをRiichiEnvの`Observation`として復元する
+- 復元したObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
+  Policy入力と合法な内部action候補へ変換する
+- Policy contractを通じてPolicy判断を実行する
+- Policyの選択結果をRiichiEnv Adapterへ戻し、合法なRiichiEnv `Action`へ
+  対応付けて再検証する
+- `request_id`と`possible_actions`を管理し、選択結果をオンラインの合法手候補に
+  対して送信前に再検証して、MJAI ActionとしてRiichiLabへ返す
 - `action_ack`等のprotocol上の応答を処理する
 - オンライン対局中に接続が切断された場合は安全に終了し、初期スコープでは
   ゲーム途中からの再接続・復旧を試みない
@@ -111,16 +122,22 @@ action identityはIssue #11および後続のRiichiLab Client実装Issueで確�
 flowchart TD
     Runner["Local game runner"] --> SDK["RiichiEnv SDK"]
     Runner --> Adapter["RiichiEnv Adapter"]
+    Runner --> Contract["Policy contract"]
     Client["RiichiLab Client"] --> LabAPI["RiichiLab API"]
     Client --> SDK
     Client --> Adapter
-    Adapter --> Contract["Policy contract"]
+    Client --> Contract
+    Adapter --> Contract
     Impl["Policy implementation"] --> Contract
 ```
 
-Local game runnerはRiichiEnv SDKで対局を進め、各seatの変換・合法性検証を
-RiichiEnv Adapterへ委ねる。RiichiLab ClientはRiichiLab APIとのsessionを管理し、
-RiichiEnv SDKで復元したseat別Observationを同じAdapter境界へ渡す。
+Local game runnerとRiichiLab Clientは、それぞれローカル対局とオンライン対局の
+オーケストレーションを担当する。両者はRiichiEnv AdapterとPolicy contractを
+直接利用し、Adapterによる変換・検証の前後でPolicy判断を呼び出す。
+
+AdapterからPolicy contractへの矢印は、Policy入力や内部action等の共通契約へ
+依存し得ることを表し、AdapterがPolicyを呼び出す経路を表すものではない。
+Policy implementationはPolicy contractを実装する。
 
 Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
 mjai、WebSocketへ依存しない。外部環境の仕様変更はLocal game runner、
