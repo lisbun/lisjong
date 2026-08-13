@@ -64,6 +64,10 @@ RiichiLab の公式ローカルテスト文書では、Python 3.12 以上と `pi
 
 エージェントの中心的な境界は、観測を受け取って行動を返す `act(obs: Observation) -> Action` である。`Observation` はそのプレイヤーから見える現在状態を表し、`legal_actions()` で合法手を取得する。
 
+RiichiLabの`request_action`には、少なくとも`request_id`、`possible_actions`、base64化された`observation`が含まれる。`observation`はRiichiEnvの`Observation.deserialize_from_base64()`で復元でき、公式の利用例は、復元した観測をAgentへ渡し、返されたRiichiEnv `Action`を`to_mjai()`で変換してオンライン応答へ利用する構造である。
+
+この公式仕様は、RiichiEnvの`Observation` / `Action`を使うAgent境界をローカルとオンラインで再利用できる可能性を示す。一方、WebSocket、`request_id`、`possible_actions`の整合確認、timeout、`action_ack`、再接続はRiichiLab Client固有の責務である。
+
 ### RiichiEnv の主要 API
 
 以下は `v0.4.8` の公式 README で確認した公開 API である。
@@ -71,19 +75,22 @@ RiichiLab の公式ローカルテスト文書では、Python 3.12 以上と `pi
 | API | 公式文書上の役割 | lisjong で確認する点 |
 | --- | --- | --- |
 | `RiichiEnv(...)` | 環境を作成する | 初期化引数、既定ルール、例外。constructorの`seed`と再現性は実測済み |
+| `RiichiEnv.game_mode` | 選択されたgame modeを提供する | Python公開型とmodeごとの終了条件 |
 | `reset()` | ゲームを初期化し、プレイヤーIDから `Observation` への辞書を返す | 初期観測、再実行時の状態、seed指定可否。`seed`引数は確認済みだが、期待した再現性は未確認 |
 | `step(actions)` | プレイヤーIDから `Action` への辞書を適用し、次の観測辞書を返す | 複数player同時行動、pon / chi競合、一部の異常入力、終了後の挙動は実測済み。ron等の競合は未確認 |
-| `done()` | ゲーム終了を返す | 既定の1局終了は実測済み。東風戦・半荘等との区別は未確認 |
-| `scores()` / `ranks()` | 終了時の点数と順位を返す | 1局終了時の戻り値は実測済み。取得可能な全タイミングは未確認 |
+| `done()` | ゲーム終了を返す | single / east / halfの終了と延長を実測済み。他rule・score条件は未確認 |
+| `scores()` / `ranks()` | 終了時の点数と順位を返す | single / east / half終了時の戻り値は実測済み。取得可能な全タイミングは未確認 |
 | `Observation.legal_actions()` | 合法な `Action` の一覧を返す | 順序、同一性、空リストの有無 |
 | `Observation.new_events()` | そのプレイヤーに対する新規 MJAI JSON イベントを返す | 可視情報の境界と、同一objectでの連続呼び出しが非消費であることは実測済み。観測更新をまたぐ意味は未確認 |
 | `Observation.events` | 観測窓におけるイベント履歴を提供する | 履歴範囲と情報漏えいの有無 |
 | `Observation.select_action_from_mjai(...)` | MJAI 応答を合法な `Action` へ対応付ける | 実行経路に出現した打牌、pon、chi、noneのround-tripは実測済み。不正・曖昧な入力と未出現Actionは未確認 |
+| `Observation.deserialize_from_base64(...)` | RiichiLabから受け取るserialized observationを復元する | RiichiLab Clientと共通Agentの境界 |
+| `RiichiEnv.mjai_log` | 対局のMJAI event列を提供する | Python公開形、完全ログとseat別eventの情報境界 |
 | `apply_event(...)` | MJAI イベントを状態へ適用する | 学習・リプレイ用途との境界 |
 | `get_observation(player_id)` | 指定プレイヤーの観測を取得する | 取得可能なタイミング |
 | `observe_event(event, player_id)` | イベント適用後、行動可能なら観測を返す | RiichiLab オンライン推論との共通化範囲 |
 
-既定の環境は1局を実行する。東風戦、半荘などのモードでは、指定ルールの終了条件まで継続する。
+既定の環境は1局を実行する。4人麻雀について、少なくとも`4p-red-single`、`4p-red-east`、`4p-red-half`がある。東風戦、半荘などのmodeではgame-end conditionsや延長条件を含む指定ルールの終了条件まで継続するため、mode名だけから特定の基準局で必ず終了するとは限らない。
 
 ### v0.4.8 ソースで確認した実装事実
 
@@ -97,14 +104,14 @@ RiichiLab の公式ローカルテスト文書では、Python 3.12 以上と `pi
 
 | 項目 | 値 | 状態 |
 | --- | --- | --- |
-| OS | Windows | OSエディション、build番号、architectureは未記録 |
-| shell | PowerShell 7.6.3 | 基準環境。初回実測時の再確認は未実施 |
+| OS | Windows 10 Home | `Get-ComputerInfo`で`WindowsVersion: 2009`、`OsBuildNumber: 26200`、`OsArchitecture: 64 ビット`を実測済み |
+| shell | PowerShell 7.6.3 | 対象PCで実測済み |
 | Python | 通常版 CPython 3.14.6 | `.venv` で実測。free-threaded buildは対象外 |
 | Python executable | `C:\Dev\lisjong\.venv\Scripts\python.exe` | 実測済み |
 | RiichiEnv | 0.4.8 | `.venv` へのインストール、import、package metadataを実測済み |
 | pip | 26.2.1 | 実測済み |
-| PyYAML | 未確認 | RiichiEnvの依存として確認済み。正確なバージョンは未記録 |
-| IPython | 未確認 | RiichiEnvの依存として確認済み。正確なバージョンは未記録 |
+| PyYAML | 6.0.3 | 対象`.venv`で、RiichiEnvからの依存として実測済み |
+| IPython | 9.16.1 | 対象`.venv`で、RiichiEnvからの依存として実測済み |
 
 この文書を作成した作業コンテナは対象PCの実測環境ではないため、RiichiEnv の動作確認結果には含めない。
 
@@ -142,7 +149,8 @@ Get-FileHash .tmp-riichienv\riichienv-0.4.8-cp314-cp314-win_amd64.whl -Algorithm
 | 確認項目 | 状態 | 結果・根拠 |
 | --- | --- | --- |
 | `.venv` へのインストール | 確認済み | CPython 3.14.6、pip 26.2.1 で `riichienv==0.4.8` のインストールに成功した |
-| CPython 3.14 用 wheel の選択 | 未確認 | インストールは成功したが、実際に取得されたwheel名とSHA-256は未記録 |
+| CPython 3.14 Windows x86-64 wheel | 確認済み | `pip download`で`riichienv-0.4.8-cp314-cp314-win_amd64.whl`（1,394,738 bytes）を明示取得した |
+| 明示取得したwheelのSHA-256 | 確認済み | `DB49CD21308B6E479CD631BF6F4B63B95E16A1EB3CB6C2B28E64529CA938E1D2`。大文字・小文字を除いて公式メタデータ記載値と一致した |
 | importとpackage metadata | 確認済み | `import riichienv` に成功し、package metadataから0.4.8を確認した |
 | package metadataの配布条件 | 確認済み | `python -m pip show riichienv` でApache-2.0、依存`ipython` / `pyyaml`を確認した |
 | 公開型の実体 | 確認済み | `RiichiEnv` は `riichienv._riichienv.RiichiEnv`、`Observation` は `riichienv._riichienv.Observation`、`Action` は `riichienv._riichienv.Action` だった |
@@ -158,11 +166,17 @@ Get-FileHash .tmp-riichienv\riichienv-0.4.8-cp314-cp314-win_amd64.whl -Algorithm
 | 1局の完走 | 確認済み | `legal_actions()[0]`を選ぶ方針で84 step後に`done() == True`となり、最終観測、点数、順位を取得した |
 | 再実行の再現性 | 一部確認済み | constructorの同一seedではevent列まで再現した。`reset(seed=...)`では期待した再現性を確認できなかった |
 | 不正入力と終了後の`step()` | 一部確認済み | 不正Action型、存在しないplayer ID 99、`done()`後の空actionを実測した。他の異常入力は未確認 |
-| 依存パッケージ | 一部確認済み | 直接依存名は確認したが、PyYAMLとIPythonの正確なバージョンは未記録 |
+| 依存パッケージ | 確認済み | 対象`.venv`でPyYAML 6.0.3、IPython 9.16.1をRiichiEnvからの依存として確認した |
 | 複数player同時Action要求 | 確認済み | `Phase.WaitResponse`でplayer 0と2が同時に返るケースを確認した |
 | 複数`Observation`の独立性 | 一部確認済み | Python公開面では別objectであり、片方への読み取り操作によるserialized stateの相互干渉は確認されなかった |
 | Action / MJAI round-trip | 一部確認済み | 90 stepの実行経路に出現した通常・赤牌打牌、pon、chi、noneで往復に成功した |
+| `game_mode` | 確認済み | 既定環境ではPythonの`int`値`0`として取得した。single / east / halfを実行し、`done()`までの局遷移を確認した |
+| 対局終了 | 確認済み | 今回の3 modeで`end_game`、`done() == True`、最終観測`{}`の対応を確認した |
+| `mjai_log` | 確認済み | Pythonの`dict`を要素とする`list`で、全playerの実配牌・実ツモ牌を含む完全対局ログだった |
+| `Observation.new_events()`の公開形 | 確認済み | JSON文字列を要素とする`list`で、seat視点に非公開牌が`?`へmaskされていた |
 | CPU、メモリ、実行時間 | 未実施 | 最小再現の参考値だけを記録する |
+
+`pip download`で明示取得したwheelのファイル名、サイズ、SHA-256を確認し、公式メタデータ記載hashとの一致を確認した。これは、初回の`pip install`が必ずこの同一ファイルを使用したことの直接証明ではない。確認後に`.tmp-riichienv`を削除し、wheelはリポジトリへ残していない。
 
 `reset()` / `step()` の戻り値の`dict`に複数playerが同時に含まれるケースを実測した。したがって、単純な「現在手番」ではなく、「その時点で`Action`選択を要求されているplayerから`Observation`へのmap」として扱う。
 
@@ -270,6 +284,66 @@ Action
 
 実行経路上では、通常打牌、赤牌を含む打牌（例: `5pr`、`5sr`）、pon、chi、noneを確認した。ron、tsumo agari、riichi、kan各種など、今回出現しなかったAction種別は未確認である。
 
+#### game modeと対局終了
+
+既定の`RiichiEnv(seed=12345)`では、`env.game_mode`はenumではなくPythonの`int`値`0`として取得された。`reset()`直後は`round_wind == 0`、`kyoku_idx == 0`、`oya == 0`、`done() == False`、観測mapのkeyは`[0]`だった。
+
+constructorのseed 12345を使用し、各`Observation`で`legal_actions()[0]`を選ぶ方針で3 modeを実行した。
+
+| mode | 実測した局遷移 | step数 | scores | ranks |
+| --- | --- | ---: | --- | --- |
+| `4p-red-single` | 東1のみ: `(round_wind=0, kyoku_idx=0, oya=0, honba=0)` | 90 | `[25000, 25000, 25000, 25000]` | `[1, 2, 3, 4]` |
+| `4p-red-east` | 東1～東4、南1～南4 | 682 | `[25000, 25000, 25000, 25000]` | `[1, 2, 3, 4]` |
+| `4p-red-half` | 東1～東4、南1～南4、西1～西4 | 1042 | `[27000, 23000, 27000, 23000]` | `[1, 3, 2, 4]` |
+
+`4p-red-east`では東4終了後の`end_kyoku`に続き、`bakaze: "S"`、`kyoku: 1`の`start_kyoku`が生成され、南1へ進行した。南4終了後に`end_kyoku`、`end_game`が生成され、`env.done() == True`となった。
+
+実測した`4p-red-east`の`(round_wind, kyoku_idx, oya, honba)`遷移は次のとおり。
+
+```text
+(0, 0, 0, 0)
+(0, 1, 1, 1)
+(0, 2, 2, 2)
+(0, 3, 3, 3)
+(1, 0, 0, 4)
+(1, 1, 1, 5)
+(1, 2, 2, 6)
+(1, 3, 3, 7)
+```
+
+`4p-red-half`では南4終了後に`bakaze: "W"`、`kyoku: 1`の`start_kyoku`が生成され、西1へ進行した。西4終了後に`end_kyoku`、`end_game`が生成され、`env.done() == True`となった。
+
+3 modeとも終了時の観測mapは空だった。今回のseed、Action選択、ruleで観測した結果であり、eastが常に南4、halfが常に西4で終了するとは一般化しない。RiichiEnv利用時の対局終了は`round_wind`や`kyoku_idx`から独自に推測せず、`env.done()`を正本とする。
+
+#### `mjai_log`とseat別eventの情報境界
+
+RiichiEnv 0.4.8の今回のprobeでは、`env.mjai_log`はPythonの`dict`を要素とする`list`だった。reset直後の`start_kyoku`には4player全員の実際の配牌が含まれ、通常進行中の`tsumo`にも他家を含む実際のツモ牌が記録されていた。
+
+一方、`Observation.new_events()`はJSON文字列を要素とする`list`だった。`start_kyoku`では自席の配牌だけが実牌で、他3playerの配牌は`?`へmaskされていた。他家の`tsumo`も`pai: "?"`となり、自席のツモだけが実牌として取得された。
+
+したがって、今回の実測範囲では次の情報境界がある。
+
+| API | Python公開形 | 情報境界 | 想定用途 |
+| --- | --- | --- | --- |
+| `env.mjai_log` | `list[dict]` | 全playerの非公開情報を含み得る完全対局ログ | Replay、調査、監査等のPolicy外用途 |
+| `Observation.new_events()` | JSON文字列の`list` | 当該seatの視点にmaskされたevent | 必要な場合のseat別Policy入力候補 |
+
+`env.mjai_log`をPolicyへ直接渡してはいけない。eventをPolicy入力へ使う場合も、seat別`Observation`の情報境界を維持する。このevent実測だけから、`Observation`の全fieldについて情報漏えいがないとは一般化しない。
+
+#### RiichiLabとローカルRiichiEnvの共通化範囲
+
+RiichiLab公式仕様とローカル実測を合わせると、RiichiEnvの`Observation`を受け取って`Action`を返すRiichiEnv-facing Agentは、ローカルとオンラインで共通化できる。lisjongのPolicyにRiichiEnv固有型を直接持ち込まない既存方針は維持し、共通Agentの内側でRiichiEnv `Observation` / `Action`とlisjong内部型を変換する。
+
+| 層 | 責務 |
+| --- | --- |
+| 共通Agent / Policy境界 | seat別観測から行動を選択する。RiichiEnv-facing Agentは`Observation -> Action`を提供し、その内側のPolicyはlisjong内部型を使用する |
+| Local adapter | `reset()`、`step()`、複数playerのAction要求、`done()`、ローカル対局loopを管理する |
+| RiichiLab Client adapter | WebSocket、`request_id`、`possible_actions`整合確認、timeout / time budget、`action_ack`、再接続、オンライン応答を管理する |
+
+RiichiLab Clientはserialized observationを`Observation.deserialize_from_base64()`で復元し、Agentが返した`Action`を`to_mjai()`で応答形式へ変換できる。WebSocket protocol固有情報をPolicyへ持ち込まない。
+
+今回確認済みなのは、RiichiLabが`possible_actions`を合法手候補として提示する公式仕様、serialized observationを復元する公式境界、`Action.to_mjai()`をオンライン応答に使う公式設計、およびローカルRiichiEnvでの一部ActionのMJAI round-tripである。実際のWebSocket requestに含まれる`possible_actions`と生成Actionの生JSON dictが全fieldで完全一致することは実測していない。照合実装とオンライン実測は後続のRiichiLab Client側で行う。
+
 ## 最小再現コード
 
 次のコードは、環境ループと合法手の最小確認を目的とした調査案であり、正式な Policy 実装ではない。同等の`legal_actions()[0]`選択方針による1局完走は実測済みだが、この掲載コードを恒久的な調査コードとして保存したものではない。
@@ -361,15 +435,12 @@ ranks:
 
 - `legal_actions()` の並び順が、実行間やバージョン間で安定するか。
 - `legal_actions()`が空になる局面の有無と、Actionの比較・同一性に必要なfield。
-- OSエディション、build番号、architectureと、初回実測時のPowerShellの正確なバージョン。
-- 実際に取得されたwheelのファイル名とSHA-256。
-- PyYAMLとIPythonの正確なバージョン。
 - CPUのみでの利用条件、Windows / WSL2 / Linuxの差、native runtime要件。
 - `RiichiEnv(...)`の既定rule、game modeごとの初期化引数、不正な初期化引数に対する例外。
 - 公式文書上の`act(obs: Observation) -> Action`以外にAgent登録APIが存在するか、環境loopをlisjong側で管理することが正式な利用方法か。
 - constructor seedの再現性が、今回と異なるrule、game mode、Action選択方針、RiichiEnvバージョンでも保たれるか。
 - `reset(seed=...)`で期待した再現性を確認できなかった挙動が、他の環境やRiichiEnvバージョンでも同じか。
-- 東風戦、半荘等のgame modeにおける局終了と対局終了の区別、終了時の観測。
+- 今回と異なるrule、score、seed、Action選択でのgame-end conditions、延長範囲、終了時の観測。
 - `scores()` / `ranks()`を取得できるすべての時点と、点数移動がある終了時の値。
 - Python公開面より下の内部可変状態まで、4席の`Observation`が共有されず独立しているか。
 - `Observation`、`Action` の比較やhashに依存してよいか。シリアライズの安定性とバージョン互換性。
@@ -379,13 +450,13 @@ ranks:
 - player ID 99以外の不正ID、合法だが要求先と異なるplayerのAction、別局面のAction、欠落・余分な応答等に対する`step()`の挙動。
 - `done()`後に空でないActionを渡した場合や、`step({})`を繰り返した場合の挙動。
 - 今回のWindows環境ではimportとstepに成功したが、追加のDLLまたはruntimeが既存環境に依存していないか、別環境でも同じ条件で動作するか。
-- 通常版CPython 3.14.6で、複数局・東風戦・半荘を含む継続的な動作が安定するか。
+- 通常版CPython 3.14.6で、複数対局の反復や長時間実行が安定するか。
 - ron、複数ron等を含むclaim競合と、pon / chi以外の優先順位。
 - ron、tsumo agari、riichi、kan各種等、今回出現しなかったActionのMJAI round-trip。
 - 不正または曖昧なMJAI入力を`select_action_from_mjai()`へ渡した場合の挙動。
-- RiichiLabの`possible_actions`とRiichiEnvの`Action`を、今回確認したMJAI round-tripを介してどこまで対応付けられるか。
-- RiichiEnv のイベント履歴を、Policy 入力としてそのまま採用してよいか。
-- 対局ログ、Replay、MJAI event全体の取得方法、保存形式、情報境界。
+- 実際のRiichiLab WebSocket requestにおける`possible_actions`と生成Actionの照合方法。生JSON dictの全field完全一致は未実測。
+- `Observation.new_events()`以外の未確認fieldを含め、Policy入力に採用できるseat別情報の最小範囲。
+- `mjai_log`の永続化形式とReplay API。完全ログとしての取得方法と情報境界は確認済み。
 - timeoutまたはstep上限をRiichiEnv側で設定できるか。CPU、メモリ、実行時間の参考値。
 
 ## lisjong の設計へ引き継ぐ判断
@@ -403,7 +474,10 @@ ranks:
 9. 再現性が必要な実験では、現時点ではconstructorの`RiichiEnv(seed=...)`を使用する。`reset(seed=...)`を再現性の根拠にはしない。
 10. RiichiEnvが不正player IDを必ず例外化することを前提にせず、Adapter側でAction要求playerと入力player IDの整合性を検証する。
 11. 複数playerへ同時に応答する場合も、各playerの`Observation`と合法手を混同せず、seatごとに変換・検証する。
-12. RiichiEnv ActionとMJAIの接続には`to_mjai()` / `select_action_from_mjai()`を利用できる可能性がある。ただし、Policyの正式なAction契約やRiichiLabとの共通化範囲は、未出現Actionと`possible_actions`の確認後に確定する。
+12. ローカルとRiichiLabでRiichiEnv-facing Agentの`Observation -> Action`境界を共通化できる。Agentの内側ではRiichiEnv固有型をlisjong内部型へ変換し、Policyへ直接持ち込まない。
+13. RiichiEnv利用時の対局終了は`round_wind`や`kyoku_idx`から推測せず、`env.done()`を正本とする。
+14. `env.mjai_log`は非公開情報を含み得る完全対局ログとしてPolicyから隔離し、Replay、調査、監査等のPolicy外用途に限定する。
+15. eventをPolicy入力に使う場合は、`env.mjai_log`ではなくseat別`Observation`の情報境界を維持する。WebSocket、`request_id`、`possible_actions`照合、timeout、`action_ack`、再接続はRiichiLab Clientへ閉じ込める。
 
 これらは [architecture.md](architecture.md) の Policy、RiichiEnv Adapter、RiichiLab Client の責務分離を具体化する判断である。
 
@@ -411,13 +485,13 @@ ranks:
 
 | 判断対象 | 今回までの実測 | 確定に必要な残りの実測 |
 | --- | --- | --- |
-| Policy 入力の最小スキーマ | 自他家の情報境界と、複数seatのPython object・読み取り操作の独立性を一部確認 | 局終了時、未確認field、内部可変状態の独立性 |
+| Policy 入力の最小スキーマ | 自他家の情報境界、seat別`new_events()`のmask、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 未確認field、内部可変状態の独立性 |
 | 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripを確認 | 未出現Action、不正・曖昧なMJAI入力、比較・hashの要否 |
 | 乱数・再現性の境界 | constructor seedでevent列まで再現。`reset(seed=...)`では期待した再現性を確認できず | rule、game mode、バージョンを変えた場合の適用範囲 |
 | エラー変換方針 | 不正Action型、player ID 99、`done()`後の空actionを確認 | 要求先不一致、欠落・余分な応答、別局面Action等 |
-| 局・対局のライフサイクル | 既定の1局を完走し、`done()`、最終空map、scores、ranksを確認 | 点数移動がある終了、東風戦・半荘等 |
-| RiichiLab との共通 Adapter 範囲 | 実行経路上のAction / MJAI round-tripを確認 | オンライン`possible_actions`、未出現Actionとの対応 |
-| runtime dependencyへの追加 | 通常版CPython 3.14でインストール、import、1局完走を確認 | wheel hash、依存version、別環境・長時間実行の安定性 |
+| 局・対局のライフサイクル | single / east / halfを完走し、延長、`end_game`、`done()`、最終空map、scores、ranksを確認 | 他rule・score条件での終了挙動 |
+| RiichiLab との共通 Adapter 範囲 | 公式serialized Observation / Action応答境界と、ローカルの一部Action / MJAI round-tripを確認 | 実WebSocket requestの`possible_actions`照合、未出現Actionとの対応 |
+| runtime dependencyへの追加 | 通常版CPython 3.14でインストール、import、1局完走、依存version、明示取得したwheelのhashを確認 | 別環境・長時間実行の安定性 |
 
 RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境でインストールと最小再現が成功し、必要性と依存範囲を確認した後に別の変更として行う。
 
@@ -427,16 +501,19 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 - [x] 公式情報、実測、推測、設計判断を分離する形式を定義した。
 - [x] 対象パッケージと調査予定環境を記録した。
 - [x] 最小再現コード案を記録した。
-- [ ] Windows / 通常版 CPython 3.14.6 で正確な環境情報を採取した（Python、pip、実行ファイルは確認済み。OS build / architecture等は未確認）。
+- [x] Windows / 通常版 CPython 3.14.6 で正確な環境情報を採取した。
 - [x] `riichienv==0.4.8` のインストールと import を確認した。
 - [x] `reset()`、合法手選択、最初の`step()`を実測した。
 - [x] 既定の1局終了、`done()`、最終空map、`scores()`、`ranks()`を実測した。
-- [ ] seedと再現性を確認した（公開API、constructor seedの再現性、`reset(seed=...)`の非再現性は実測済み。適用範囲が残る）。
-- [ ] プレイヤー別情報境界を確認した（手牌、ツモ牌、複数objectのPython公開面は確認済み。未確認fieldと内部状態が残る）。
-- [ ] 例外と依存条件を確認した（一部の`step()`異常系は確認済み。依存version、wheel、追加異常系が残る）。
+- [x] Issue #3で必要なseed指定方法と再現性の扱いを確認した（constructor seedを採用し、`reset(seed=...)`を再現性の根拠にしない）。
+- [x] Issue #3で必要なプレイヤー別情報境界を確認した（`mjai_log`は完全ログ、seat別`Observation`はmask済み。全fieldの網羅監査は後続候補）。
+- [x] Issue #3で必要な例外と依存条件を確認した（追加異常系、別OS runtime、stress testは後続候補）。
+- [x] single / east / halfの終了を実測し、`env.done()`を終了判定の正本とした。
+- [x] RiichiEnvの完全ログとseat別eventの情報境界を確認した。
+- [x] RiichiLabとローカルRiichiEnvで共通化できるAgent境界と、Client固有責務を整理した。
 - [x] 初回実測結果を設計判断へ反映した。
 - [x] 一時調査用`tmp_riichienv_probe.py`を正式な調査コードとして残さない方針を記録した。
-- [ ] 正式な調査用コードを残す場合、`experiments/riichienv/`へ整理してPolicy正式実装から分離した。
+- [x] 一時probeはcommit対象にせず、恒久的な調査コードを残す場合の`experiments/riichienv/`分離方針を記録した。
 
 ## 変更履歴
 
@@ -445,3 +522,5 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-13 | RiichiEnv 0.4.8 | 公式情報と実測予定を初回記録。対象環境での実測は未実施 |
 | 2026-08-13 | RiichiEnv 0.4.8 | Windows / CPython 3.14.6でインストール、主要型、初期観測、打牌、情報境界、ポン応答を初回実測 |
 | 2026-08-13 | RiichiEnv 0.4.8 | 1局完走、seed、異常系、複数player同時要求、pon / chi競合、Observation独立性、Action / MJAI round-tripを追加実測 |
+| 2026-08-13 | RiichiEnv 0.4.8 | OS、PowerShell、PyYAML、IPythonの正確な環境情報と、CPython 3.14 Windows x86-64 wheelのSHA-256が公式メタデータと一致することを追加実測 |
+| 2026-08-13 | RiichiEnv 0.4.8 | single / east / halfの終了、完全`mjai_log`とseat別eventの境界、RiichiLabとの共通Agent範囲を追加記録 |
