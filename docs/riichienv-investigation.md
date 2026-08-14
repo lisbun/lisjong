@@ -544,7 +544,7 @@ Ron.to_mjai()       -> {"actor":2,"type":"hora"}
 
 したがって、`ChiAction.target` / `PonAction.target` / `DaiminkanAction.target` / `RonAction.target`は、RiichiEnvの`Action`側からではなく、そのdecision時点の`Observation.last_discard`から解決できることが実測で裏付けられた。`winning_tile`（ron）や召し上げ牌（chi / pon / daiminkan）は`action.tile`から取得できる。
 
-未確認: 槍槓（暗槓に対するchankan）等、直近の打牌以外がron対象になり得るケースでの`last_discard`の挙動は今回検証していない。
+未確認（初回実測時点）: 槍槓（暗槓に対するchankan）等、直近の打牌以外がron対象になり得るケースでの`last_discard`の挙動は今回検証していない。kakan chankanについては、後段の「2026-08-14: `[AI-REVIEW]`対応の追加実測」節でソース確認と実機再現により解消済みである。ankan chankan（国士無双限定）は既定ルールでは到達しないため、引き続き未実機確認である。
 
 #### representative選択に利用可能なphysical field
 
