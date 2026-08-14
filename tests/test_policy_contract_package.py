@@ -24,6 +24,7 @@ class PolicyContractImportTest(unittest.TestCase):
             "RoundState",
             "OwnHandState",
             "PolicyInput",
+            "DecisionContext",
         ):
             with self.subTest(name=name):
                 self.assertTrue(hasattr(module, name))

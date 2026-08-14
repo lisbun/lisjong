@@ -21,6 +21,7 @@ from lisjong.policy_contract.action import (
     RonAction,
     TsumoAction,
 )
+from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
@@ -54,6 +55,7 @@ __all__ = [
     "AnkanAction",
     "ChiAction",
     "DaiminkanAction",
+    "DecisionContext",
     "Discard",
     "DiscardAction",
     "InternalAction",
