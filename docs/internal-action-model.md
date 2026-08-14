@@ -420,8 +420,9 @@ Ron / Tsumoの`winning_tile`比較は
 集約し、decision-local mappingで外部候補を保持する。Action dataclassのvalue
 equalityをsemantic identityとし、`consumed_tiles`とAnkan `tiles`は生成時に
 canonical tupleへ正規化する。Python hash値そのものをidentityの正本にせず、
-別のcanonical keyやaction IDも設けない。外部環境ごとのrepresentative tie-breakは
-後続実装で定める。
+別のcanonical keyやaction IDも設けない。RiichiEnvのrepresentative tie-breakは
+Issue #29で確定済みであり、具体規則は[Action identity](action-identity.md)を
+正本とする。RiichiLab側は外部schema実測後の後続実装で定める。
 RiichiLab `possible_actions`の具体的なtranslationと照合規則は、未実測事項として
 後続へ残す。
 

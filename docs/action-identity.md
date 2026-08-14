@@ -292,6 +292,15 @@ semantic groupとexternal candidateの対応は、1 seat・1 decisionだけに�
 - 外部環境が次のstateへ進んだ後に再利用しない
 - 別seatまたは別decisionの候補を混在させない
 
+RiichiEnv Adapterでは、seatごとの`RiichiEnvActionMappingSession`がAdapter内部の
+generationだけを管理する。同じsessionで新しいdecisionのmappingを生成すると
+generationが進み、旧mappingは未resolveであっても失効する。mappingは生成時の
+generationを保持し、`resolve()`時にsessionのcurrent generationと一致しなければ
+`StaleActionMappingError`でfail closedする。これはRiichiEnvに存在しないdecision
+IDを発明せず、Action mappingの所有境界だけでcross-decision利用を拒否するための
+仕組みである。sessionはRiichiEnv本体、materialized state、Policy呼び出し、
+対局loopを所有しない。
+
 Policy返却Actionを受け取った境界は、次を順に確認する。
 
 1. Policy返却値が有効な`InternalAction`である
@@ -320,8 +329,14 @@ external physical tile ID等は、Policyへ公開せず、同値なexternal cand
 一意な全順序を構成できることを確認する。安定したrepresentativeを定義できない
 外部候補群は、任意の候補へfallbackせずfail closedとする。
 
-RiichiEnvおよびRiichiLabそれぞれの具体的なtie-break keyは、Adapter / Clientの
-実装と外部schemaの実測に合わせて後続で定める。
+RiichiEnvについては、Issue #29のRiichiEnv Adapter実装で具体的なtie-break keyを
+確定した。同一semantic group内の外部candidateは、group化条件（variant・actor
+一致）以外の公開fieldが`tile`と`consume_tiles`（いずれもRiichiEnv物理牌ID）に
+限られるため、`(tile if tile is not None else -1, sorted(consume_tiles))`を
+比較可能な全順序として、最小のcandidateをrepresentativeとする。この2 fieldは
+同一group内で完全にcandidateを区別できるため、追加のtie-break規則は不要である。
+RiichiLabの具体的なtie-break keyは、Adapter実装と外部schemaの実測に合わせて
+後続で定める。
 
 ## Revalidationとfail closed
 
@@ -422,9 +437,14 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 
 次は後続実装、実測、または別の設計項目で確定する。
 
-- RiichiEnvおよびRiichiLabごとのrepresentative tie-break key
+- RiichiLabのrepresentative tie-break key（RiichiEnv側はIssue #29で確定済み）
 - Kakan後の`PublicMeld`のsequence位置
-- decision-local mappingの具体的な型と所有component内の実装構造
 - RiichiLab `possible_actions`の具体schema、translation、serialization、照合規則
 - 具体的な例外class、timeout、終了または切断処理
-- Adapter、Policy、Runner、Clientの本実装
+- Local game runner、RiichiLab Clientの本実装
+
+RiichiEnv Adapterのdecision-local mappingとseat-localな所有境界
+（`RiichiEnvActionMapping` / `RiichiEnvActionMappingSession`）はIssue #29で
+`src/lisjong/riichienv_adapter/action_mapping.py`として実装済みである。
+`PolicyInput`生成・materialized stateはIssue #28で実装済みであり、両者を束ねる
+`DecisionContext`の最終組み立てはIssue #23の責務として残る。

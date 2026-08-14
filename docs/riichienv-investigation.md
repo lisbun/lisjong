@@ -689,6 +689,32 @@ live_wall_tiles_remaining
 
 本節を含む今回の追加実測を本文書へ反映した。Ruffと既存unit testの結果は本書末尾の変更履歴および対応するPull Requestの記録を参照する。
 
+### 2026-08-14: Issue #29向け追加実測（`Action`のobject identity、representative実装）
+
+[Issue #29](https://github.com/lisbun/lisjong/issues/29)のRiichiEnv Adapter実装（`src/lisjong/riichienv_adapter/`）に向けた実測で、production実装へ直接影響する挙動を確認した。実測環境はCPython 3.14.0rc2（`uv`経由のstandaloneビルド）、Linux 6.18.5-fc-v20、RiichiEnv 0.4.8である。
+
+#### `Action`の等価性は物理牌ID全件を含めobject identityに依存する
+
+同じ`Observation`に対して`legal_actions()`を2回呼び出すと、フィールド値が同じ`Action`同士でも別objectが返り、`==`はobject identityに基づく（`Action(type=..., tile=12, ...) == Action(type=..., tile=12, ...)`は、別に構築した2つのobjectでは`False`になる）。`Observation`を直接構成した場合（`riichienv.Observation(...)`のPython constructor経由）でも同じ挙動だった。
+
+```text
+la1 = obs.legal_actions()
+la2 = obs.legal_actions()
+la1[0] is la2[0]  # False
+la1[0] == la2[0]  # False（tile等の値が同じでも）
+```
+
+この実測により、「あるActionが元のexternal legal setに含まれるか」を確認する処理は、`legal_actions()`を再度呼び出した結果に対して行ってはならないことが分かる。安全な再検証は、1回の`legal_actions()`呼び出しで得たcollectionをdecisionの間保持し、そのcollection（同じobject参照）に対してのみ行う必要がある。RiichiEnv Adapterの`RiichiEnvActionMappingSession.build()`は`observation.legal_actions()`を1回だけ呼び出し、その結果を保持して以降の集約・representative選択・再検証に使うことでこの制約を満たす。
+
+#### representative tie-break keyの確定
+
+同一semantic group内の外部candidateは、grouping条件自体（variant・actor一致）を除くと、RiichiEnv `Action`の公開fieldが`tile`と`consume_tiles`（ともに物理牌ID）に限られる。したがって`(tile if tile is not None else -1, sorted(consume_tiles))`を全順序のtie-break keyとして採用すれば、list順・object identity・hash・乱数に依存せずrepresentativeを一意に決定できることを、DISCARD/CHI/PON/ANKAN/DAIMINKAN/KAKANの各実際例とsynthetic重複例の両方で確認した。詳細は[Action identity](action-identity.md)を正本とする。
+
+#### `riichienv.Action` / `riichienv.Observation` / `riichienv.Meld`はPython constructorを公開している
+
+`riichienv.Action(type=..., tile=..., consume_tiles=..., actor=...)`、`riichienv.Observation(player_id=..., hands=..., ...)`、`riichienv.Meld(meld_type=..., tiles=..., opened=..., from_who=..., called_tile=...)`はいずれもPythonから直接構成できる公開constructorを持つ。これはRiichiEnv Adapterのunit testで、実際の対局を経由せずにfail closedケース（Kakan元Pon 0件/複数件等）を決定的に再現するために利用した。production Adapterコード自体はこれらのconstructorに依存せず、`RiichiEnv`が返す`Observation`だけを受け取る。
+
+これらはIssue #29のproduction実装（`src/lisjong/riichienv_adapter/`）とそのtestに直接反映済みである。
 ### 2026-08-14: Issue #28実装時の追加実測（riichi_declaredのevent到着lag・槍槓応答時のdrawn_tile）
 
 [Issue #28](https://github.com/lisbun/lisjong/issues/28)「seat-visible materialized stateとPolicyInput生成を実装する」のproduction Adapter実装(`src/lisjong/riichienv_adapter/`)を、実際のriichienv 0.4.8を用いて多数seed・複数game modeにわたり検証する過程で、既存の実測記録にない2点を確認した。いずれも一時検証scriptによる実行結果であり、恒久的な調査コードとしては残していない。
@@ -851,7 +877,7 @@ ranks:
 - 今回と異なるrule、score、seed、Action選択でのgame-end conditions、延長範囲、終了時の観測。
 - `scores()` / `ranks()`を取得できるすべての時点と、点数移動がある終了時の値。
 - Python公開面より下の内部可変状態まで、4席の`Observation`が共有されず独立しているか。
-- `Observation`、`Action` の比較やhashに依存してよいか。シリアライズの安定性とバージョン互換性。
+- `Action`の`==`はobject identityに基づき、`legal_actions()`の再呼び出しが返す別objectとは値が同じでも一致しないことをIssue #29向け追加実測で確認した（詳細は「2026-08-14: Issue #29向け追加実測」節）。`Observation`側の比較・hash可否、シリアライズの安定性とバージョン互換性は引き続き未確認。
 - `events` / `new_events()`はseatごとのObservation更新間のdeltaと整合したが、全version・全局面、長期間、終局を跨ぐ厳密な範囲と蓄積挙動。
 - `apply_event(...)`、`get_observation(player_id)`、`observe_event(...)`の実際の入出力と例外。
 - 今回確認していないfieldや局面を含め、各プレイヤーの`Observation`にPolicyが見てはいけない非公開情報が含まれないか。
@@ -966,4 +992,5 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-14 | RiichiEnv 0.4.8 | Observation公開属性と`to_dict()`の差、seat別event delta、Discard物理牌identity、通常・槓時のwall、鳴かれたdiscard、リーチ状態遷移をIssue #11向けに追加実測 |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15、既存基準環境とは別環境） | Issue #27向けに、未確認7 Action variant（riichi / daiminkan / ankan / kakan / ron / tsumo / kyuushu_kyuuhai）のround-trip、Chi / Pon / Daiminkan / Ronの`target`解決（`Observation.last_discard`）、representative選択に使える物理牌ID、kakan元pon解決とmeld公開状態、`live_wall_tiles_remaining`の情報境界、event重複防止の欠如を追加実測 |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2、python-build-standaloneビルド） | Issue #27の`[AI-REVIEW]`対応として、v0.4.8ソース確認（`riichienv-core/src/state/mod.rs`、`wall.rs`）と実機再現により、kakan chankanのtarget解決（`last_discard`）、`live_wall_tiles_remaining`の具体的counter algorithm（`84 - tsumo event数`、不一致0件で検証）を確定し、7 variant round-trip・kakan meld更新・重複candidate例をCPython 3.14系でも再確認した |
+| 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2） | Issue #29のRiichiEnv Adapter実装向けに、`Action.__eq__`がobject identityに基づき`legal_actions()`再呼び出し結果とは値が同じでも一致しないこと、representative tie-break keyとして`(tile, sorted(consume_tiles))`が同一semantic group内で完全な全順序になること、`riichienv.Action` / `Observation` / `Meld`がPython constructorを公開していることを追加実測した |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15および3.14.0rc2） | Issue #28のproduction Adapter実装検証中に、reach宣言牌がchi/pon claim可能な場合の`riichi_declared`とevent到着のlag、槍槓のron応答機会における`drawn_tile`が自席handにない値になる事象を新たに実測し、約1,500 seed・80万decision超の大規模検証で他に未知の不整合がないことを確認した |
