@@ -23,18 +23,32 @@ _CALL_TYPES = {"chi", "pon", "daiminkan"}
 
 
 def _server_style_request_action(observation, request_id):
-    """testが期待するcandidate表現(tsumogiri/target付き)をobservationから作る。
+    """testが期待するcandidate表現をobservationから作る。
 
+    `possible_actions` candidateのsemantic identityは`pai` / `consumed`
+    だけで判定される(`actor` / `target` / `tsumogiri`はBot response専用
+    fieldでありcandidate側では要求されない、Issue #38 review)。ここでは
+    実サーバーが送るかもしれない追加fieldとしてこれらも付与しておくが、
+    validation側はそれらを無視して`pai`/`consumed`だけで照合する。
     RiichiEnv `Action.to_mjai()`はhoraの`pai`、chi/pon/daiminkan/ronの
     `target`を含まない(Issue #38実測、`build_mjai_response`と同じ欠落)ため、
-    本物のRiichiLab serverが提示するであろう完全な候補に近づけて補う。
+    ここで`pai`だけは`legal_actions()`側から明示的に補っている。
 
     また、RiichiEnvの生の`legal_actions()`は、同じsemantic Actionに対応する
     複数のphysical候補(例: 手牌中の2枚の同一牌)を別々のAction objectとして
     返す(docs/action-identity.mdの「semantic aggregation」が既存
-    `RiichiEnvActionMappingSession`側で吸収している事実と同じ)。実際の
-    RiichiLab serverは合法選択肢を意味単位で提示すると想定されるため、この
-    test helperでも同一semantic表現の重複candidateを1件へ集約する。
+    `RiichiEnvActionMappingSession`側で吸収している事実と同じ)。dahaiでは、
+    「手牌中の牌を打牌」と「ツモ切り」が同じ`pai`でも`tsumogiri`だけ異なる
+    別々のAction objectとして返る場合があるが、公式candidate schemaは
+    `tsumogiri`を持たないため、実際のRiichiLab serverはこの2つを同一
+    candidate(`pai`のみで識別)として1件にまとめて提示すると考えられる。
+    実際のRiichiLab serverは合法選択肢を意味単位(公式candidate schemaの
+    identityの単位)で提示すると想定されるため、この test helperでも
+    candidate schemaのidentityが同じ重複候補を1件へ集約する
+    (dedupeはBot response専用の`actor`/`target`/`tsumogiri`を含めない
+    identityで行う。含めてdedupeすると、公式serverでは1件のはずの候補が
+    このtest fixtureだけ複数件へ分裂し、ambiguousな衝突を誤って作り出して
+    しまう)。
     """
     import json
 
@@ -43,25 +57,36 @@ def _server_style_request_action(observation, request_id):
     possible_actions = []
     for action in legal:
         candidate = json.loads(action.to_mjai())
-        candidate["actor"] = action.actor
 
+        if candidate["type"] in _CALL_TYPES:
+            candidate["pai"] = tile_to_mjai(tile_from_physical_id(action.tile))
+        elif candidate["type"] == "hora":
+            candidate["pai"] = tile_to_mjai(tile_from_physical_id(action.tile))
+
+        # 公式candidate schemaのidentityにのみ基づいてdedupeする
+        # (`actor`/`target`/`tsumogiri`はBot response専用fieldであり、
+        # 公式candidateの識別には使われない)。
+        dedupe_key = json.dumps(candidate, sort_keys=True)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        # dedupe後のcandidateへ、実サーバーが付加するかもしれない追加field
+        # として`actor`/`target`/`tsumogiri`を付与する。これらはcandidate
+        # validation側では無視される(公式candidate schemaのidentityには
+        # 含まれない)。
+        candidate["actor"] = action.actor
         if candidate["type"] == "dahai":
             candidate["tsumogiri"] = action.tile == observation.drawn_tile
         elif candidate["type"] in _CALL_TYPES:
             candidate["target"] = observation.last_discard
-            candidate["pai"] = tile_to_mjai(tile_from_physical_id(action.tile))
         elif candidate["type"] == "hora":
-            candidate["pai"] = tile_to_mjai(tile_from_physical_id(action.tile))
             candidate["target"] = (
                 action.actor
                 if action.action_type == ActionType.TSUMO
                 else observation.last_discard
             )
 
-        dedupe_key = json.dumps(candidate, sort_keys=True)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
         possible_actions.append(candidate)
 
     return {
@@ -104,10 +129,10 @@ class RiichiLabSeatAdapterRoundTripTest(unittest.TestCase):
         seat = Seat(player_id)
         adapter = RiichiLabSeatAdapter(seat, MinimalPolicy())
 
-        request = _server_style_request_action(observation, request_id="server-req-9")
+        request = _server_style_request_action(observation, request_id=9)
         response = adapter.process_request_action(request)
 
-        self.assertEqual(response.request_id, "server-req-9")
+        self.assertEqual(response.request_id, 9)
 
     def test_request_id_and_transport_metadata_do_not_reach_the_policy(self) -> None:
         seen_decisions = []

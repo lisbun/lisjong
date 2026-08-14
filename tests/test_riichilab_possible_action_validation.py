@@ -29,11 +29,71 @@ PINZU_2 = Tile(TileType(TileCategory.PINZU, 2))
 
 
 class ValidateAgainstPossibleActionsTest(unittest.TestCase):
+    # --- 公式candidate schemaに基づく正常系(回帰防止) -------------------
+    #
+    # RiichiLab公式`possible_actions` candidateは、Bot-to-Server response
+    # よりも小さい最小表現である(Issue #38 review、
+    # comment-5298618558)。以下のtestは、candidate schemaとBot response
+    # schemaを再び混同しないための回帰防止を目的とする。
+
+    def test_accepts_the_official_minimal_dahai_candidate_shape(self) -> None:
+        """公式形`{"type": "dahai", "pai": "1m"}`のように、actorもtsumogiriも
+        持たないcandidateを合法として受理できること。"""
+        selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_3, tsumogiri=False)
+        candidates = [{"type": "dahai", "pai": "3m"}]
+
+        validate_against_possible_actions(selected, candidates)
+
+    def test_tsumogiri_selection_still_matches_the_minimal_dahai_candidate(
+        self,
+    ) -> None:
+        """selected側が`tsumogiri=True`でも、candidate側にtsumogiriが
+        存在しない公式形candidateへ一致できること。tsumogiriはcandidate
+        identityではなくBot response生成側の情報である。"""
+        selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_4, tsumogiri=True)
+        candidates = [{"type": "dahai", "pai": "4m"}]
+
+        validate_against_possible_actions(selected, candidates)
+
+    def test_candidate_without_actor_field_matches_normally(self) -> None:
+        """candidateへ`actor`が無くても、公式candidate schemaとして正常に
+        照合できること(candidateへ一律actorを要求しない)。"""
+        selected = RiichiAction(actor=Seat.SEAT_2)
+        candidates = [{"type": "reach"}]
+
+        validate_against_possible_actions(selected, candidates)
+
+    def test_call_candidate_without_bot_response_target_field_matches(self) -> None:
+        """chi/pon/daiminkanのcandidateへ、Bot response専用の`target`が
+        無くても、公式candidateの`pai` + `consumed`だけで正常に照合
+        できること。"""
+        selected = ChiAction(
+            actor=Seat.SEAT_1,
+            target=Seat.SEAT_0,
+            called_tile=MANZU_3,
+            consumed_tiles=(MANZU_2, MANZU_4),
+        )
+        candidates = [{"type": "chi", "pai": "3m", "consumed": ["2m", "4m"]}]
+
+        validate_against_possible_actions(selected, candidates)
+
+    def test_hora_candidate_without_actor_or_target_matches(self) -> None:
+        """horaのcandidateへ`actor`/`target`が無くても、公式candidateの
+        `pai`(和了牌)だけで正常に照合できること。"""
+        selected = RonAction(
+            actor=Seat.SEAT_0, target=Seat.SEAT_1, winning_tile=MANZU_5
+        )
+        candidates = [{"type": "hora", "pai": "5m"}]
+
+        validate_against_possible_actions(selected, candidates)
+
+    # --- 従来からのsemantic matching / fail closed契約 -------------------
+
     def test_accepts_a_single_exact_dahai_match(self) -> None:
         selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_3, tsumogiri=False)
         candidates = [
-            {"type": "dahai", "actor": 0, "pai": "3m", "tsumogiri": False},
-            {"type": "dahai", "actor": 0, "pai": "4m", "tsumogiri": False},
+            {"type": "dahai", "pai": "3m"},
+            {"type": "dahai", "pai": "4m"},
         ]
 
         validate_against_possible_actions(selected, candidates)
@@ -41,9 +101,9 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
     def test_is_independent_of_candidate_order(self) -> None:
         selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_4, tsumogiri=True)
         candidates = [
-            {"type": "dahai", "actor": 0, "pai": "3m", "tsumogiri": False},
-            {"type": "reach", "actor": 0},
-            {"type": "dahai", "actor": 0, "pai": "4m", "tsumogiri": True},
+            {"type": "dahai", "pai": "3m"},
+            {"type": "reach"},
+            {"type": "dahai", "pai": "4m"},
         ]
 
         validate_against_possible_actions(selected, candidates)
@@ -65,7 +125,7 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
     def test_distinguishes_red_five_from_normal_five(self) -> None:
         selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_5_RED, tsumogiri=False)
         candidates = [
-            {"type": "dahai", "actor": 0, "pai": "5m", "tsumogiri": False},
+            {"type": "dahai", "pai": "5m"},
         ]
 
         with self.assertRaises(PossibleActionsValidationError):
@@ -80,15 +140,11 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         )
         wrong_composition = {
             "type": "chi",
-            "actor": 1,
-            "target": 0,
             "pai": "3m",
             "consumed": ["4m", "5m"],
         }
         matching = {
             "type": "chi",
-            "actor": 1,
-            "target": 0,
             "pai": "3m",
             "consumed": ["4m", "2m"],  # 順序が違っても一致すること
         }
@@ -98,23 +154,19 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
 
         validate_against_possible_actions(selected, [wrong_composition, matching])
 
-    def test_pon_requires_matching_target(self) -> None:
+    def test_pon_candidate_without_target_still_matches_correctly(self) -> None:
+        """公式candidateに`target`が無いため、candidate側は`pai` +
+        `consumed`だけで識別する。`target`はBot response側でのみ使う情報
+        であり、candidate validationへ混入させない。"""
         selected = PonAction(
             actor=Seat.SEAT_2,
             target=Seat.SEAT_1,
             called_tile=PINZU_2,
             consumed_tiles=(PINZU_2, PINZU_2),
         )
-        wrong_target = {
-            "type": "pon",
-            "actor": 2,
-            "target": 3,
-            "pai": "2p",
-            "consumed": ["2p", "2p"],
-        }
+        candidate = {"type": "pon", "pai": "2p", "consumed": ["2p", "2p"]}
 
-        with self.assertRaises(PossibleActionsValidationError):
-            validate_against_possible_actions(selected, [wrong_target])
+        validate_against_possible_actions(selected, [candidate])
 
     def test_daiminkan_matches_on_full_semantic_key(self) -> None:
         selected = DaiminkanAction(
@@ -125,8 +177,6 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         )
         candidate = {
             "type": "daiminkan",
-            "actor": 3,
-            "target": 2,
             "pai": "2p",
             "consumed": ["2p", "2p", "2p"],
         }
@@ -140,7 +190,6 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         )
         candidate = {
             "type": "ankan",
-            "actor": 0,
             "consumed": ["2p", "2p", "2p", "2p"],
         }
 
@@ -153,37 +202,37 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
             from_seat=Seat.SEAT_0,
             called_tile=PINZU_2,
         )
-        candidate = {"type": "kakan", "actor": 1, "pai": "2p"}
+        candidate = {"type": "kakan", "pai": "2p"}
 
         validate_against_possible_actions(selected, [candidate])
 
-    def test_ron_requires_matching_target_and_winning_tile(self) -> None:
+    def test_ron_matches_on_winning_tile_regardless_of_target_field(self) -> None:
         selected = RonAction(
             actor=Seat.SEAT_0, target=Seat.SEAT_1, winning_tile=MANZU_5
         )
-        wrong_target = {"type": "hora", "actor": 0, "target": 2, "pai": "5m"}
-        matching = {"type": "hora", "actor": 0, "target": 1, "pai": "5m"}
+        wrong_pai = {"type": "hora", "pai": "4m"}
+        matching = {"type": "hora", "pai": "5m"}
 
         with self.assertRaises(PossibleActionsValidationError):
-            validate_against_possible_actions(selected, [wrong_target])
+            validate_against_possible_actions(selected, [wrong_pai])
 
-        validate_against_possible_actions(selected, [wrong_target, matching])
+        validate_against_possible_actions(selected, [wrong_pai, matching])
 
-    def test_tsumo_target_is_the_actor_itself(self) -> None:
+    def test_tsumo_matches_the_same_hora_candidate_shape_as_ron(self) -> None:
         selected = TsumoAction(actor=Seat.SEAT_2, winning_tile=MANZU_5)
-        candidate = {"type": "hora", "actor": 2, "target": 2, "pai": "5m"}
+        candidate = {"type": "hora", "pai": "5m"}
 
         validate_against_possible_actions(selected, [candidate])
 
     def test_pass_matches_none_type(self) -> None:
         selected = PassAction(actor=Seat.SEAT_1)
-        candidate = {"type": "none", "actor": 1}
+        candidate = {"type": "none"}
 
         validate_against_possible_actions(selected, [candidate])
 
     def test_kyuushu_kyuuhai_matches_ryukyoku_type(self) -> None:
         selected = KyuushuKyuuhaiAction(actor=Seat.SEAT_3)
-        candidate = {"type": "ryukyoku", "actor": 3}
+        candidate = {"type": "ryukyoku"}
 
         validate_against_possible_actions(selected, [candidate])
 
@@ -194,10 +243,13 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
             validate_against_possible_actions(selected, [])
 
     def test_rejects_ambiguous_multiple_matches(self) -> None:
+        # 重複candidateの扱いはIssue #38の判断どおり変更しない: 同一
+        # semantic Actionへ複数candidateが一致する場合は安全側でfail
+        # closedする(#39のlive接続で実データの重複有無を確認する)。
         selected = PassAction(actor=Seat.SEAT_0)
         candidates = [
-            {"type": "none", "actor": 0},
-            {"type": "none", "actor": 0},
+            {"type": "none"},
+            {"type": "none"},
         ]
 
         with self.assertRaises(PossibleActionsValidationError):
@@ -208,8 +260,8 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         # 存在するというだけで代替受理しない。
         selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_3, tsumogiri=False)
         candidates = [
-            {"type": "dahai", "actor": 0, "pai": "4m", "tsumogiri": False},
-            {"type": "reach", "actor": 0},
+            {"type": "dahai", "pai": "4m"},
+            {"type": "reach"},
         ]
 
         with self.assertRaises(PossibleActionsValidationError):
@@ -219,8 +271,8 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         selected = PassAction(actor=Seat.SEAT_1)
         candidates = [
             "not-a-mapping",
-            {"type": "dahai", "actor": 1},  # pai/tsumogiri欠落でmalformed
-            {"type": "none", "actor": 1},
+            {"type": "dahai"},  # pai欠落でmalformed
+            {"type": "none"},
         ]
 
         validate_against_possible_actions(selected, candidates)
@@ -228,15 +280,15 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
     def test_unknown_action_type_candidate_is_ignored(self) -> None:
         selected = PassAction(actor=Seat.SEAT_0)
         candidates = [
-            {"type": "future_action_type", "actor": 0, "extra": True},
-            {"type": "none", "actor": 0},
+            {"type": "future_action_type", "extra": True},
+            {"type": "none"},
         ]
 
         validate_against_possible_actions(selected, candidates)
 
-    def test_dahai_without_tsumogiri_field_is_treated_as_malformed(self) -> None:
+    def test_dahai_without_pai_field_is_treated_as_malformed(self) -> None:
         selected = DiscardAction(actor=Seat.SEAT_0, tile=MANZU_3, tsumogiri=False)
-        candidate = {"type": "dahai", "actor": 0, "pai": "3m"}
+        candidate = {"type": "dahai"}
 
         with self.assertRaises(PossibleActionsValidationError):
             validate_against_possible_actions(selected, [candidate])

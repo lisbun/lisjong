@@ -80,52 +80,91 @@ Issue #38本文が要求する「`Action.to_mjai()`を優先し、差異があ�
 tile文字列の生成には、既存`tile_from_mjai()`の逆変換として新設した
 `lisjong.riichienv_adapter.tile_conversion.tile_to_mjai()`を使用する。
 
+## レビューで判明した事実: possible_actions candidate schemaとBot response schemaの分離
+
+**この節の内容は、Claude Codeが`riichi.dev`へ直接アクセスして確認したもの
+ではない。** 学習者(レビュー担当)がIssue #38 ([comment-5298618558](https://github.com/lisbun/lisjong/issues/38#issuecomment-5298618558))で
+RiichiLab公式Protocolを確認し、blocking findingとして報告した事実に基づく
+修正である。Claude Code自身は引き続き`riichi.dev`ドメインへのnetwork
+egressが実行環境から到達できないため、この修正はレビュー指摘への対応として
+行った。
+
+初回実装(Issue #38最初のhandoff)は、server提示`possible_actions`
+candidateを、Bot-to-Server response(送信するAction)と同じschemaで
+parseしていた。具体的には、candidate全件に`actor`を要求し、`dahai`へ
+`tsumogiri`、`chi`/`pon`/`daiminkan`へ`target`を要求していた。しかし
+RiichiLab公式`possible_actions`は、Bot responseより意図的に小さい最小
+candidate表現であり、例えば公式形の`{"type": "dahai", "pai": "1m"}`は
+`actor`も`tsumogiri`も持たない。そのため初回実装は、この公式形candidateを
+malformedとして扱い、意味上は合法な選択を0件一致でfail closedし得る
+状態だった。
+
+この修正で、**candidate側のsemantic identity**と**Bot response
+serialization**を明確に分離した。
+
 ## 設計判断: possible_actions送信前semantic validation
 
 `src/lisjong/riichilab_adapter/possible_action_validation.py`は、送信予定の
-canonical `InternalAction`と、server提示`possible_actions`内の各候補を、
-Action typeごとに次のfieldへ正規化してから比較する。
+canonical `InternalAction`をserver candidateと同じ最小identity空間へ
+projectionし、server提示`possible_actions`内の各候補を、Action typeごとに
+**公式candidate schemaが実際に持つfieldだけ**へ正規化してから比較する。
+`actor` / `target` / `tsumogiri`はBot response専用fieldであり、candidate
+側のsemantic identityには含めない。
 
-| Action type (mjai) | semantic key |
-| --- | --- |
-| `dahai` | actor, tile, tsumogiri |
-| `reach` | actor |
-| `chi` / `pon` / `daiminkan` | actor, target, called tile, consumed tile multiset |
-| `ankan` | actor, tile multiset |
-| `kakan` | actor, added tile |
-| `hora`(ron) | actor, target, winning tile |
-| `hora`(tsumo) | actor, target(=actor自身), winning tile |
-| `none` | actor |
-| `ryukyoku` | actor |
+| Action type (mjai) | candidate semantic identity(このmoduleが照合するfield) | Bot response専用field(candidate側では要求しない) |
+| --- | --- | --- |
+| `dahai` | tile(`pai`) | actor, tsumogiri |
+| `reach` | (type一致のみ) | actor |
+| `chi` / `pon` / `daiminkan` | called tile(`pai`), consumed tile multiset(`consumed`) | actor, target |
+| `ankan` | tile multiset(`consumed`) | actor |
+| `kakan` | added tile(`pai`) | actor |
+| `hora`(ron/tsumo共通) | winning tile(`pai`) | actor, target |
+| `none` | (type一致のみ) | actor |
+| `ryukyoku` | (type一致のみ) | actor |
 
-- 比較はraw dict完全一致ではなく、上記のsemantic keyの一致で行う
+- 比較はraw dict完全一致ではなく、上記のsemantic identityの一致で行う
 - list index、候補の列挙順には依存しない
+- candidateへ`actor`/`target`/`tsumogiri`が存在しなくても拒否理由にしない。
+  逆に存在しても(server実装が将来これらを付加する場合に備えて)無視する
+- 1 request_actionの`possible_actions`は、このAdapterがbindされた1 seat
+  分のcandidateだけであるため、actorは常に自明であり識別に不要である。
+  hora candidateのtargetについても同様に、1つのrequestが表す和了機会は
+  常に一意であるためcandidate側の識別には使わない
 - tile文字列は既存`tile_from_mjai()`で正規化し、赤五と通常五、字牌表記の
   違いを保持する
 - multiset field(`consumed`、`ankan`の`consumed`)は牌のcanonical順序で
   ソートしてから比較し、入力側の順序差を無視する
-- semantic key上、match件数が0件または複数件の場合はfail closed
+- semantic identity上、match件数が0件または複数件の場合はfail closed
   (`PossibleActionsValidationError`)とする
 - 個々のcandidateがmalformed、またはtypeが未知の場合、そのcandidate単体は
   「一致しない候補」として扱い(validation全体を中断させない)、選択中の
   Actionがどの候補とも一致しなければ結果的に0件一致として拒否する
 
+Bot response側(`mjai_response.py`)は、この節の変更による影響を受けない。
+`actor` / `target` / `tsumogiri`は引き続きBot responseへ必要に応じて
+付与する(「設計判断: MJAI response構築における必要最小限のnormalization」を
+参照)。`possible_actions` validationとBot response serializationは別
+責務であり、一方のschema変更が他方の出力に影響しない。
+
+### `tsumogiri`の最終的な扱い
+
+初回実装では、RiichiLab実サーバーの`possible_actions`が`tsumogiri` field
+を含むかどうかを未確認としていたが、レビューで公式Protocolを確認できた
+結果、**公式`possible_actions`の`dahai` candidateは`tsumogiri`を含まない**
+ことが判明した。そのため、`possible_actions` validationの`dahai` semantic
+identityから`tsumogiri`を除外した。selected側の`InternalAction.tsumogiri`
+は、引き続きBot response serialization(`mjai_response.py`)でのみ使用する。
+
 ### 未確認事項・既知の前提(#39で要確認)
 
-- `dahai`のsemantic keyへ`tsumogiri`を含める設計は、mjai生態系の一般的な
-  慣例(Mortal等)を参考にした**設計判断**であり、RiichiLab実サーバーの
-  `possible_actions`が実際に`tsumogiri` fieldを含むかどうかは未確認である。
-  含まない場合、現在の実装は該当candidateを「malformed」として扱い、
-  一致0件でfail closedする(arbitrary matchはしない)。実サーバー接続時に
-  この前提を再確認する必要がある。
 - `possible_actions`が、同一semantic Actionに対応する複数の重複candidate
   (例: 手牌中の同じ牌が2枚あり、どちらを打牌しても同じ結果になる場合の
-  candidateが2件listされる等)を含むかどうかは未確認である。現在の実装は
-  複数件一致を無条件にambiguousとしてfail closedするため、仮に実サーバーが
-  重複candidateを送る設計であった場合、正当な打牌が誤って拒否される
-  可能性がある。この点はIssue #38の判断(「複数一致は安全側でfail closed」)を
-  優先し、#39の実サーバー接続で実際の`possible_actions`の重複有無を
-  確認したうえで、必要なら再検討する。
+  candidateが2件listされる等)を含むかどうかは、今回のレビューでも未確認の
+  ままである。現在の実装は複数件一致を無条件にambiguousとしてfail closed
+  するため、仮に実サーバーが重複candidateを送る設計であった場合、正当な
+  打牌が誤って拒否される可能性がある。この点はIssue #38の判断(「複数一致は
+  安全側でfail closed」)を優先し、#39の実サーバー接続で実際の
+  `possible_actions`の重複有無を確認したうえで、必要なら再検討する。
 - honor牌の文字列表記(`E`/`S`/`W`/`N`/`P`/`F`/`C`)は、既存`tile_conversion.py`が
   RiichiEnv 0.4.8のevent JSONに対して実測した表記であり、RiichiLab
   server側の`possible_actions`が同じ表記を使うことは未確認である
@@ -138,7 +177,13 @@ Action typeごとに次のfieldへ正規化してから比較する。
 最低限の必須fieldだけを検証する。
 
 - `type == "request_action"`
-- `request_id`: `str`または`int`(`bool`は明示的に除外)
+- `request_id`: `int`(`bool`は明示的に除外)。RiichiLab Protocol v2の
+  `request_id`はgame内で一意なmonotonically increasing integerであるため
+  (Issue #38 review: blocking 2)、初回実装が許容していた`str`は受理しない。
+  monotonicity検証、previous requestとの比較、stale/duplicate判定、
+  `action_ack`との対応付けはこの境界の責務ではなく、#39で扱う。この境界が
+  行うのは、現在の`request_id`が仕様どおりの`int`であることの確認と、その
+  値をresponseへechoすることまでである
 - `possible_actions`: list-likeなcollection(内容の検証はvalidation側で行う)
 - `observation`: base64文字列。`riichienv.Observation.deserialize_from_base64()`で
   復元できない場合はfail closed

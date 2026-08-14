@@ -9,7 +9,7 @@
 
 - `type != "request_action"`
 - `request_id` / `possible_actions` / `observation`の欠落
-- `request_id`が現在仕様上安全にechoできない型
+- `request_id`がRiichiLab Protocol v2の契約どおりの`int`でない
 - `possible_actions`が期待するcollection形でない
 - `observation`が文字列でない、またはdeserialize不能
 """
@@ -33,7 +33,7 @@ class ParsedRequestAction:
     決して渡さない(transport lifecycle情報であり、Policy入力ではない)。
     """
 
-    request_id: object
+    request_id: int
     possible_actions: tuple
     observation: Observation
     time: object
@@ -57,12 +57,11 @@ def parse_request_action(raw_request_action: object) -> ParsedRequestAction:
     if "request_id" not in raw_request_action:
         raise MalformedRequestActionError("request_action is missing request_id")
     request_id = raw_request_action["request_id"]
-    # bool はint のサブクラスであり、意図せずechoされるとrequest_idの型を
-    # 誤って書き換えることになるため、str/int だけを安全にecho可能な型とする。
-    if isinstance(request_id, bool) or not isinstance(request_id, (str, int)):
-        raise MalformedRequestActionError(
-            "request_id must be a str or int that can be echoed safely"
-        )
+    # RiichiLab Protocol v2の`request_id`はgame内で一意なmonotonically
+    # increasing integerである(Issue #38 review)。bool はint のサブクラス
+    # だが、request_idとしての意味を持たないため明示的に除外する。
+    if isinstance(request_id, bool) or not isinstance(request_id, int):
+        raise MalformedRequestActionError("request_id must be an int")
 
     if "possible_actions" not in raw_request_action:
         raise MalformedRequestActionError("request_action is missing possible_actions")

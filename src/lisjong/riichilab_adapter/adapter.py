@@ -48,7 +48,7 @@ class SendReadyResponse:
     送信できる。tokenやWebSocket state等のtransport固有情報はここへ含めない。
     """
 
-    request_id: object
+    request_id: int
     action: dict
 
 

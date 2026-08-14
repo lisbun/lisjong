@@ -57,13 +57,6 @@ class ParseRequestActionTest(unittest.TestCase):
 
         self.assertEqual(parsed.request_id, 1)
 
-    def test_string_request_id_is_accepted(self) -> None:
-        request = _valid_request(request_id="req-42")
-
-        parsed = parse_request_action(request)
-
-        self.assertEqual(parsed.request_id, "req-42")
-
     def test_rejects_non_mapping_input(self) -> None:
         with self.assertRaises(MalformedRequestActionError):
             parse_request_action(["not", "a", "mapping"])
@@ -96,7 +89,31 @@ class ParseRequestActionTest(unittest.TestCase):
             parse_request_action(request)
 
     def test_rejects_boolean_request_id(self) -> None:
+        # RiichiLab Protocol v2のrequest_idはinteger契約であり、boolはint
+        # のサブクラスだが意味を持たないため明示的に除外する(Issue #38
+        # review: blocking 2)。
         request = _valid_request(request_id=True)
+
+        with self.assertRaises(MalformedRequestActionError):
+            parse_request_action(request)
+
+    def test_rejects_string_request_id(self) -> None:
+        # RiichiLab Protocol v2のrequest_idはgame内で一意なmonotonically
+        # increasing integerであり、strは許容しない(Issue #38 review:
+        # blocking 2)。
+        request = _valid_request(request_id="req-42")
+
+        with self.assertRaises(MalformedRequestActionError):
+            parse_request_action(request)
+
+    def test_rejects_float_request_id(self) -> None:
+        request = _valid_request(request_id=1.0)
+
+        with self.assertRaises(MalformedRequestActionError):
+            parse_request_action(request)
+
+    def test_rejects_none_request_id(self) -> None:
+        request = _valid_request(request_id=None)
 
         with self.assertRaises(MalformedRequestActionError):
             parse_request_action(request)
