@@ -11,8 +11,9 @@
   lisjongの設計判断の区別は
   [RiichiEnv調査記録](riichienv-investigation.md)を正本とする
 
-本書はPolicyへ渡す情報を許可リスト方式で定義する。Pythonの具体的なclass、
-dataclass、enum、collection型、package、module構成は確定しない。
+本書はPolicyへ渡す情報を許可リスト方式で定義する。Python型は
+`lisjong.policy_contract` packageに、frozen dataclass、Enum、tupleを用いた
+環境非依存のvalueとして実装する。
 `InternalAction`のvariant、field、意味契約は
 [内部Actionモデル](internal-action-model.md)、semantic identityと外部合法候補との
 対応は[Action identity](action-identity.md)を正本とする。
@@ -38,8 +39,10 @@ DecisionContext
 all legal_actions.actor == input.self_seat
 ```
 
-`legal_actions`の非空、action identity上の重複禁止、順序に契約上の意味を
-持たせないこと、pass / noneを明示候補とすることは、Policy契約を正本とする。
+`DecisionContext`は生成時に`legal_actions`をtupleへ正規化し、非空、全Actionの
+actor一致、action identity上の重複禁止を検証する。入力順は変更しないが、順序に
+契約上の意味を持たせないこと、pass / noneを明示候補とすることは、Policy契約を
+正本とする。
 
 ## PolicyInputの概念schema
 
@@ -79,7 +82,9 @@ PolicyInput
     └── drawn_tile
 ```
 
-具体的なPython型は後続実装で定義する。
+`PolicyInput`は`self_seat`、`round`、`players`、`own_hand`だけをfieldに持つ
+frozen dataclassとして実装する。`players`は4要素固定のtupleで、position 0..3が
+`Seat` 0..3を表す。`PlayerPublicState`自身へowner seatを二重保持しない。
 
 ## Seat
 
@@ -88,6 +93,9 @@ PolicyInput
 ```text
 Seat = 0, 1, 2, 3
 ```
+
+Pythonでは`Seat`を値0..3の`IntEnum`として実装する。場風・自風を表す`Wind`は
+文字列値を持つ通常の`Enum`として分離し、固定seat位置と風を同じ型にしない。
 
 RiichiEnvの`player_id`と数値が一致する場合も、RiichiEnv型または外部identityを
 Policy契約へ公開する意味ではない。外部seatとの対応付けはRiichiEnv Adapter
@@ -126,7 +134,8 @@ RoundState
 ### round_wind
 
 場風を表すlisjong内部の麻雀ドメイン値である。RiichiEnv固有の整数値を
-Policy契約とせず、境界側で変換する。
+Policy契約とせず、境界側で`Wind`へ変換する。`Wind`は東・南・西・北の4値を
+表現でき、`RoundState`値型は場風を東・南だけに制限しない。
 
 ### hand_number
 
@@ -149,6 +158,9 @@ Policy契約とせず、境界側で変換する。
 ### dora_indicators
 
 現在公開済みのドラ表示牌だけを、公開された順序で保持する。
+Python実装は入力順を変更せずtupleへ正規化する。`RoundState`値単体では非空を
+要求しない。通常のdecisionで1枚以上必要かは、Adapter等が検証するContext整合
+条件である。
 
 次は含めない。
 
@@ -262,7 +274,7 @@ ANKAN
 KAKAN
 ```
 
-具体的なenum表現は後続で定義する。
+Pythonでは上記5値を持つ`MeldKind(Enum)`として実装する。
 
 ### tiles
 
@@ -352,6 +364,8 @@ OwnHandState
 
 現在自席が保持するconcealed tiles全体である。自摸直後はdrawn tileも含み、
 副露牌は含まない。順序に意味を持たせず、canonical orderへ正規化する。
+`OwnHandState`値単体では、concealed tileの固定枚数や非空性を要求しない。
+副露数やdecision phaseを含む枚数整合は、Adapter等のContext整合条件とする。
 
 ### drawn_tile
 
@@ -364,13 +378,29 @@ drawn_tile is not None
 drawn_tileがmultisetとしてconcealed_tiles内に存在する
 ```
 
+この包含判定は赤牌区分を含む`Tile`のsemantic value一致で行い、physical copy
+identityは使用しない。
+
 鳴き後の打牌判断等、対応するdrawn tileがない場合は`None`とする。通常ツモと
 嶺上ツモは、いずれも現在のdrawn tileという同じ意味で扱う。
 
 ## Tileの意味契約
 
-具体的な符号化はIssue #20で確定する。初期schemaでは次の意味を
-固定する。
+`Tile`は`TileType`と赤牌区分を組み合わせたfrozen dataclassとして実装する。
+
+```text
+TileType
+├── category: TileCategory
+└── rank: int
+
+Tile
+├── tile_type: TileType
+└── is_red: bool
+```
+
+`TileCategory`は萬子、筒子、索子、字牌の4値を持つ。数牌のrankは1..9、字牌は
+1..7とし、字牌rankは東=1、南=2、西=3、北=4、白=5、發=6、中=7に固定する。
+赤牌は数牌の5だけを許可する。次の意味契約を維持する。
 
 - lisjong内部の麻雀牌値である
 - RiichiEnvのphysical tile IDではない
@@ -383,7 +413,9 @@ drawn_tileがmultisetとしてconcealed_tiles内に存在する
 - `PolicyInput`と`InternalAction`で同じ`Tile`概念を使用する
 - deterministicなcanonical orderを定義できる
 
-34-index、37-index、enum、dataclass等の具体表現は後続で決定する。
+canonical sort keyはcategoryを萬子、筒子、索子、字牌の順とし、その後にrank、
+赤牌区分を比較する。34-index、37-index、MJAI文字列、physical tile IDは
+共通`Tile`の表現に使用しない。
 
 ## Materialized state
 
@@ -446,7 +478,11 @@ legal_actions
 | `legal_actions` | priorityとしての順序なし。不変sequence |
 
 意味的に同じ`PolicyInput`は、同じcanonical representationを持つ。
-Pythonの`__eq__`等の具体実装は後続で定義する。
+`concealed_tiles`と`PublicMeld.tiles`は生成時にcanonical tupleへ正規化し、
+重複枚数と赤牌区分を保持する。`players`、`discards`、`melds`、
+`dora_indicators`、`legal_actions`は位置、履歴、公開順または境界側の入力順を
+保持するsequenceであり、全sequenceを一律にsortしない。value比較にはfrozen
+dataclass、Enum、tupleのvalue equalityを使用する。
 
 ## Immutable snapshot
 
@@ -454,9 +490,9 @@ Pythonの`__eq__`等の具体実装は後続で定義する。
 `Observation`、mutable `list`、event buffer、live object等をそのまま参照しない。
 Policy入力から、外部環境所有の可変objectへ到達できないようにする。
 
-具体的な`tuple`、frozen dataclass等は後続実装で決定する。不変性は情報境界の
-代替ではない。非公開情報はimmutable化して渡すのではなく、そもそも
-PolicyInputへ含めない。
+collectionは外部iterableをtupleへ正規化し、state値はfrozen dataclassまたは
+Enumとして保持する。不変性は情報境界の代替ではない。非公開情報はimmutable化して
+渡すのではなく、そもそもPolicyInputへ含めない。
 
 ## MatchRulesとPolicy設定
 
@@ -555,16 +591,21 @@ Replay、cross-process Policy、plugin API、persistent serialization等で互�
 必要になった時点でversioningを設計する。model artifact側metadataへ入力schemaの
 識別子を保持する方式は将来候補である。
 
-## 後続実装testへの引継ぎ
+## 検証境界とtest観点
 
-少なくとも次を後続実装のtest観点とする。
+共通型の単体testでは、少なくとも次を確認する。
 
 - `players`は4要素で、indexが`Seat`に一致する
 - すべての`legal_actions.actor`が`self_seat`に一致する
 - `drawn_tile`が`None`でない場合、multisetとして`concealed_tiles`内に存在する
+- `PolicyInput`と構成値が外部のmutable collectionを保持しない
+- 同じ意味の順序なしmultisetはcanonicalization後に同じvalueとなる
+- `dora_indicators`等の順序に意味を持つsequenceを並べ替えない
+
+Adapter等の後続実装では、少なくとも次を確認する。
+
 - 他家hidden handまたは山内容だけが異なる局面から、同じ`PolicyInput`を生成する
 - `PolicyInput`からraw `Observation`または`env.mjai_log`へ到達できない
-- 同じ意味局面はcanonicalization後に同じ`PolicyInput`となる
 - `Discard.order`は局内で一意であり、打牌ごとに単調増加する
 - 鳴かれたdiscardは履歴から消えず、`called_by`で表現する
 - 公開済みのdora indicatorだけを含む
@@ -574,9 +615,6 @@ Replay、cross-process Policy、plugin API、persistent serialization等で互�
 
 次は後続設計または実装で確定する。
 
-- Pythonの具体的なclass、enum、collection、package、module構成
-- `Tile`の具体符号化
-- Pythonでの具体的なaction equality、hash、canonical key表現
 - kakanで既存ponを更新した際のmeld sequence上の位置
 - 将来`ippatsu_active`等を追加する場合のリーチ宣言牌位置の表現
 - `live_wall_tiles_remaining`をlocalとonlineで生成する具体的なcounter algorithm

@@ -4,8 +4,8 @@ docs/policy-input-schema.md「PolicyInputの概念schema」の意味契約を実
 
 PolicyInputは、あるseatから観測可能な状態を正規化したsnapshotである。
 Policyの合法手候補（legal_actions）は含まない。legal_actionsを含む
-1 seat・1 decision分の不変contextは`DecisionContext`の責務であり、
-Issue #20の後続実装単位で扱う。
+1 seat・1 decision分の不変contextは、`DecisionContext`がPolicyInputと
+decision-localなlegal_actionsを束ねて表現する。
 
 `players`はindex自体がSeat identityを表す
 （`players[index]のindex == Seat`）。`PlayerPublicState`自体はseat fieldを

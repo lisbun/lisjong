@@ -26,7 +26,8 @@ class TileCategory(Enum):
 class TileType:
     """赤牌区分を除いた基礎牌種（base tile kind）。
 
-    数牌は1..9、字牌は1..7の範囲を持つ。字牌の順序自体はここでは固定しない。
+    数牌は1..9、字牌は1..7の範囲を持つ。字牌rankは、東=1、南=2、西=3、
+    北=4、白=5、發=6、中=7としてlisjong内部契約に固定する。
     """
 
     category: TileCategory

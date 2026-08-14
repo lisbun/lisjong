@@ -16,8 +16,9 @@
   [RiichiEnv調査記録](riichienv-investigation.md)を正本とする
 
 本書は、Policyが選ぶ麻雀上の操作を、外部engineのphysical objectや候補の並び順に
-依存せず照合するsemantic identityを定める。具体的なPythonのequality、hash、
-canonical keyの型、Tile符号化、package、module構成は確定しない。
+依存せず照合するsemantic identityを定める。Python実装では、
+`lisjong.policy_contract.action`の各Action dataclassのvalue equalityをsemantic
+identityとし、別のcanonical keyやaction IDは設けない。
 
 RiichiEnvで未実測のAction種別やRiichiLabオンライン経路を、本書によって実測済みへ
 格上げしない。本書のidentity規則はlisjongの設計判断である。
@@ -62,8 +63,25 @@ Tile identity = base tile kind + red distinction
 - RiichiEnvのphysical tile IDまたはMJAI文字列そのものをidentityにしない
 
 したがって、通常5pと赤5pは一致しない。一方、同じ通常4sを表すphysical copy間の
-差だけなら一致する。具体的なTile encodingとcanonical sort keyは後続実装で
-定める。
+差だけなら一致する。`Tile`は`TileType(category, rank)`と`is_red`から成るfrozen
+dataclassとして実装する。canonical sort keyはcategoryを萬子、筒子、索子、字牌の
+順とし、その後にrank、赤牌区分を比較する。
+
+## Pythonでのidentity表現
+
+11個のAction variantは、共通base classや`ActionKind` fieldを持たない独立した
+frozen dataclassであり、`InternalAction`はそれらのtype alias unionである。
+
+```text
+InternalActionのdataclass value equality
+        =
+semantic identity
+```
+
+dataclassの型がvariant差を、各fieldのvalue equalityが`actor`とvariant固有fieldの
+差を表す。順序なしmultiset fieldはconstructorでcanonical tupleへ正規化してから
+比較する。frozen dataclassから生成されるhashはset等の実装に利用できるが、hash値
+そのものをidentityの意味根拠にはしない。最終的な一致判定はvalue equalityで行う。
 
 ## Variant別identity
 
@@ -167,8 +185,7 @@ contextから明示的に導出できることを検証するか、変換をfail
 multiset identity = each Tile identity and its multiplicity
 ```
 
-実装はcanonical sort済みsequenceまたはcount表現等を使用できるが、具体的な
-Python表現は固定しない。どの表現でも次を満たす。
+Python実装はTileのcanonical sort keyで並べたtupleへ生成時に正規化し、次を満たす。
 
 - 同じ要素と個数なら入力順にかかわらず一致する
 - 赤牌と通常牌を別要素として数える
@@ -374,7 +391,7 @@ raw牌譜がphysical tile identityを保持する場合も、Policyのsemantic a
 physical copy差だけの教師ラベルは同じsemantic identityへ正規化する。raw dataの
 保存形式と学習datasetのversioningは本書では確定しない。
 
-## 後続実装testへの引継ぎ
+## 検証境界とtest観点
 
 少なくとも次をtest観点とする。
 
@@ -405,8 +422,6 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 
 次は後続実装、実測、または別の設計項目で確定する。
 
-- Pythonでの具体的なequality、hash、canonical key表現
-- `Tile`の具体符号化とcanonical sort key
 - RiichiEnvおよびRiichiLabごとのrepresentative tie-break key
 - Kakan後の`PublicMeld`のsequence位置
 - decision-local mappingの具体的な型と所有component内の実装構造
