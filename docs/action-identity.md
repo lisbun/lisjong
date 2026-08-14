@@ -292,6 +292,15 @@ semantic groupとexternal candidateの対応は、1 seat・1 decisionだけに�
 - 外部環境が次のstateへ進んだ後に再利用しない
 - 別seatまたは別decisionの候補を混在させない
 
+RiichiEnv Adapterでは、seatごとの`RiichiEnvActionMappingSession`がAdapter内部の
+generationだけを管理する。同じsessionで新しいdecisionのmappingを生成すると
+generationが進み、旧mappingは未resolveであっても失効する。mappingは生成時の
+generationを保持し、`resolve()`時にsessionのcurrent generationと一致しなければ
+`StaleActionMappingError`でfail closedする。これはRiichiEnvに存在しないdecision
+IDを発明せず、Action mappingの所有境界だけでcross-decision利用を拒否するための
+仕組みである。sessionはRiichiEnv本体、materialized state、Policy呼び出し、
+対局loopを所有しない。
+
 Policy返却Actionを受け取った境界は、次を順に確認する。
 
 1. Policy返却値が有効な`InternalAction`である
@@ -434,7 +443,8 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 - 具体的な例外class、timeout、終了または切断処理
 - Local game runner、RiichiLab Clientの本実装
 
-RiichiEnv Adapterのdecision-local mapping自体（`RiichiEnvActionMapping`）は
-Issue #29で`src/lisjong/riichienv_adapter/action_mapping.py`として実装済みで
-ある。ただし`PolicyInput`生成・materialized state・`DecisionContext`の最終
-組み立てはIssue #28・#23の責務として残る。
+RiichiEnv Adapterのdecision-local mappingとseat-localな所有境界
+（`RiichiEnvActionMapping` / `RiichiEnvActionMappingSession`）はIssue #29で
+`src/lisjong/riichienv_adapter/action_mapping.py`として実装済みである。
+`PolicyInput`生成・materialized stateはIssue #28で実装済みであり、両者を束ねる
+`DecisionContext`の最終組み立てはIssue #23の責務として残る。

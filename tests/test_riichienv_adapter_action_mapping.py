@@ -45,17 +45,13 @@ from lisjong.riichienv_adapter.action_mapping import (
     ContextResolutionError,
     EmptyLegalActionsError,
     RepresentativeSelectionError,
-    RiichiEnvActionMapping,
+    RiichiEnvActionMappingSession,
     StaleActionMappingError,
     UnmappedActionError,
     UnsupportedActionError,
-    _SemanticGroup,
-    build_action_mapping,
 )
-from lisjong.riichienv_adapter.conversions import (
-    seat_from_player_index,
-    tile_from_physical_id,
-)
+from lisjong.riichienv_adapter.seat_conversion import seat_from_player_index
+from lisjong.riichienv_adapter.tile_conversion import tile_from_physical_id
 
 # ---------------------------------------------------------------------------
 # fixture helpers
@@ -78,7 +74,7 @@ def physical_id(
 ) -> int:
     """testで使う、lisjongのTile意味からRiichiEnv物理牌IDを逆算するhelper。
 
-    conversions.tile_from_physical_idと対になる、test専用の逆変換である。
+    tile_conversion.tile_from_physical_idと対になる、test専用の逆変換である。
     """
     if category is TileCategory.HONOR:
         kind_index = 27 + (rank - 1)
@@ -86,6 +82,12 @@ def physical_id(
         kind_index = _SUIT_BASE_INDEX[category] + (rank - 1)
     copy_index = 0 if red else copy
     return kind_index * 4 + copy_index
+
+
+def _build_mapping(observation: Observation):
+    """単一decision用sessionを作り、mappingを構築するtest helper。"""
+    self_seat = seat_from_player_index(observation.player_id)
+    return RiichiEnvActionMappingSession(self_seat).build(observation)
 
 
 def make_action(
@@ -163,7 +165,7 @@ WEST_TILE = Tile(TileType(TileCategory.HONOR, 3))
 
 
 # ---------------------------------------------------------------------------
-# conversions.py
+# seat_conversion.py / tile_conversion.py
 # ---------------------------------------------------------------------------
 
 
@@ -213,7 +215,8 @@ class TileFromPhysicalIdTest(unittest.TestCase):
             tile_from_physical_id(-1)
 
     def test_rejects_non_int(self) -> None:
-        with self.assertRaises(TypeError):
+        # Issue #28でmainへ入ったtile_conversion.pyのfail-closed契約を正本とする。
+        with self.assertRaises(ValueError):
             tile_from_physical_id("12")
 
 
@@ -243,7 +246,7 @@ class DiscardConversionTest(unittest.TestCase):
         action = make_action(ActionType.DISCARD, tile=tile_id, actor=0)
         obs = make_observation(legal_actions=[action], drawn_tile=drawn_id)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -255,7 +258,7 @@ class DiscardConversionTest(unittest.TestCase):
         action = make_action(ActionType.DISCARD, tile=tile_id, actor=0)
         obs = make_observation(legal_actions=[action], drawn_tile=tile_id)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -267,7 +270,7 @@ class DiscardConversionTest(unittest.TestCase):
         action = make_action(ActionType.DISCARD, tile=tile_id, actor=0)
         obs = make_observation(legal_actions=[action], drawn_tile=tile_id)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -281,7 +284,7 @@ class DiscardConversionTest(unittest.TestCase):
         action = make_action(ActionType.DISCARD, tile=tile_id, actor=0)
         obs = make_observation(legal_actions=[action], drawn_tile=None)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(mapping.candidates[0].tsumogiri, False)
 
@@ -291,7 +294,7 @@ class RiichiConversionTest(unittest.TestCase):
         action = make_action(ActionType.RIICHI, actor=2)
         obs = make_observation(player_id=2, legal_actions=[action])
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(mapping.candidates, (RiichiAction(actor=Seat.SEAT_2),))
 
@@ -313,7 +316,7 @@ class ChiConversionTest(unittest.TestCase):
             player_id=1, legal_actions=[action], discards=discards, last_discard=0
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -343,7 +346,7 @@ class ChiConversionTest(unittest.TestCase):
         )
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_last_discard_none_fails_closed(self) -> None:
         called_id = physical_id(TileCategory.MANZU, 5)
@@ -357,7 +360,7 @@ class ChiConversionTest(unittest.TestCase):
         obs = make_observation(player_id=1, legal_actions=[action], last_discard=None)
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
 
 class PonConversionTest(unittest.TestCase):
@@ -375,7 +378,7 @@ class PonConversionTest(unittest.TestCase):
             player_id=2, legal_actions=[action], discards=discards, last_discard=3
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -406,7 +409,7 @@ class DaiminkanConversionTest(unittest.TestCase):
             player_id=2, legal_actions=[action], discards=discards, last_discard=3
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -429,7 +432,7 @@ class AnkanConversionTest(unittest.TestCase):
         )
         obs = make_observation(player_id=3, legal_actions=[action])
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -455,7 +458,7 @@ class KakanConversionTest(unittest.TestCase):
         melds = [[source_meld], [], [], []]
         obs = make_observation(player_id=0, legal_actions=[action], melds=melds)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -480,7 +483,7 @@ class KakanConversionTest(unittest.TestCase):
         )
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_multiple_source_pon_fails_closed(self) -> None:
         pon_tiles = [physical_id(TileCategory.PINZU, 1, c) for c in range(3)]
@@ -497,7 +500,7 @@ class KakanConversionTest(unittest.TestCase):
         )
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_non_pon_melds_are_not_source_candidates(self) -> None:
         pon_tiles = [physical_id(TileCategory.PINZU, 1, c) for c in range(3)]
@@ -515,7 +518,7 @@ class KakanConversionTest(unittest.TestCase):
         )
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
 
 class RonConversionTest(unittest.TestCase):
@@ -527,7 +530,7 @@ class RonConversionTest(unittest.TestCase):
             player_id=2, legal_actions=[action], discards=discards, last_discard=3
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -565,7 +568,7 @@ class RonConversionTest(unittest.TestCase):
             last_discard=3,
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(mapping.candidates[0].target, Seat.SEAT_3)
 
@@ -581,7 +584,7 @@ class RonConversionTest(unittest.TestCase):
         )
 
         with self.assertRaises(ContextResolutionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
 
 class TsumoConversionTest(unittest.TestCase):
@@ -592,7 +595,7 @@ class TsumoConversionTest(unittest.TestCase):
             player_id=1, legal_actions=[action], drawn_tile=winning_id
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(
             mapping.candidates,
@@ -610,7 +613,7 @@ class PassConversionTest(unittest.TestCase):
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(legal_actions=[action])
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(mapping.candidates, (PassAction(actor=Seat.SEAT_0),))
 
@@ -620,7 +623,7 @@ class KyuushuKyuuhaiConversionTest(unittest.TestCase):
         action = make_action(ActionType.KYUSHU_KYUHAI, actor=3)
         obs = make_observation(player_id=3, legal_actions=[action])
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(mapping.candidates, (KyuushuKyuuhaiAction(actor=Seat.SEAT_3),))
 
@@ -642,7 +645,7 @@ class SemanticAggregationTest(unittest.TestCase):
         ]
         obs = make_observation(legal_actions=actions, drawn_tile=None)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -667,7 +670,7 @@ class SemanticAggregationTest(unittest.TestCase):
             player_id=1, legal_actions=actions, discards=discards, last_discard=0
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -696,7 +699,7 @@ class SemanticAggregationTest(unittest.TestCase):
             player_id=2, legal_actions=actions, discards=discards, last_discard=3
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -719,8 +722,8 @@ class SemanticAggregationTest(unittest.TestCase):
             legal_actions=list(reversed(actions)), drawn_tile=None
         )
 
-        forward_mapping = build_action_mapping(forward)
-        reversed_mapping = build_action_mapping(reversed_obs)
+        forward_mapping = _build_mapping(forward)
+        reversed_mapping = _build_mapping(reversed_obs)
 
         forward_repr = forward_mapping.resolve(forward_mapping.candidates[0])
         reversed_repr = reversed_mapping.resolve(reversed_mapping.candidates[0])
@@ -733,8 +736,8 @@ class SemanticAggregationTest(unittest.TestCase):
         forward = make_observation(legal_actions=list(actions), drawn_tile=None)
         shuffled_obs = make_observation(legal_actions=list(shuffled), drawn_tile=None)
 
-        forward_mapping = build_action_mapping(forward)
-        shuffled_mapping = build_action_mapping(shuffled_obs)
+        forward_mapping = _build_mapping(forward)
+        shuffled_mapping = _build_mapping(shuffled_obs)
 
         forward_repr = forward_mapping.resolve(forward_mapping.candidates[0])
         shuffled_repr = shuffled_mapping.resolve(shuffled_mapping.candidates[0])
@@ -757,7 +760,7 @@ class SemanticAggregationTest(unittest.TestCase):
         )
         obs = make_observation(legal_actions=[action_a, action_b])
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -785,7 +788,7 @@ class SemanticAggregationTest(unittest.TestCase):
             last_discard=3,
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -810,7 +813,7 @@ class SemanticAggregationTest(unittest.TestCase):
             melds=[[source_meld], [], [], []],
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 1)
 
@@ -823,7 +826,7 @@ class SemanticAggregationTest(unittest.TestCase):
         ]
         obs = make_observation(legal_actions=actions, drawn_tile=drawn_id)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 2)
         self.assertEqual({c.tsumogiri for c in mapping.candidates}, {True, False})
@@ -837,7 +840,7 @@ class SemanticAggregationTest(unittest.TestCase):
         ]
         obs = make_observation(legal_actions=actions, drawn_tile=None)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 2)
         self.assertEqual({c.tile.is_red for c in mapping.candidates}, {True, False})
@@ -870,7 +873,7 @@ class SemanticAggregationTest(unittest.TestCase):
             last_discard=0,
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 2)
 
@@ -894,8 +897,8 @@ class SemanticAggregationTest(unittest.TestCase):
             player_id=2, legal_actions=actions, discards=discards_b, last_discard=0
         )
 
-        mapping_a = build_action_mapping(obs_a)
-        mapping_b = build_action_mapping(obs_b)
+        mapping_a = _build_mapping(obs_a)
+        mapping_b = _build_mapping(obs_b)
 
         self.assertNotEqual(
             mapping_a.candidates[0].target, mapping_b.candidates[0].target
@@ -929,7 +932,7 @@ class SemanticAggregationTest(unittest.TestCase):
             player_id=0, legal_actions=[action_a, action_b], melds=melds
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertEqual(len(mapping.candidates), 2)
 
@@ -952,8 +955,8 @@ class SemanticAggregationTest(unittest.TestCase):
             last_discard=3,
         )
 
-        mapping_a = build_action_mapping(obs_a)
-        mapping_b = build_action_mapping(obs_b)
+        mapping_a = _build_mapping(obs_a)
+        mapping_b = _build_mapping(obs_b)
 
         self.assertNotEqual(mapping_a.candidates[0], mapping_b.candidates[0])
 
@@ -988,8 +991,8 @@ class SemanticAggregationTest(unittest.TestCase):
             last_discard=3,
         )
 
-        mapping_normal = build_action_mapping(obs_normal)
-        mapping_red = build_action_mapping(obs_red)
+        mapping_normal = _build_mapping(obs_normal)
+        mapping_red = _build_mapping(obs_red)
 
         self.assertNotEqual(mapping_normal.candidates[0], mapping_red.candidates[0])
 
@@ -1009,7 +1012,7 @@ class RoundTripTest(unittest.TestCase):
         action = make_action(ActionType.DISCARD, tile=tile_id, actor=0)
         obs = make_observation(legal_actions=[action], drawn_tile=None)
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
         resolved = mapping.resolve(mapping.candidates[0])
 
         self.assertEqual(resolved.to_dict(), action.to_dict())
@@ -1020,7 +1023,7 @@ class FailClosedTest(unittest.TestCase):
         obs = make_observation(legal_actions=[])
 
         with self.assertRaises(EmptyLegalActionsError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_unsupported_action_type(self) -> None:
         # ActionType.KITAは3人麻雀固有のoperationであり、初期4人麻雀用11
@@ -1029,19 +1032,19 @@ class FailClosedTest(unittest.TestCase):
         obs = make_observation(legal_actions=[action])
 
         with self.assertRaises(UnsupportedActionError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_actor_mismatch_during_conversion(self) -> None:
         action = make_action(ActionType.DISCARD, tile=0, actor=1)
         obs = make_observation(player_id=0, legal_actions=[action])
 
         with self.assertRaises(ActorMismatchError):
-            build_action_mapping(obs)
+            _build_mapping(obs)
 
     def test_unmapped_internal_action(self) -> None:
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(legal_actions=[action])
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         with self.assertRaises(UnmappedActionError):
             mapping.resolve(RiichiAction(actor=Seat.SEAT_0))
@@ -1049,7 +1052,7 @@ class FailClosedTest(unittest.TestCase):
     def test_resolve_rejects_non_internal_action(self) -> None:
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(legal_actions=[action])
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         with self.assertRaises(TypeError):
             mapping.resolve("not-an-internal-action")
@@ -1057,7 +1060,7 @@ class FailClosedTest(unittest.TestCase):
     def test_stale_mapping_after_first_resolve(self) -> None:
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(legal_actions=[action])
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         mapping.resolve(mapping.candidates[0])
 
@@ -1065,45 +1068,67 @@ class FailClosedTest(unittest.TestCase):
             mapping.resolve(mapping.candidates[0])
 
     def test_cross_decision_reuse_of_same_mapping_fails_closed(self) -> None:
-        # RiichiEnvにはdecision識別用の公式IDが存在しない（Issue #27実測）ため、
-        # mapping instance自体を1decisionの使い捨てtokenとして扱う。同じ
-        # instanceを「別のdecisionのつもりで」再利用する行為はstaleとして
-        # fail closedする。
-        action = make_action(ActionType.PASS, actor=0)
-        obs = make_observation(legal_actions=[action])
-        mapping = build_action_mapping(obs)
-        mapping.resolve(mapping.candidates[0])
+        # mapping Aをresolveしないまま、同じseatのsessionでdecision Bの
+        # mappingを生成する。単なる二重resolveではなく、session generationが
+        # 未resolveの旧mappingを失効させることを確認する。
+        session = RiichiEnvActionMappingSession(Seat.SEAT_0)
+        observation_a = make_observation(
+            legal_actions=[make_action(ActionType.PASS, actor=0)]
+        )
+        mapping_a = session.build(observation_a)
 
-        later_action = make_action(ActionType.KYUSHU_KYUHAI, actor=0)
+        observation_b = make_observation(
+            legal_actions=[make_action(ActionType.KYUSHU_KYUHAI, actor=0)]
+        )
+        mapping_b = session.build(observation_b)
+
         with self.assertRaises(StaleActionMappingError):
-            mapping.resolve(KyuushuKyuuhaiAction(actor=Seat.SEAT_0))
-        del later_action
+            mapping_a.resolve(mapping_a.candidates[0])
+
+        resolved_b = mapping_b.resolve(mapping_b.candidates[0])
+        self.assertEqual(resolved_b.action_type, ActionType.KYUSHU_KYUHAI)
+
+    def test_cross_seat_build_on_same_session_fails_closed(self) -> None:
+        session = RiichiEnvActionMappingSession(Seat.SEAT_0)
+        observation = make_observation(
+            player_id=1,
+            legal_actions=[make_action(ActionType.PASS, actor=1)],
+        )
+
+        with self.assertRaises(ActorMismatchError):
+            session.build(observation)
+
+    def test_failed_new_decision_build_also_invalidates_old_mapping(self) -> None:
+        session = RiichiEnvActionMappingSession(Seat.SEAT_0)
+        old_observation = make_observation(
+            legal_actions=[make_action(ActionType.PASS, actor=0)]
+        )
+        old_mapping = session.build(old_observation)
+
+        invalid_new_observation = make_observation(legal_actions=[])
+        with self.assertRaises(EmptyLegalActionsError):
+            session.build(invalid_new_observation)
+
+        with self.assertRaises(StaleActionMappingError):
+            old_mapping.resolve(old_mapping.candidates[0])
 
     def test_cross_seat_resolve_fails_closed(self) -> None:
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(player_id=0, legal_actions=[action])
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         with self.assertRaises(ActorMismatchError):
             mapping.resolve(PassAction(actor=Seat.SEAT_1))
 
     def test_representative_missing_from_captured_legal_set_fails_closed(self) -> None:
-        # RiichiEnvActionMapping()の公開constructorを直接使い、意図的に
-        # representativeを生成時external legal setに含めない矛盾状態を作って、
+        # 正常に生成したmappingの捕捉legal setだけを意図的に壊し、
         # resolve()直前の再検証が機能することを確認する。
-        internal_action = PassAction(actor=Seat.SEAT_0)
-        included_action = make_action(ActionType.PASS, actor=0)
-        stray_representative = make_action(ActionType.PASS, actor=0)
-        group = _SemanticGroup(
-            internal_action=internal_action,
-            external_candidates=(stray_representative,),
-            representative=stray_representative,
+        observation = make_observation(
+            legal_actions=[make_action(ActionType.PASS, actor=0)]
         )
-        mapping = RiichiEnvActionMapping(
-            self_seat=Seat.SEAT_0,
-            groups={internal_action: group},
-            external_legal_actions=(included_action,),
-        )
+        mapping = _build_mapping(observation)
+        internal_action = mapping.candidates[0]
+        mapping._external_legal_actions = ()
 
         with self.assertRaises(RepresentativeSelectionError):
             mapping.resolve(internal_action)
@@ -1129,7 +1154,7 @@ class InformationBoundaryTest(unittest.TestCase):
             player_id=1, legal_actions=[action], discards=discards, last_discard=0
         )
 
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
         internal_action = mapping.candidates[0]
 
         for field in dataclasses.fields(internal_action):
@@ -1149,7 +1174,7 @@ class InformationBoundaryTest(unittest.TestCase):
     def test_mapping_candidates_are_plain_internal_actions(self) -> None:
         action = make_action(ActionType.PASS, actor=0)
         obs = make_observation(legal_actions=[action])
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         for candidate in mapping.candidates:
             self.assertNotIn("riichienv", type(candidate).__module__)
@@ -1193,6 +1218,11 @@ _INTERESTING_ACTION_TYPES = (
     ActionType.KYUSHU_KYUHAI,
 )
 
+# ruff format 0.16.0 + CPython 3.14.0rc2環境で
+# `except (AssertionError, IndexError):`の括弧が失われる問題を避けつつ、
+# 2種類の例外をcatchする意図をPython 3上で明示する。
+_SEARCH_FAILURES = (AssertionError, IndexError)
+
 
 def _advance_preferring_unseen(env: RiichiEnv, action_type: ActionType, max_steps: int):
     """1局内で、まだ出現していない対象ActionTypeのいずれかを優先しつつ進める。
@@ -1232,7 +1262,7 @@ def _find_across_seeds(seeds, action_type: ActionType, max_steps: int):
         env = RiichiEnv(seed=seed)
         try:
             (pid, obs), step = _advance_preferring_unseen(env, action_type, max_steps)
-        except AssertionError, IndexError:
+        except _SEARCH_FAILURES:
             continue
         return seed, (pid, obs), step
     raise AssertionError(f"{action_type} did not appear across seeds {seeds!r}")
@@ -1244,7 +1274,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_chi_seed1_step1(self) -> None:
         env = RiichiEnv(seed=1)
         (pid, obs), _ = _advance_preferring(env, ActionType.CHI, 5)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         self.assertTrue(any(isinstance(c, ChiAction) for c in mapping.candidates))
         chi = next(c for c in mapping.candidates if isinstance(c, ChiAction))
@@ -1254,7 +1284,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_pon_seed1_step19(self) -> None:
         env = RiichiEnv(seed=1)
         (pid, obs), _ = _advance_preferring(env, ActionType.PON, 25)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         pon = next(c for c in mapping.candidates if isinstance(c, PonAction))
         resolved = mapping.resolve(pon)
@@ -1263,7 +1293,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_kakan_seed2_step46(self) -> None:
         env = RiichiEnv(seed=2)
         (pid, obs), _ = _advance_preferring(env, ActionType.KAKAN, 60)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         kakan = next(c for c in mapping.candidates if isinstance(c, KakanAction))
         resolved = mapping.resolve(kakan)
@@ -1272,7 +1302,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_daiminkan_seed5_step48(self) -> None:
         env = RiichiEnv(seed=5)
         (pid, obs), _ = _advance_preferring(env, ActionType.DAIMINKAN, 60)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         daiminkan = next(
             c for c in mapping.candidates if isinstance(c, DaiminkanAction)
@@ -1283,7 +1313,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_ankan_seed18_step4(self) -> None:
         env = RiichiEnv(seed=18)
         (pid, obs), _ = _advance_preferring(env, ActionType.ANKAN, 10)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         ankan = next(c for c in mapping.candidates if isinstance(c, AnkanAction))
         resolved = mapping.resolve(ankan)
@@ -1292,7 +1322,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_riichi_seed19_step19(self) -> None:
         env = RiichiEnv(seed=19)
         (pid, obs), _ = _advance_preferring(env, ActionType.RIICHI, 25)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         riichi = next(c for c in mapping.candidates if isinstance(c, RiichiAction))
         resolved = mapping.resolve(riichi)
@@ -1303,7 +1333,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
         # 優先の単純な進行方針では同じ多target累積探索の軌道を再現できない
         # ため、複数seedにわたって同じ単純方針でronを再現できる例を探す。
         _, (pid, obs), _ = _find_across_seeds(range(1, 60), ActionType.RON, 120)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         ron = next(c for c in mapping.candidates if isinstance(c, RonAction))
         resolved = mapping.resolve(ron)
@@ -1312,7 +1342,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_tsumo_seed14_step82(self) -> None:
         env = RiichiEnv(seed=14)
         (pid, obs), _ = _advance_preferring(env, ActionType.TSUMO, 90)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         tsumo = next(c for c in mapping.candidates if isinstance(c, TsumoAction))
         resolved = mapping.resolve(tsumo)
@@ -1321,7 +1351,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
     def test_kyuushu_kyuuhai_seed228_step3(self) -> None:
         env = RiichiEnv(seed=228)
         (pid, obs), _ = _advance_preferring(env, ActionType.KYUSHU_KYUHAI, 10)
-        mapping = build_action_mapping(obs)
+        mapping = _build_mapping(obs)
 
         kyuushu = next(
             c for c in mapping.candidates if isinstance(c, KyuushuKyuuhaiAction)
@@ -1362,7 +1392,7 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
                     break
         self.assertIsNotNone(chankan_observation, "chankan scenario did not reproduce")
 
-        mapping = build_action_mapping(chankan_observation)
+        mapping = _build_mapping(chankan_observation)
         ron_candidates = [c for c in mapping.candidates if isinstance(c, RonAction)]
         self.assertEqual(len(ron_candidates), 1)
         self.assertEqual(ron_candidates[0].target, Seat(kakan_actor_seen))
@@ -1374,12 +1404,16 @@ class LiveRiichiEnvRegressionTest(unittest.TestCase):
         """広範なseedにわたり、adapterがfail closed以外の未処理例外を出さないことを確認する。"""
         for seed in range(1, 30):
             env = RiichiEnv(seed=seed)
+            sessions = {
+                Seat(seat): RiichiEnvActionMappingSession(Seat(seat))
+                for seat in range(4)
+            }
             obs_map = env.reset()
             step = 0
             while obs_map and not env.done() and step < 150:
                 actions = {}
                 for pid, obs in obs_map.items():
-                    mapping = build_action_mapping(obs)
+                    mapping = sessions[Seat(pid)].build(obs)
                     self.assertGreaterEqual(len(mapping.candidates), 1)
                     chosen_external = obs.legal_actions()[0]
                     actions[pid] = chosen_external

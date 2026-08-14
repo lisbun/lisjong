@@ -1,56 +1,50 @@
-import importlib
 import subprocess
 import sys
 import unittest
 
+_EXPECTED_NAMES = (
+    "Seat",
+    "Tile",
+    "TileCategory",
+    "TileType",
+    "Wind",
+    "MeldKind",
+    "PublicMeld",
+    "RiichiState",
+    "Discard",
+    "DiscardAction",
+    "InternalAction",
+    "PlayerPublicState",
+    "RoundState",
+    "OwnHandState",
+    "PolicyInput",
+    "DecisionContext",
+    "Policy",
+)
+
+_PROBE_SCRIPT = (
+    "import sys\n"
+    "import lisjong.policy_contract as module\n"
+    "assert 'riichienv' not in sys.modules, sorted(sys.modules)\n"
+    + "\n".join(
+        f"assert hasattr(module, {name!r}), {name!r}" for name in _EXPECTED_NAMES
+    )
+)
+
 
 class PolicyContractImportTest(unittest.TestCase):
     def test_imports_without_riichienv(self) -> None:
-        # unittest discoverは全testモジュールをcollection段階で一括importする
-        # ため、同一process内では他のtestモジュール（lisjong.riichienv_adapter
-        # を使うもの等）がすでにriichienvをsys.modulesへ載せている場合がある。
-        # この契約（lisjong.policy_contractがriichienvへ依存しないこと）を
-        # process横断の副作用と切り離して検証するため、独立したsubprocessで
-        # `import lisjong.policy_contract`だけを行い、そのsubprocess自身の
-        # sys.modulesを確認する。
+        # `python -m unittest discover`は全test moduleを同一processへimportする
+        # ため、riichienvへ正当に依存するtest(tests/test_riichienv_adapter_*.py)が
+        # 同じ実行に含まれると、共有sys.modulesではこのpackage自体の依存を
+        # 検証できない。独立したsubprocessでlisjong.policy_contractだけを
+        # importし、riichienvが道連れでimportされないことを確認する。
         result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "import sys; import lisjong.policy_contract; "
-                "sys.exit(1 if 'riichienv' in sys.modules else 0)",
-            ],
-            cwd=None,
+            [sys.executable, "-c", _PROBE_SCRIPT],
+            capture_output=True,
+            text=True,
         )
-        self.assertEqual(
-            result.returncode,
-            0,
-            "importing lisjong.policy_contract must not load riichienv",
-        )
-
-    def test_exposes_expected_names(self) -> None:
-        module = importlib.import_module("lisjong.policy_contract")
-        for name in (
-            "Seat",
-            "Tile",
-            "TileCategory",
-            "TileType",
-            "Wind",
-            "MeldKind",
-            "PublicMeld",
-            "RiichiState",
-            "Discard",
-            "DiscardAction",
-            "InternalAction",
-            "PlayerPublicState",
-            "RoundState",
-            "OwnHandState",
-            "PolicyInput",
-            "DecisionContext",
-            "Policy",
-        ):
-            with self.subTest(name=name):
-                self.assertTrue(hasattr(module, name))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

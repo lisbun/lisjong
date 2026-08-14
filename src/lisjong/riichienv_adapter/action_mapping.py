@@ -42,10 +42,8 @@ from lisjong.policy_contract.action import (
     TsumoAction,
 )
 from lisjong.policy_contract.seat import Seat
-from lisjong.riichienv_adapter.conversions import (
-    seat_from_player_index,
-    tile_from_physical_id,
-)
+from lisjong.riichienv_adapter.seat_conversion import seat_from_player_index
+from lisjong.riichienv_adapter.tile_conversion import tile_from_physical_id
 
 # InternalActionはtype文によるtype alias（union）であり、isinstance()の第2引数へ
 # 直接使用できないため、11 variant classを明示的なtupleとして保持する
@@ -103,13 +101,13 @@ class UnmappedActionError(ActionAdapterError):
 
 
 class StaleActionMappingError(ActionAdapterError):
-    """すでに1回resolve済みのdecision-local mappingを再利用しようとした場合。
+    """失効済みのdecision-local mappingを再利用しようとした場合。
 
     RiichiEnv 0.4.8にはdecisionやeventを識別する公式IDが存在しない
-    （Issue #27実測）。架空の外部IDを発明する代わりに、mapping instance自身を
-    1decisionだけの使い捨てtokenとして扱う。同じmapping instanceへの2回目の
-    `resolve()`呼び出しは、環境が次のdecisionへ進んだ後の再利用（stale /
-    cross-decision利用）とみなしてfail closedする。
+    （Issue #27実測）。架空の外部IDを発明する代わりに、seat-localな
+    `RiichiEnvActionMappingSession`がAdapter内部generationを管理する。次の
+    mappingが生成された旧mappingと、すでにresolve済みのmappingは、どちらも
+    fail closedする。
     """
 
 
@@ -299,18 +297,63 @@ class _SemanticGroup:
     representative: RiichiEnvAction
 
 
+class RiichiEnvActionMappingSession:
+    """1 seat分のdecision-local mapping所有境界。
+
+    RiichiEnvには公式decision IDがないため、外部状態からIDを推測しない。
+    同じseatの新しいObservationからmappingを構築するたびにAdapter内部の
+    generationを進め、以前に返したmappingを失効させる。保持する可変状態は
+    generationだけであり、PolicyInput、materialized state、RiichiEnv本体や
+    対局loopは所有しない。
+    """
+
+    __slots__ = ("_self_seat", "_generation")
+
+    def __init__(self, self_seat: Seat) -> None:
+        if not isinstance(self_seat, Seat):
+            raise TypeError("self_seat must be a Seat")
+        self._self_seat = self_seat
+        self._generation = 0
+
+    @property
+    def self_seat(self) -> Seat:
+        return self._self_seat
+
+    def _is_current(self, generation: int) -> bool:
+        return generation == self._generation
+
+    def build(self, observation: Observation) -> "RiichiEnvActionMapping":
+        """current decisionのmappingを生成し、以前のmappingを失効させる。"""
+        observation_seat = seat_from_player_index(observation.player_id)
+        if observation_seat != self._self_seat:
+            raise ActorMismatchError(
+                "observation.player_id does not match this mapping session's seat"
+            )
+
+        # 新decisionの構築が途中でfail closedしても、旧decisionのmappingを
+        # 再利用可能なまま残さない。seat整合を確認後、変換開始前に進める。
+        self._generation += 1
+        return _build_action_mapping(
+            observation=observation,
+            session=self,
+            generation=self._generation,
+        )
+
+
 class RiichiEnvActionMapping:
     """1 seat・1 decisionに閉じた、InternalAction候補と元RiichiEnv Actionの対応。
 
-    `build_action_mapping()`が生成する。`candidates`はPolicyへ提示してよい、
+    `RiichiEnvActionMappingSession.build()`が生成する。`candidates`はPolicyへ提示してよい、
     semantic identity上重複のない`InternalAction`列である。`resolve()`は、
     Policyが選択した`InternalAction`を元のRiichiEnv legal Actionへ1回だけ
     戻せる。RiichiEnv側にはdecisionを識別する公式IDが存在しないため、この
-    instance自体を1decisionだけの使い捨てtokenとして扱う。2回目の`resolve()`
-    呼び出しや、別seatのActionでの呼び出しはfail closedする。
+    seat-local sessionのgenerationにより1 decisionだけ有効となる。次のmapping
+    生成後、2回目の`resolve()`、別seatのActionでの呼び出しはfail closedする。
     """
 
     __slots__ = (
+        "_session",
+        "_generation",
         "_self_seat",
         "_groups",
         "_candidates",
@@ -320,10 +363,14 @@ class RiichiEnvActionMapping:
 
     def __init__(
         self,
+        session: RiichiEnvActionMappingSession,
+        generation: int,
         self_seat: Seat,
         groups: dict[InternalAction, _SemanticGroup],
         external_legal_actions: tuple[RiichiEnvAction, ...],
     ) -> None:
+        self._session = session
+        self._generation = generation
         self._self_seat = self_seat
         self._groups = groups
         self._candidates = tuple(groups.keys())
@@ -346,14 +393,21 @@ class RiichiEnvActionMapping:
         送出する。
 
         1. `selected`が有効な`InternalAction`である
-        2. このmappingがまだresolveされていない（stale / cross-decision防止）
-        3. `selected.actor`がこのmappingのseatと一致する（cross-seat防止）
-        4. `selected`がこのdecisionの候補へsemantic identity上一致する
-        5. 対応するrepresentativeが、生成時のexternal legal action集合に
+        2. session上でこのmappingのgenerationがcurrentである
+           （未resolve mappingを含むstale / cross-decision防止）
+        3. このmappingがまだresolveされていない（二重resolve防止）
+        4. `selected.actor`がこのmappingのseatと一致する（cross-seat防止）
+        5. `selected`がこのdecisionの候補へsemantic identity上一致する
+        6. 対応するrepresentativeが、生成時のexternal legal action集合に
            実在する
         """
         if not isinstance(selected, _INTERNAL_ACTION_TYPES):
             raise TypeError("selected must be an InternalAction")
+
+        if not self._session._is_current(self._generation):
+            raise StaleActionMappingError(
+                "a newer decision mapping has invalidated this mapping"
+            )
 
         if self._resolved:
             raise StaleActionMappingError(
@@ -382,7 +436,11 @@ class RiichiEnvActionMapping:
         return representative
 
 
-def build_action_mapping(observation: Observation) -> RiichiEnvActionMapping:
+def _build_action_mapping(
+    observation: Observation,
+    session: RiichiEnvActionMappingSession,
+    generation: int,
+) -> RiichiEnvActionMapping:
     """同decisionのRiichiEnv `Observation`から、decision-local Action mappingを構築する。
 
     `observation.legal_actions()`が返す外部Action群を、同decisionのseat-visible
@@ -394,7 +452,7 @@ def build_action_mapping(observation: Observation) -> RiichiEnvActionMapping:
     if not legal_actions:
         raise EmptyLegalActionsError("observation.legal_actions() is empty")
 
-    self_seat = seat_from_player_index(observation.player_id)
+    self_seat = session.self_seat
 
     candidates_by_action: dict[InternalAction, list[RiichiEnvAction]] = {}
     for external_action in legal_actions:
@@ -422,6 +480,8 @@ def build_action_mapping(observation: Observation) -> RiichiEnvActionMapping:
         )
 
     return RiichiEnvActionMapping(
+        session=session,
+        generation=generation,
         self_seat=self_seat,
         groups=groups,
         external_legal_actions=legal_actions,

@@ -93,10 +93,43 @@ Adapter自身はPolicy呼び出しを仲介しない。
 
 materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
 現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
-[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。状態更新と同期の
-機械的な検証方法は後続で確定する。内部Actionのvariantとfieldは
-[内部Actionモデル](internal-action-model.md)、semantic identityと外部候補との
-対応は[Action identity](action-identity.md)を参照する。
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
+variantとfieldは[内部Actionモデル](internal-action-model.md)、semantic
+identityと外部候補との対応は[Action identity](action-identity.md)を参照する。
+
+#### `riichienv_adapter` package (Issues #28 and #29)
+
+`src/lisjong/riichienv_adapter/`は、上記責務のうち「seat-visible
+materialized stateの同期」と「`PolicyInput`生成」をIssue #28で、RiichiEnv
+legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で実装した
+Python packageである。Policy呼び出し、`DecisionContext`の最終組み立て、
+Local game runnerは対象外とし、Issue #23へ引き継ぐ。
+
+- `SeatMaterializedState`は1つのself_seat視点について、
+  `Observation.new_events()`から discard順序・tsumogiri・`called_by`、
+  riichi段階(NONE/DECLARED/ACCEPTED)、公開済みdora indicator、live wall
+  算出用のtsumo event数、kyoku identity(場風・局・本場・親)を同期する
+- `build_policy_input()`は、`SeatMaterializedState`と現在の`Observation`を
+  同じseat・同じdecision時点まで突き合わせ、一致しない場合は`PolicyInput`を
+  生成せず`AdapterSyncError`を送出する
+- 公開副露(meld)state自体は独自に追跡せず、`Observation.melds`を毎decision
+  直接`PublicMeld`へ変換する。RiichiEnv 0.4.8実測(kakan成立時に既存Pon要素を
+  in-place更新し、sequence上の位置も維持する)がこの設計を裏付けている
+- RiichiEnvの物理牌ID(0-135)とMJAI牌文字列の両方を、実測に基づき
+  `tile_conversion.py`でlisjong `Tile`へ変換する。物理牌IDはOwnHandStateと
+  現在meld、MJAI文字列はevent由来の値(discard、dora indicator等)に使う
+- `RiichiEnvActionMappingSession`は1 seatだけを所有し、新しいmapping生成ごとに
+  Adapter内部generationを進める。旧mappingは未resolveでも失効するため、
+  RiichiEnvに架空のdecision IDを追加せずcross-decision利用をfail closedにできる
+- `RiichiEnvActionMapping`は11 variantをsemantic identityへ変換・集約し、
+  physical fieldから決定したrepresentativeを生成時legal setへ再検証して返す
+- tile変換はIssue #28の`tile_conversion.py`を共用し、Issue #29固有のplayer
+  indexから`Seat`への薄い変換だけを`seat_conversion.py`へ分離する
+- `policy_contract` / `policies`とは異なり、このpackageは`riichienv`へ
+  runtime dependencyとして依存する。依存の逆流はさせない
+
+このpackageは`lisjong.policy_contract`とは別packageであり、後述の
+「共通Policy契約package」がRiichiEnv非依存を維持する境界を壊さない。
 
 ### Local game runner
 
@@ -282,7 +315,6 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- RiichiEnv Adapterの具体的なPython実装
 - 具体Policyの判断ロジック、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合

@@ -704,7 +704,7 @@ la1[0] is la2[0]  # False
 la1[0] == la2[0]  # False（tile等の値が同じでも）
 ```
 
-この実測により、「あるActionが元のexternal legal setに含まれるか」を確認する処理は、`legal_actions()`を再度呼び出した結果に対して行ってはならないことが分かる。安全な再検証は、1回の`legal_actions()`呼び出しで得たcollectionをdecisionの間保持し、そのcollection（同じobject参照）に対してのみ行う必要がある。RiichiEnv Adapterの`build_action_mapping()`は`observation.legal_actions()`を1回だけ呼び出し、その結果を保持して以降の集約・representative選択・再検証に使うことでこの制約を満たす。
+この実測により、「あるActionが元のexternal legal setに含まれるか」を確認する処理は、`legal_actions()`を再度呼び出した結果に対して行ってはならないことが分かる。安全な再検証は、1回の`legal_actions()`呼び出しで得たcollectionをdecisionの間保持し、そのcollection（同じobject参照）に対してのみ行う必要がある。RiichiEnv Adapterの`RiichiEnvActionMappingSession.build()`は`observation.legal_actions()`を1回だけ呼び出し、その結果を保持して以降の集約・representative選択・再検証に使うことでこの制約を満たす。
 
 #### representative tie-break keyの確定
 
@@ -715,6 +715,68 @@ la1[0] == la2[0]  # False（tile等の値が同じでも）
 `riichienv.Action(type=..., tile=..., consume_tiles=..., actor=...)`、`riichienv.Observation(player_id=..., hands=..., ...)`、`riichienv.Meld(meld_type=..., tiles=..., opened=..., from_who=..., called_tile=...)`はいずれもPythonから直接構成できる公開constructorを持つ。これはRiichiEnv Adapterのunit testで、実際の対局を経由せずにfail closedケース（Kakan元Pon 0件/複数件等）を決定的に再現するために利用した。production Adapterコード自体はこれらのconstructorに依存せず、`RiichiEnv`が返す`Observation`だけを受け取る。
 
 これらはIssue #29のproduction実装（`src/lisjong/riichienv_adapter/`）とそのtestに直接反映済みである。
+### 2026-08-14: Issue #28実装時の追加実測（riichi_declaredのevent到着lag・槍槓応答時のdrawn_tile）
+
+[Issue #28](https://github.com/lisbun/lisjong/issues/28)「seat-visible materialized stateとPolicyInput生成を実装する」のproduction Adapter実装(`src/lisjong/riichienv_adapter/`)を、実際のriichienv 0.4.8を用いて多数seed・複数game modeにわたり検証する過程で、既存の実測記録にない2点を確認した。いずれも一時検証scriptによる実行結果であり、恒久的な調査コードとしては残していない。
+
+#### 実測環境
+
+| 項目 | 値 |
+| --- | --- |
+| OS | Linux 6.18.5-fc-v20（glibc 2.39） |
+| Python | 通常版CPython 3.11.15（初期probe）およびCPython 3.14.0rc2（`uv`経由、production venv） |
+| RiichiEnv | 0.4.8 |
+
+既存の基準環境（Windows / CPython 3.14.6）とは異なるコンテナ環境である。CPython 3.14.0rc2はrelease candidateであり、3.14.6 GAそのものではない。
+
+#### 1. riichi宣言牌がchi/pon claim可能な場合の`riichi_declared`とevent到着のlag
+
+`game_mode="4p-red-half"`、`RiichiEnv(seed=23)`で、`legal_actions()`のうちriichi/kan/call/和了を優先する方針で進行を観察した。step 766、seat 1（`pid=1`）が受け取ったObservationで次を確認した（seat 0がstep 765でreachを宣言した直後）。
+
+```text
+step=766 pid=1
+  riichi_declared = [True, False, False, False]
+  scores          = [24000, 28000, 24000, 24000]（宣言前と不変）
+  riichi_sticks   = 0（宣言前と不変）
+  new_events()の末尾: {"actor":0,"type":"reach"} → {"actor":0,"pai":"7m","tsumogiri":false,"type":"dahai"}
+  （"reach_accepted"は含まれない）
+
+step=767 pid=1（同じseatへの次のObservation。seat 1がchiで応答した後）
+  riichi_declared = [True, False, False, False]（不変）
+  scores          = [23000, 28000, 24000, 24000]（1000点減少）
+  riichi_sticks   = 1（1本増加）
+  new_events()の先頭: {"actor":0,"type":"reach_accepted"}
+```
+
+既存実測（本書「リーチ状態遷移」節）は、reach宣言者自身が次に受け取る単純なケースで「宣言牌discard後の同一`step()`内で`reach_accepted`まで進み、次のObservationでは`riichi_declared == True`」であることを確認していた。今回の追加実測では、**宣言牌が他seatからchi/pon可能な場合**、そのchi/pon応答機会のObservation時点で`riichi_declared`が既に`True`へ切り替わっている一方、score減算・`riichi_sticks`増加・`reach_accepted` eventの到着はいずれも次のObservationまで遅延することを確認した。これは既存実測が「`riichi_declared == True`だが`reach_accepted`未発生という独立Observationは今回確認されなかった」としていた記述の反例であり、宣言牌がclaim可能な局面という条件下で新たに確認できたケースである。
+
+この`riichi_sticks`・scoreが未反映のままの状態は、意味としては本書が定義する`RiichiState.DECLARED`（reach Actionを実行済みだが、まだ成立前）に近い。したがって、`riichi_declared`単独の真偽値をACCEPTED判定の正本にせず、`reach_accepted` eventの到着をACCEPTED遷移の正本とするAdapter設計（`SeatMaterializedState`の実装方針）を、この追加実測が支持する。
+
+#### 2. 槍槓（chankan）のron応答機会における`drawn_tile`
+
+同じ検証方針で、`RiichiEnv(seed=671, game_mode="4p-red-half")`のstep 560、seat 2（`pid=2`）が受け取ったObservationで次を確認した（seat 0がstep 559でkakanを行った直後）。
+
+```text
+step=559 pid=0: ...{"actor":0,"pai":"?","type":"tsumo"} → {"actor":0,"consumed":["9s","9s","9s"],"pai":"9s","type":"kakan"}
+step=560 pid=2
+  hand        = [99, 102, 128, 131]（4枚。物理牌ID 107は含まれない）
+  drawn_tile  = 107（= "9s"。kakanの"pai"と一致）
+  legal_actions: RON を含む
+```
+
+`hand`に含まれない値が`drawn_tile`として返っている。物理牌ID 107はkakan eventの`"pai": "9s"`（seat 0が加槓した牌）と一致し、seat 2自身がツモった牌ではない。本書「`[AI-REVIEW]`対応の追加実測」節で確認済みの、槍槓のron対象を`Observation.last_discard`（kakan行為者を指す）で解決できるという実装事実と合わせると、RiichiEnv 0.4.8は槍槓のron判定機構を`drawn_tile`側でも同様に「kakan牌をこの応答seatの一時的な対象牌」として転用しているとみられる。ただし、この転用の実装根拠をソースコードでは確認していない。
+
+この局面では、事前に`{"type": "kakan", "actor": 0, "pai": "9s", ...}` eventが当該seatの`new_events()`へ直近で届いていることが、通常の「ツモっていないのに`drawn_tile`が手牌外を指す」ケースと区別する手がかりになる。Adapter実装では、直近に適用したeventがkakanであった場合にそのactorと加槓牌のsemantic valueを内部で保持し（`SeatMaterializedState.pending_chankan_actor` / `pending_chankan_tile`）、この直前kakanが存在し、かつ`drawn_tile`の牌種がその加槓牌と一致する場合に限って`OwnHandState.drawn_tile`を`None`へ正規化する。kakan発生の有無だけ、あるいは牌種の一致確認なしに「`drawn_tile`がhandにない」というだけで槍槓と断定すると、未確認の別局面や実装不整合を誤って槍槓として握りつぶす恐れがあるため、Adapter側はfail closedする。
+
+#### 3. 大規模検証
+
+Issue #28の実装検証として、riichi/kan/call/和了を優先する方針で、`4p-red-single` / `4p-red-east` / `4p-red-half`を約1,500 seedにわたって実行し、80万decisionを超える規模で`build_policy_input()`が例外なく`PolicyInput`を生成できることを確認した（不一致・例外0件）。この規模の実行によって、上記1・2以外の新たな未知の不整合は今回の実測範囲では検出されなかった。
+
+#### 今回追加で未確認のまま残った事項
+
+- 上記1のlagが、reach宣言者自身の観測、あるいはchi/pon以外の応答（pon、daiminkan等）でも同様に発生するか。
+- 上記2のdrawn_tile転用がRiichiEnv 0.4.8ソース上でどう実装されているか（ソース確認は未実施）。
+- ankan chankan（国士無双限定、既定ルールでは無効）でも同様の`drawn_tile`転用が起きるか。
 
 ## 最小再現コード
 
@@ -931,3 +993,4 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15、既存基準環境とは別環境） | Issue #27向けに、未確認7 Action variant（riichi / daiminkan / ankan / kakan / ron / tsumo / kyuushu_kyuuhai）のround-trip、Chi / Pon / Daiminkan / Ronの`target`解決（`Observation.last_discard`）、representative選択に使える物理牌ID、kakan元pon解決とmeld公開状態、`live_wall_tiles_remaining`の情報境界、event重複防止の欠如を追加実測 |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2、python-build-standaloneビルド） | Issue #27の`[AI-REVIEW]`対応として、v0.4.8ソース確認（`riichienv-core/src/state/mod.rs`、`wall.rs`）と実機再現により、kakan chankanのtarget解決（`last_discard`）、`live_wall_tiles_remaining`の具体的counter algorithm（`84 - tsumo event数`、不一致0件で検証）を確定し、7 variant round-trip・kakan meld更新・重複candidate例をCPython 3.14系でも再確認した |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2） | Issue #29のRiichiEnv Adapter実装向けに、`Action.__eq__`がobject identityに基づき`legal_actions()`再呼び出し結果とは値が同じでも一致しないこと、representative tie-break keyとして`(tile, sorted(consume_tiles))`が同一semantic group内で完全な全順序になること、`riichienv.Action` / `Observation` / `Meld`がPython constructorを公開していることを追加実測した |
+| 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15および3.14.0rc2） | Issue #28のproduction Adapter実装検証中に、reach宣言牌がchi/pon claim可能な場合の`riichi_declared`とevent到着のlag、槍槓のron応答機会における`drawn_tile`が自席handにない値になる事象を新たに実測し、約1,500 seed・80万decision超の大規模検証で他に未知の不整合がないことを確認した |
