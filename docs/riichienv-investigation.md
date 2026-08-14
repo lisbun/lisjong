@@ -602,12 +602,92 @@ RON / TSUMOの`to_mjai()`は`{"actor":...,"type":"hora"}`のみであり、役�
 
 #### 今回追加で未確認のまま残った事項
 
-- 槍槓等、直近の打牌以外がron対象になるケースでの`last_discard`の挙動。
+- 槍槓（kakan chankan）でのtarget解決は、本Issueの`[AI-REVIEW]`対応の追加実測（後述の「2026-08-14: `[AI-REVIEW]`対応の追加実測」節）でソース確認と実機再現の両方により解消した。ankan chankan（国士無双限定、既定ルールでは無効）は未実機確認のまま残る。
 - 複数ron（多家和）が同時に競合する場合の採用順序と、各`RonAction`の`target`解決。
 - ANKAN / KAKAN / DAIMINKANで重複candidateが構造的に発生しないという結論の数学的な証明（400 seedでの非出現という実測に基づく推測にとどまる）。
 - 赤牌を含む牌種でPon / Chiの重複candidateが発生する場合の`to_mjai()`表現とrepresentative選択への影響。
 - `Observation.find_action(action_id)`の入出力仕様全体。
-- 今回の実測はLinux / CPython 3.11.15コンテナ環境で行っており、既存の基準環境（Windows / CPython 3.14.6）での再現性は未検証。
+- 今回の実測はLinux / CPython 3.11.15コンテナ環境で行った。後述の「2026-08-14: `[AI-REVIEW]`対応の追加実測」節でCPython 3.14.0rc2（python-build-standaloneビルド）による核心結果の再確認を追加したが、既存の基準環境（Windows公式installer由来のCPython 3.14.6）そのものでの再現性は未検証のまま残る。
+
+### 2026-08-14: `[AI-REVIEW]`対応の追加実測（槍槓・live-wall counter・CPython 3.14）
+
+[Issue #27](https://github.com/lisbun/lisjong/issues/27)への`[AI-REVIEW]`コメントで指摘された次の4点に対応し、追加実測した。
+
+1. 通常discard以外がron対象になるケース（槍槓）でのtarget解決
+2. `live_wall_tiles_remaining`の具体的なcounter algorithmの確定
+3. 実装を左右する核心結果のCPython 3.14環境での再確認
+4. 正本文書・Ruff・既存unit testの整理
+
+#### 実測環境（CPython 3.14）
+
+このコンテナには標準のaptリポジトリでCPython 3.14が用意されておらず、`uv python install 3.14`（[python-build-standalone](https://github.com/astral-sh/python-build-standalone)由来のLinux向けビルドを取得）で導入した。
+
+| 項目 | 値 |
+| --- | --- |
+| Python | CPython 3.14.0rc2（`uv`経由のstandaloneビルド、Clang 20.1.4） |
+| OS | Linux 6.18.5-fc-v20（glibc 2.39） |
+| RiichiEnv | 0.4.8 |
+
+既存の基準環境（Windows公式installer由来のCPython 3.14.6）とは、正確なpatchバージョン（3.14.0rc2はrelease candidateであり3.14.6ではない）とビルド来源（python-build-standalone対公式installer）の両方が異なる。したがって「CPython 3.14 GA、Windows公式installer」そのものの再現ではなく、production基準に近いメジャーバージョンでの追加確認と位置付ける。
+
+#### 1. 槍槓（chankan）のtarget解決
+
+[RiichiEnv v0.4.8ソース](https://github.com/smly/RiichiEnv/tree/v0.4.8)の`riichienv-core/src/state/mod.rs`（`step()`内の`ActionType::Kakan` / `ActionType::Ankan`分岐）を確認したところ、次の実装事実があった。
+
+- Kakan処理時、actor以外の全playerについて`Conditions{chankan: true, ...}`で和了判定を行い、和了できるplayer（`chankan_ronners`）が1人以上いれば、`self.phase = Phase::WaitResponse`、`self.active_players = chankan_ronners`（kakan行為者自身は含まない）、`self.last_discard = Some((pid, tile))`とする。ソースコード中のコメントは`// Treat Kakan tile as discard for Ron targeting`であり、通常discardの場合と同じ`last_discard`機構をchankanにも転用する設計であることが明記されている。誰も和了できなければ`_resolve_kan()`を呼び、通常どおり嶺上ツモへ進む。
+- Ankan処理時も同様の`chankan_ronners`判定があるが、`self.rule.allows_ron_on_ankan_for_kokushi_musou`が`true`の場合に限り、かつ国士無双／国士無双十三面待ち（yaku id 42 / 49）の場合だけ有効になる。`GameRule::default()`は`default_tenhou()`であり、`allows_ron_on_ankan_for_kokushi_musou: false`である。Python側`RiichiEnv(rule=None)`は`rule.unwrap_or_default()`でこの既定値を使うため、既定ルールではankan chankanは発生しない。
+
+実際にkakan chankanをCPython 3.14.0rc2上で再現した（seed=677, step=78）。
+
+```text
+kan_actor: 3, kan_type: KAKAN, kan action to_mjai: {"actor":3,"consumed":["9s","9s","9s"],"pai":"9s","type":"kakan"}
+obs_map keys after kan: [1]   # kan行為者(3)自身は含まれない
+seat 1 observation:
+  last_discard: 3             # kan行為者と一致
+  legal_actions: RON(tile=107) / none
+```
+
+これは、通常のron解決に使う`Observation.last_discard`が槍槓でも同じ意味で使えることを、ソースの実装事実と実際の出力の両方で確認したものである。`env.step()`は、槍槓が成立する場合はkan行為者を含まない`WaitResponse`のobservation mapを返し、成立しない場合は既存実測どおりkan行為者だけの`WaitAct`へ直接進む。
+
+未確認: ankan chankan（国士無双限定）は、既定ルールでは到達しないため実機確認していない。`rule=GameRule(allows_ron_on_ankan_for_kokushi_musou=True, ...)`を明示的に渡し、国士無双聴牌の局面を作る追加実測は今回実施していない。
+
+#### 2. `live_wall_tiles_remaining`のcounter algorithm
+
+同ソースの`riichienv-core/src/state/wall.rs`と`state/mod.rs`を確認したところ、次の実装事実があった。
+
+- 各kyoku開始時、`wall.tiles`は136枚から4人×13枚（52枚）の配牌分を除いた84枚になる（`WallState::shuffle()`）。
+- 通常ツモ（`_deal_next()`）は`wall.tiles.pop()`、嶺上ツモ（kan後の`_resolve_kan`内の抽選）は`wall.tiles.remove(0)`で、いずれも`wall.tiles`の長さを1減らす。kan宣言自体は独立した牌消費を伴わない（嶺上ツモの分だけ減る）。
+- 通常ツモ・嶺上ツモのいずれも、MJAI `"tsumo"` eventとして記録される（別種別のeventにはならない）。
+
+Python公開面の`len(env.wall)`は、この`wall.tiles`の長さそのものである。したがって、次の関係が成り立つ。
+
+```text
+live_wall_tiles_remaining
+    = 84 − (そのkyokuのstart_kyoku以降に発生したtsumo event数。dealerの最初の1枚も含む)
+```
+
+`start_kyoku`直後の最初のObservationには、dealerの最初のツモが`{"actor":<oya>,"pai":...,"type":"tsumo"}`として`new_events()`に明示的に含まれることを確認した（隠れた・観測不可能なeventではない）。したがって`Observation`だけを持つAdapterでも、`new_events()`中の`"tsumo"` event数を数えるだけでこの式を再現できる。
+
+この式を、真値`len(env.wall)`と比較して次の規模で検証した（CPython 3.14.0rc2、`4p-red-half`モード、東南全kyoku・honba・複数kanを含む）。
+
+| 検証方法 | 対象 | 比較件数 | 不一致 |
+| --- | --- | --- | --- |
+| `env.mjai_log`から`start_kyoku`以降の`tsumo`件数を数え、式の予測値と`len(env.wall)`を比較 | seed 1〜14（各12 kyoku前後、honba込み） | 10,579ステップ | 0件 |
+| 1つのseatに固定し、そのseat自身の`new_events()`だけを累積してカウント（実際のAdapterと同じ視点） | seed 1〜19、seat 2固定 | 3,569ステップ | 0件 |
+
+1 kyoku内で2回kanが発生したケース（複数kan）でも式は成立した（今回の検証範囲内での最大同時kan数は2）。また、`(bakaze, kyoku, honba)`で重複排除した27 kyokuすべてで、`start_kyoku`直後の`len(env.wall)`は常に83（`84 - 1`、dealerの最初のツモ分）だった。honba・東南を通じて変動しなかった。
+
+これにより、「Observationに直接手段がない」という否定的確認だけでなく、Observationの`new_events()`だけから再現できる具体的な更新規則が確定した。
+
+未確認: 3人麻雀（本Issueのスコープ外）、および海底・河底に到達する直前の境界（`drawable_count == 0`時の`_deal_next()`の`ryukyoku`分岐）付近の1テンポずれの有無は個別確認していない。
+
+#### 3. CPython 3.14での核心結果の再確認
+
+上記1・2の槍槓実測とcounter algorithm検証はすべてCPython 3.14.0rc2上で実施した。加えて、未確認7 variantのround-trip代表例、kakan meld のin-place更新、DISCARD / CHI / PONの重複candidate例を同一seedで再実行し、CPython 3.11.15での結果と完全に一致する出力を得た（RiichiEnvのコア実装はRustであり、Python側の挙動差は今回の範囲では確認されなかった）。OS差（Windows対Linux）そのものを検証する目的では実施していない。
+
+#### 4. 正本文書・品質確認
+
+本節を含む今回の追加実測を本文書へ反映した。Ruffと既存unit testの結果は本書末尾の変更履歴および対応するPull Requestの記録を参照する。
 
 ## 最小再現コード
 
@@ -716,12 +796,12 @@ ranks:
 - `done()`後に空でないActionを渡した場合や、`step({})`を繰り返した場合の挙動。
 - 今回のWindows環境ではimportとstepに成功したが、追加のDLLまたはruntimeが既存環境に依存していないか、別環境でも同じ条件で動作するか。
 - 通常版CPython 3.14.6で、複数対局の反復や長時間実行が安定するか。
-- 複数ron（多家和）等を含むclaim競合と、pon / chi以外の優先順位。単独ronの`target`解決（`Observation.last_discard`）はIssue #27向け追加実測（2026-08-14）で確認したが、複数ron競合時の採用順序と各`RonAction`への解決は未確認。
+- 複数ron（多家和）等を含むclaim競合と、pon / chi以外の優先順位。単独ronおよび槍槓（kakan chankan）の`target`解決（`Observation.last_discard`）はIssue #27向け追加実測（2026-08-14）で確認したが、複数ron競合時の採用順序と各`RonAction`への解決は未確認。
 - riichi、daiminkan、ankan、kakan、ron、tsumo agari、kyuushu kyuuhaiは、Issue #27向け追加実測（2026-08-14）でそれぞれ1事例ずつAction/MJAI round-tripを確認した。全局面・全出現パターンを網羅した完全実測ではない。
 - 不正または曖昧なMJAI入力を`select_action_from_mjai()`へ渡した場合の挙動。
 - 実際のRiichiLab WebSocket requestにおける`possible_actions`と生成Actionの照合方法。生JSON dictの全field完全一致は未実測。
 - Python公開属性と`to_dict()`の差は一部実測済みだが、`Observation.tsumogiri_flags`の詳細な更新挙動、furiten、ippatsu、`waits` / `is_tenpai`のPolicy入力への採否を含むseat別情報の最小範囲。
-- live-wall counterの一般的な更新式と、local / onlineで同値な状態を再構成できるか。
+- live-wall counterの更新式は、Issue #27向け追加実測（2026-08-14）で`84 - tsumo event数`として確定し、単一seatの`new_events()`累積だけで再現できることを検証した（4人麻雀・標準ルール範囲）。3人麻雀、および実際のRiichiLabオンライン経路で同値な状態を再構成できるかは未確認のまま残る。
 - 鳴かれたdiscard、リーチ段階、wall関連状態を含むmaterialized stateの具体schema、正確な更新規則、所有component。
 - RiichiLab実WebSocket経路で、seat-visible eventから同値なstateを再構成できるか。
 - RiichiEnvの全機能と全Action種の完全実測。
@@ -769,10 +849,10 @@ Adapter実装Issueで扱う。責務と依存方向は[Architecture](architectur
 
 次はIssue #27の追加実測から、Issue #23「RiichiEnv Adapterを実装する」へ引き継ぐ判断候補である。本書だけでAdapterの実装方式を確定するものではなく、採否は#23側で判断する。
 
-1. Chi / Pon / Daiminkan / RonのAction識別だけからは`target`（from_seat）を得られないため、同一decision時点の`Observation.last_discard`から解決する。
+1. Chi / Pon / Daiminkan / RonのAction識別だけからは`target`（from_seat）を得られないため、同一decision時点の`Observation.last_discard`から解決する。これは通常discardだけでなく、kakan chankanでも同じ機構で成立することを、RiichiEnv v0.4.8ソースの実装事実（`last_discard`をchankan targeting用に転用するコメント付きの実装）と実機再現の両方で確認した。ankan chankan（国士無双限定）は既定ルールでは到達しないため、この結論の対象外とする。
 2. Kakanの元Pon解決は、`meld_type == Pon`かつ`tiles`が`action.consume_tiles`と一致するmeldを対象playerのmeld一覧から1件に絞り込む方式が実測と整合する。0件・複数件はfail closedとする。
 3. Ankan / Kakan / Daiminkanでは、同一identityの複数RiichiEnv Action候補が生じる組み合わせ論的余地がない可能性が高い（400 seedで非出現）。一方Discard / Chi / Ponでは、物理牌IDに基づく入力順序非依存の代表選択が必要である。
-4. `live_wall_tiles_remaining`は、`Observation`だけを持つAdapter経路（RiichiLabのserialized observation復元を含む）では`tsumo` event計数以外の直接手段がない。`turn_count`等のcounterは`RiichiEnv`本体にのみ公開され、`Observation`側には存在しない。
+4. `live_wall_tiles_remaining`は、`Observation`だけを持つAdapter経路（RiichiLabのserialized observation復元を含む）では`tsumo` event計数以外の直接手段がない。`turn_count`等のcounterは`RiichiEnv`本体にのみ公開され、`Observation`側には存在しない。具体的な更新規則は`84 - (そのkyokuのstart_kyoku以降のtsumo event数、dealerの最初の1枚を含む)`として確定し、単一seatの`new_events()`累積だけで再現できることを4人麻雀・標準ルールの範囲で検証した（10,579 + 3,569ステップ、不一致0件）。
 5. event適用の重複防止は、RiichiEnv側の識別子（event ID等）に頼れないため、seatごとの新規Observation受信ごとに`new_events()`全体を1回だけ未適用分として扱う運用規則に依拠する。
 6. Ron / Tsumoの役・点数・裏ドラ等の詳細はseat別Observationから得られない（`env.mjai_log`側の`hora` eventにのみ存在する）ため、必要であればLocal game runner側の責務として別途設計する。
 
@@ -785,7 +865,7 @@ Adapter実装Issueで扱う。責務と依存方向は[Architecture](architectur
 | 乱数・再現性の境界 | constructor seedでevent列まで再現。`reset(seed=...)`では期待した再現性を確認できず | rule、game mode、バージョンを変えた場合の適用範囲 |
 | エラー変換方針 | 不正Action型、player ID 99、`done()`後の空actionを確認 | 要求先不一致、欠落・余分な応答、別局面Action等 |
 | 局・対局のライフサイクル | single / east / halfを完走し、延長、`end_game`、`done()`、最終空map、scores、ranksを確認 | 他rule・score条件での終了挙動 |
-| materialized state | seat別event delta、鳴かれたdiscard、リーチ段階、通常ツモ・槓時のwall変化を一部確認。Issue #27でkakan元pon解決（meldのin-place更新）、`live_wall_tiles_remaining`の情報境界（`Observation`側に非公開）、event重複防止（IDなし）を追加実測 | schema、更新規則、所有component、長期間・終局・他seat・RiichiLab経路での同値性 |
+| materialized state | seat別event delta、鳴かれたdiscard、リーチ段階、通常ツモ・槓時のwall変化を一部確認。Issue #27でkakan元pon解決（meldのin-place更新）、槍槓のtarget解決（`last_discard`）、`live_wall_tiles_remaining`の具体的counter algorithm（`84 - tsumo event数`、ソース確認＋10,579+3,569ステップ実測で不一致0件）、event重複防止（IDなし）を追加実測 | schema、更新規則、所有component、長期間・終局・他seat・RiichiLab経路での同値性、3人麻雀への一般化 |
 | RiichiLab との共通 Adapter 範囲 | 公式serialized Observation / Action応答境界と、ローカルの一部Action / MJAI round-tripを確認 | 実WebSocket requestの`possible_actions`照合、未出現Actionとの対応、seat-visible eventからの同値なstate再構成 |
 | runtime dependencyへの追加 | 通常版CPython 3.14でインストール、import、1局完走、依存version、明示取得したwheelのhashを確認 | 別環境・長時間実行の安定性 |
 
@@ -822,3 +902,4 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-13 | RiichiEnv 0.4.8 | single / east / halfの終了、完全`mjai_log`とseat別eventの境界、RiichiLabとの共通Agent範囲を追加記録 |
 | 2026-08-14 | RiichiEnv 0.4.8 | Observation公開属性と`to_dict()`の差、seat別event delta、Discard物理牌identity、通常・槓時のwall、鳴かれたdiscard、リーチ状態遷移をIssue #11向けに追加実測 |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15、既存基準環境とは別環境） | Issue #27向けに、未確認7 Action variant（riichi / daiminkan / ankan / kakan / ron / tsumo / kyuushu_kyuuhai）のround-trip、Chi / Pon / Daiminkan / Ronの`target`解決（`Observation.last_discard`）、representative選択に使える物理牌ID、kakan元pon解決とmeld公開状態、`live_wall_tiles_remaining`の情報境界、event重複防止の欠如を追加実測 |
+| 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2、python-build-standaloneビルド） | Issue #27の`[AI-REVIEW]`対応として、v0.4.8ソース確認（`riichienv-core/src/state/mod.rs`、`wall.rs`）と実機再現により、kakan chankanのtarget解決（`last_discard`）、`live_wall_tiles_remaining`の具体的counter algorithm（`84 - tsumo event数`、不一致0件で検証）を確定し、7 variant round-trip・kakan meld更新・重複candidate例をCPython 3.14系でも再確認した |
