@@ -483,8 +483,11 @@ legal_actions
 seat-visible eventから同期したkyoku identity(場風・局・本場・親)、discard
 multiset、dora indicator数、riichi段階を、`build_policy_input()`が現在の
 `Observation`と突き合わせ、一致しない場合は`PolicyInput`を生成せず
-`AdapterSyncError`を送出する。`legal_actions`との同期検証は、RiichiEnv legal
-ActionをInternalActionへ対応付ける後続Issue(#29)のスコープとして引き継ぐ。
+`AdapterSyncError`を送出する。RiichiEnv legal ActionとInternalActionの対応付けは
+Issue #29の`RiichiEnvActionMappingSession`で実装し、Issue #23の
+`build_decision()`が同じObservationについて両者を実行する。stateとmapping
+sessionのseatを処理前に照合し、mappingのsemantic unique candidateを既存の
+`DecisionContext`へ渡すことで、3者を1 decisionとして束ねる。
 
 ## Canonicalization
 

@@ -97,13 +97,13 @@ materialized stateはPolicyのhidden stateではなく、seat-visibleな外部�
 variantとfieldは[内部Actionモデル](internal-action-model.md)、semantic
 identityと外部候補との対応は[Action identity](action-identity.md)を参照する。
 
-#### `riichienv_adapter` package (Issues #28 and #29)
+#### `riichienv_adapter` package (Issues #28, #29, and #23)
 
 `src/lisjong/riichienv_adapter/`は、上記責務のうち「seat-visible
 materialized stateの同期」と「`PolicyInput`生成」をIssue #28で、RiichiEnv
-legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で実装した
-Python packageである。Policy呼び出し、`DecisionContext`の最終組み立て、
-Local game runnerは対象外とし、Issue #23へ引き継ぐ。
+legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で実装し、
+両者から`DecisionContext`を組み立てる1 decision分の最終接続をIssue #23で
+実装したPython packageである。Policy呼び出しとLocal game runnerは対象外である。
 
 - `SeatMaterializedState`は1つのself_seat視点について、
   `Observation.new_events()`から discard順序・tsumogiri・`called_by`、
@@ -123,6 +123,11 @@ Local game runnerは対象外とし、Issue #23へ引き継ぐ。
   RiichiEnvに架空のdecision IDを追加せずcross-decision利用をfail closedにできる
 - `RiichiEnvActionMapping`は11 variantをsemantic identityへ変換・集約し、
   physical fieldから決定したrepresentativeを生成時legal setへ再検証して返す
+- `build_decision()`は`SeatMaterializedState`、現在の`Observation`、同じseatの
+  `RiichiEnvActionMappingSession`を受け取り、同じObservationから生成した
+  `PolicyInput`とsemantic unique candidateで`DecisionContext`を構築し、対応する
+  `RiichiEnvActionMapping`と`RiichiEnvDecision`として束ねる。stateとsessionの
+  seatは処理前に照合し、別のdecision IDやgenerationは追加しない
 - tile変換はIssue #28の`tile_conversion.py`を共用し、Issue #29固有のplayer
   indexから`Seat`への薄い変換だけを`seat_conversion.py`へ分離する
 - `policy_contract` / `policies`とは異なり、このpackageは`riichienv`へ

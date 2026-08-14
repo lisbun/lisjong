@@ -13,7 +13,7 @@ decision-local mapping、revalidation/fail closedの原則を、RiichiEnv 0.4.8
 このmoduleが持たない責務（docs/architecture.md「RiichiEnv Adapter」を参照）:
 
 - `PolicyInput`やmaterialized stateの構築（Issue #28）
-- `DecisionContext`の最終組み立て（Issue #23）
+- `DecisionContext`の最終組み立て（`decision.py`、Issue #23）
 - Policyの呼び出し
 - 対局loop、`reset()` / `step()` / `done()`の管理
 

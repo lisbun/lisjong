@@ -70,6 +70,12 @@ Policyは次を所有しない。
 として実装する。`legal_actions`は入力順を変更せずtupleへ正規化し、生成時に
 非空、全Actionのactor一致、semantic identity上の重複禁止を検証する。
 
+RiichiEnv経路では、Adapterの`build_decision()`が同じseat・同じ
+`Observation`からIssue #28の`PolicyInput`とIssue #29のdecision-local mappingを
+生成し、mappingのsemantic unique candidateを`legal_actions`として本型へ渡す。
+返される`RiichiEnvDecision.context`だけがPolicy入力であり、対応mappingが保持する
+raw RiichiEnv ActionはPolicyへ渡さない。
+
 Policy入力の具体的なschema、不変性、canonicalizationは
 [Policy入力の最小スキーマ](policy-input-schema.md)で定める。同じdecisionへの同期や
 各Actionの麻雀上の合法性等、外部stateを必要とするContext整合条件は
