@@ -18,6 +18,9 @@ from lisjong.riichilab_adapter.errors import (
     ProtocolConversionError,
     SeatMismatchError,
 )
+from lisjong.riichilab_adapter.possible_action_validation import (
+    validate_against_possible_actions,
+)
 
 _CALL_TYPES = {"chi", "pon", "daiminkan"}
 
@@ -73,8 +76,9 @@ def _server_style_request_action(observation, request_id):
 
         # dedupe後のcandidateへ、実サーバーが付加するかもしれない追加field
         # として`actor`/`target`/`tsumogiri`を付与する。これらはcandidate
-        # validation側では無視される(公式candidate schemaのidentityには
-        # 含まれない)。
+        # identityには含まれない。ただし`actor`/`target`は、candidate側に
+        # 存在する場合だけ送信予定responseと矛盾しないことが確認される
+        # (Issue #38 再レビュー)ため、ここでも実際の値を付与している。
         candidate["actor"] = action.actor
         if candidate["type"] == "dahai":
             candidate["tsumogiri"] = action.tile == observation.drawn_tile
@@ -222,6 +226,57 @@ def _resolve_for_env(observation, response):
             return action
     # 一致しない場合はテスト側の不整合であり、明示的に失敗させる。
     raise AssertionError("could not resolve a matching RiichiEnv action for test")
+
+
+class RiichiLabKakanCandidateIntegrationTest(unittest.TestCase):
+    """実RiichiEnvが提示するkakan候補が`pai`だけでは一意に定まらないことの回帰防止。
+
+    Issue #38 再レビューのblocking 1(kakan candidateの`consumed`を
+    validationで落としていた)を、実RiichiEnv 0.4.8のkakan候補で固定する。
+    """
+
+    def test_real_kakan_candidate_carries_consumed_and_is_matched_by_it(self) -> None:
+        candidate = self._first_kakan_candidate()
+        self.assertIsNotNone(candidate, "fixed-seed game produced no kakan candidate")
+
+        # 公式candidate schemaどおり、`pai`(加える牌)と`consumed`(元Ponの
+        # 3枚)の両方を持つ。
+        self.assertIn("pai", candidate)
+        self.assertEqual(len(candidate["consumed"]), 3)
+
+        matching_response = {
+            "type": "kakan",
+            "actor": candidate["actor"],
+            "pai": candidate["pai"],
+            "consumed": list(candidate["consumed"]),
+        }
+        validate_against_possible_actions(matching_response, [candidate])
+
+        # 同じ加槓牌でも元Pon構成が異なるresponseは受理しない。
+        other_composition = dict(matching_response)
+        other_composition["consumed"] = ["1z", "1z", "1z"]
+        with self.assertRaises(PossibleActionsValidationError):
+            validate_against_possible_actions(other_composition, [candidate])
+
+    def _first_kakan_candidate(self):
+        env, observations = _reset_observations(seed=12345, game_mode="4p-red-half")
+        adapters = {seat: RiichiLabSeatAdapter(seat, MinimalPolicy()) for seat in Seat}
+
+        steps = 0
+        while not env.done() and steps < 500:
+            actions = {}
+            for player_id, observation in observations.items():
+                request = _server_style_request_action(
+                    observation, request_id=steps * 10 + player_id
+                )
+                for candidate in request["possible_actions"]:
+                    if candidate["type"] == "kakan":
+                        return candidate
+                response = adapters[Seat(player_id)].process_request_action(request)
+                actions[player_id] = _resolve_for_env(observation, response)
+            observations = env.step(actions)
+            steps += 1
+        return None
 
 
 class RiichiLabSeatAdapterFailClosedTest(unittest.TestCase):

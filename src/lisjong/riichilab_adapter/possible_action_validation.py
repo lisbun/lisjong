@@ -1,48 +1,72 @@
 """送信予定Actionと、server提示`possible_actions`との送信前semantic validation。
 
-Issue #38の中心責務。raw dict完全一致やlist indexへ依存せず、Action typeごとに
-serverの`possible_actions` candidateが実際に持つfieldだけへ正規化して照合する。
+Issue #38の中心責務。raw dict完全一致やlist indexへ依存せず、送信予定の
+Bot-to-Server responseとserver candidateの両方を、同一の
+`possible_actions` candidate semantic identityへprojectionしてから照合する。
+
+```text
+send-ready Bot response --projection--> candidate semantic identity
+server candidate        --projection--> candidate semantic identity
+                                        -> semantic equality
+```
 
 RiichiLab公式Protocolの`possible_actions` candidate schemaは、Bot-to-Server
-response schemaより意図的に小さい最小表現である(Issue #38 review、
-`docs/riichilab-adapter.md`参照)。このmoduleはcandidate側のsemantic identity
-だけを扱い、`actor` / `target` / `tsumogiri`等のBot response専用fieldを
-candidate側へ要求しない。selected側の`InternalAction`も同じ最小identityへ
-projectionしてから比較する。
+response schemaより小さい最小表現である(Issue #38 review、
+`docs/riichilab-adapter.md`参照)。そのためidentityは、公式candidateが
+identityとして持つfield(`type` / `pai` / `consumed`)だけで構成し、
+`actor` / `target` / `tsumogiri`をcandidateへ要求しない。
+
+ただし、公式Protocolは`possible_actions`の例とAction別field表の間に記述差が
+あり、candidateへこれらのfieldが付随し得ることまでは否定できない
+(Issue #38 再レビュー)。そのためcandidate側に`actor` / `target`が実際に
+存在する場合だけは、送信予定responseと矛盾しないことも確認する
+(`_optional_fields_agree`)。
 
 - semantic match 0件 -> reject
 - semantic match 1件 -> accept
 - semantic match複数件 -> reject(ambiguity)
 
+`possible_actions`内に1件でもmalformed candidate、または未知のAction typeの
+candidateが含まれる場合、他のcandidateが一致するかどうかにかかわらず
+validation全体をfail closedする(Issue #38 再レビュー: forward compatibility
+として許容するのは既知Action typeのunknown追加fieldであり、legal candidate
+そのもののunknown Action typeやrequired field欠落ではない)。
+
 `possible_actions[0]`等のarbitrary fallbackはこのmoduleを含め一切行わない。
 """
 
 from collections.abc import Mapping, Sequence
-from typing import assert_never
 
-from lisjong.policy_contract.action import (
-    AnkanAction,
-    ChiAction,
-    DaiminkanAction,
-    DiscardAction,
-    InternalAction,
-    KakanAction,
-    KyuushuKyuuhaiAction,
-    PassAction,
-    PonAction,
-    RiichiAction,
-    RonAction,
-    TsumoAction,
-)
 from lisjong.policy_contract.tile import Tile, tile_sort_key
 from lisjong.riichienv_adapter.tile_conversion import tile_from_mjai
 from lisjong.riichilab_adapter.errors import PossibleActionsValidationError
 
-# RiichiLab公式`possible_actions`のcandidate schemaにおける、call系(chi/pon/
-# daiminkan)候補が持つ`consumed`(手牌から消費する牌)の枚数。RiichiEnv 0.4.8の
-# `Action.to_mjai()`実測、およびIssue #38レビューで確認した公式candidate
-# schemaに基づく。正本は`docs/riichilab-adapter.md`を参照。
-_CALL_TYPES = {"chi": 2, "pon": 2, "daiminkan": 3}
+# `pai`(識別に使う牌1枚)をidentityへ持つAction type。
+_PAI_ONLY_TYPES = frozenset({"dahai", "hora"})
+
+# `consumed`(手牌等から消費する牌の組)の枚数。RiichiEnv 0.4.8の
+# `Action.to_mjai()`実測とIssue #38レビューで確認した公式candidate schemaに
+# 基づく。正本は`docs/riichilab-adapter.md`を参照。
+#
+# `kakan`は、公式candidate schemaが`pai`(加える牌)に加えて`consumed`
+# (元Ponの3枚)を持つ(Issue #38 再レビューのblocking finding)。`pai`だけを
+# identityとすると、同じ加槓牌でも元Pon構成が異なるcandidateを誤って同一
+# 合法Actionとして受理し得るため、`consumed`もidentityへ含める。
+_CONSUMED_COUNTS = {"chi": 2, "pon": 2, "daiminkan": 3, "ankan": 4, "kakan": 3}
+
+# `pai`と`consumed`の両方をidentityへ持つAction type。`ankan`は`pai`を
+# identityとして使わず、`consumed`の4枚だけで一意に定まる。
+_PAI_AND_CONSUMED_TYPES = frozenset({"chi", "pon", "daiminkan", "kakan"})
+
+# 追加のsemantic fieldを持たず、typeだけでidentityが定まるAction type。
+_TYPE_ONLY_TYPES = frozenset({"reach", "none", "ryukyoku"})
+
+# candidate側に存在する場合だけ、送信予定responseと矛盾しないことを確認する
+# field。`tsumogiri`は含めない: 公式candidate例は`tsumogiri`を持たず、
+# 打牌は`pai`で一意に定まるため、candidate側の`tsumogiri`は仮に付随しても
+# identityでも矛盾判定材料でもない(Issue #38 review: candidateへ
+# `tsumogiri`を要求しない)。
+_OPTIONAL_CONSISTENCY_FIELDS = ("actor", "target")
 
 # 単一のexcept節で複数typeを指定するとparenthesizeが必要になるが、ローカルの
 # ruff format実行環境で括弧が意図せず削除される既知の問題があるため(既存
@@ -51,156 +75,161 @@ _CALL_TYPES = {"chi": 2, "pon": 2, "daiminkan": 3}
 _TILE_FROM_MJAI_ERRORS = (TypeError, ValueError)
 
 
+class _IdentityProjectionError(Exception):
+    """MJAI相当mappingをcandidate semantic identityへprojectionできない場合の内部例外。
+
+    このmodule内部だけで使用し、呼び出し側へは
+    `PossibleActionsValidationError`として送出しなおす(projection対象が
+    server candidateか送信予定responseかで、報告すべき原因が異なるため)。
+    """
+
+
 def _sorted_tiles(tiles: Sequence[Tile]) -> tuple[Tile, ...]:
     return tuple(sorted(tiles, key=tile_sort_key))
 
 
-def _selected_semantic_key(selected: InternalAction) -> tuple:
-    """resolve済みcanonical `InternalAction`を、`possible_actions` candidate側と
-    同じ最小semantic identity空間へprojectionする。
-
-    `actor` / `target` / `tsumogiri`は、RiichiLab公式`possible_actions`
-    candidateが持たないBot response専用情報であるため、ここでは意図的に
-    含めない(1 request_actionのcandidate列はこのAdapterがbindされた1 seat
-    分だけであり、actorは常に自明。targetやtsumogiriはBot response
-    serialization側(`mjai_response.py`)でのみ使用する)。
-    """
-    if isinstance(selected, DiscardAction):
-        return ("dahai", selected.tile)
-    if isinstance(selected, RiichiAction):
-        return ("reach",)
-    if isinstance(selected, ChiAction):
-        return ("chi", selected.called_tile, _sorted_tiles(selected.consumed_tiles))
-    if isinstance(selected, PonAction):
-        return ("pon", selected.called_tile, _sorted_tiles(selected.consumed_tiles))
-    if isinstance(selected, DaiminkanAction):
-        return (
-            "daiminkan",
-            selected.called_tile,
-            _sorted_tiles(selected.consumed_tiles),
-        )
-    if isinstance(selected, AnkanAction):
-        return ("ankan", _sorted_tiles(selected.tiles))
-    if isinstance(selected, KakanAction):
-        return ("kakan", selected.added_tile)
-    if isinstance(selected, RonAction):
-        return ("hora", selected.winning_tile)
-    if isinstance(selected, TsumoAction):
-        return ("hora", selected.winning_tile)
-    if isinstance(selected, PassAction):
-        return ("none",)
-    if isinstance(selected, KyuushuKyuuhaiAction):
-        return ("ryukyoku",)
-    assert_never(selected)
-
-
-def _tile_from_candidate_field(value: object) -> Tile | None:
+def _tile_field(source: Mapping, field: str) -> Tile:
+    value = source.get(field)
     if not isinstance(value, str):
-        return None
+        raise _IdentityProjectionError(f"{field} must be an mjai tile string")
     try:
         return tile_from_mjai(value)
-    except _TILE_FROM_MJAI_ERRORS:
-        return None
+    except _TILE_FROM_MJAI_ERRORS as error:
+        raise _IdentityProjectionError(f"{field} is not a valid mjai tile") from error
 
 
-def _tile_multiset_from_candidate_field(
-    value: object, expected_count: int
-) -> tuple[Tile, ...] | None:
+def _tile_multiset_field(
+    source: Mapping, field: str, expected_count: int
+) -> tuple[Tile, ...]:
+    value = source.get(field)
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-        return None
+        raise _IdentityProjectionError(f"{field} must be a list of mjai tile strings")
     items = tuple(value)
     if len(items) != expected_count:
-        return None
+        raise _IdentityProjectionError(
+            f"{field} must contain exactly {expected_count} tiles, got {len(items)}"
+        )
 
     tiles = []
     for item in items:
-        tile = _tile_from_candidate_field(item)
-        if tile is None:
-            return None
-        tiles.append(tile)
+        if not isinstance(item, str):
+            raise _IdentityProjectionError(f"{field} entries must be mjai tile strings")
+        try:
+            tiles.append(tile_from_mjai(item))
+        except _TILE_FROM_MJAI_ERRORS as error:
+            raise _IdentityProjectionError(
+                f"{field} contains an invalid mjai tile"
+            ) from error
     return _sorted_tiles(tiles)
 
 
-def _candidate_semantic_key(candidate: object) -> tuple | None:
-    """1件のserver `possible_actions` candidateを正規化する。
+def _semantic_identity(source: Mapping) -> tuple:
+    """MJAI相当のaction mappingを`possible_actions` candidate identityへprojectionする。
 
-    RiichiLab公式candidate schemaが実際に持つfieldだけを読み、`actor` /
-    `target` / `tsumogiri`等のBot response専用fieldは一切要求しない
-    (要求すると、公式candidate `{"type": "dahai", "pai": "1m"}`のような
-    最小形が誤ってmalformed判定されfail closedしてしまう)。
-
-    malformed / unknown typeの場合は`None`(非一致)を返す。候補列全体を
-    raiseで中断させず、個々の不正候補を「一致しない候補」として扱うことで、
-    他の正当な候補への一致判定を継続できるようにする。
+    server candidateにも、送信予定のBot responseにも同じ関数を適用する
+    ことで、raw dict完全一致に頼らず、かつ両者のschema差(candidate側に
+    無い`actor` / `target` / `tsumogiri`等)へ影響されない照合を行う。
     """
-    if not isinstance(candidate, Mapping):
-        return None
+    if not isinstance(source, Mapping):
+        raise _IdentityProjectionError("action must be a mapping")
 
-    action_type = candidate.get("type")
+    action_type = source.get("type")
+    if not isinstance(action_type, str):
+        raise _IdentityProjectionError("action is missing a string type")
 
-    if action_type == "dahai":
-        pai = _tile_from_candidate_field(candidate.get("pai"))
-        if pai is None:
-            return None
-        return ("dahai", pai)
+    if action_type in _TYPE_ONLY_TYPES:
+        return (action_type,)
 
-    if action_type == "reach":
-        return ("reach",)
-
-    if action_type in _CALL_TYPES:
-        pai = _tile_from_candidate_field(candidate.get("pai"))
-        consumed = _tile_multiset_from_candidate_field(
-            candidate.get("consumed"), _CALL_TYPES[action_type]
-        )
-        if pai is None or consumed is None:
-            return None
-        return (action_type, pai, consumed)
+    if action_type in _PAI_ONLY_TYPES:
+        return (action_type, _tile_field(source, "pai"))
 
     if action_type == "ankan":
-        tiles = _tile_multiset_from_candidate_field(candidate.get("consumed"), 4)
-        if tiles is None:
-            return None
-        return ("ankan", tiles)
+        return (
+            action_type,
+            _tile_multiset_field(source, "consumed", _CONSUMED_COUNTS[action_type]),
+        )
 
-    if action_type == "kakan":
-        pai = _tile_from_candidate_field(candidate.get("pai"))
-        if pai is None:
-            return None
-        return ("kakan", pai)
+    if action_type in _PAI_AND_CONSUMED_TYPES:
+        return (
+            action_type,
+            _tile_field(source, "pai"),
+            _tile_multiset_field(source, "consumed", _CONSUMED_COUNTS[action_type]),
+        )
 
-    if action_type == "hora":
-        pai = _tile_from_candidate_field(candidate.get("pai"))
-        if pai is None:
-            return None
-        return ("hora", pai)
+    # forward compatibilityとして許容するのは既知Action typeのunknown追加
+    # fieldまでであり、未知のAction type自体はsilent ignoreせずfail closed
+    # する(Issue #38 再レビュー)。
+    raise _IdentityProjectionError(f"unknown action type: {action_type!r}")
 
-    if action_type == "none":
-        return ("none",)
 
-    if action_type == "ryukyoku":
-        return ("ryukyoku",)
+def _optional_fields_agree(candidate: Mapping, response: Mapping) -> bool:
+    """candidateが任意で持つsemantic fieldが、送信予定responseと矛盾しないか確認する。
 
-    # forward compatibility: 未知のAction typeは、それ単体を理由に全体を失敗
-    # させず、単に一致し得ない候補として扱う。
-    return None
+    公式Protocolは`possible_actions`の例とAction別field表の間に記述差が
+    あるため、candidateが`actor` / `target`を持ち得ないとは断言できない
+    (Issue #38 再レビュー)。candidate側に存在する場合だけ照合し、
+    存在しなければidentityだけで判定する(minimal candidate形を拒否しない)。
+
+    矛盾するcandidateは「別のAction候補」として非一致に倒す。結果として
+    一致0件になればfail closedするため、誤受理は起こらない。
+    """
+    for field in _OPTIONAL_CONSISTENCY_FIELDS:
+        if field not in candidate:
+            continue
+        expected = response.get(field)
+        if expected is None:
+            continue
+        candidate_value = candidate[field]
+        if isinstance(candidate_value, bool) or not isinstance(candidate_value, int):
+            return False
+        if candidate_value != expected:
+            return False
+    return True
 
 
 def validate_against_possible_actions(
-    selected: InternalAction, possible_actions: Sequence[object]
+    response: Mapping, possible_actions: Sequence[object]
 ) -> None:
-    """送信予定`selected`が`possible_actions`へ一意にsemantic matchすることを確認する。
+    """送信予定`response`が`possible_actions`へ一意にsemantic matchすることを確認する。
 
-    0件一致、複数件一致(ambiguous)のいずれも
-    `PossibleActionsValidationError`でfail closedする。一致したcandidateの
-    値そのものは戻り値として使わない(送信payloadはあくまでresolve済みの
-    canonical Actionから構築済みのものを使う)。
+    `response`は`build_mjai_response()`が構築した、これからserverへ送ろうと
+    しているBot-to-Server response相当のMJAI dictである。canonical
+    `InternalAction`ではなく実際の送信内容を照合対象にすることで、
+    `KakanAction`のようにInternalAction側が保持しない外部semantic情報
+    (元Ponの`consumed`)も落とさずに検証できる。
+
+    次のいずれもsend-ready payloadを返さずfail closedする。
+
+    - `possible_actions`内にmalformed candidate、または未知Action typeの
+      candidateが1件でも存在する
+    - semantic match 0件
+    - semantic match複数件(ambiguous)
+
+    一致したcandidateの値そのものは戻り値として使わない(送信payloadは
+    あくまでresolve済みcanonical Actionから構築済みのものを使う)。
     """
-    target_key = _selected_semantic_key(selected)
+    try:
+        response_identity = _semantic_identity(response)
+    except _IdentityProjectionError as error:
+        raise PossibleActionsValidationError(
+            f"send-ready response could not be projected onto the "
+            f"possible_actions candidate schema: {error}"
+        ) from error
 
     match_count = 0
-    for candidate in possible_actions:
-        if _candidate_semantic_key(candidate) == target_key:
-            match_count += 1
+    for index, candidate in enumerate(possible_actions):
+        try:
+            candidate_identity = _semantic_identity(candidate)
+        except _IdentityProjectionError as error:
+            raise PossibleActionsValidationError(
+                f"possible_actions[{index}] is not a well-formed candidate: {error}"
+            ) from error
+
+        if candidate_identity != response_identity:
+            continue
+        if not _optional_fields_agree(candidate, response):
+            continue
+        match_count += 1
 
     if match_count == 0:
         raise PossibleActionsValidationError(

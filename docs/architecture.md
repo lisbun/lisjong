@@ -220,9 +220,12 @@ lifecycle管理、timeout schedulerは対象外であり、後続Issue #39が扱
   欠落field(hora の`pai`、call系/ronの`target`、dahaiの`tsumogiri`)だけを
   resolve済みcanonical `InternalAction`から補う
 - 送信直前に、server提示`possible_actions`との送信前semantic validationを
-  行う。raw dict完全一致やlist indexに依存せず、Action typeごとの意味を
-  持つfieldへ正規化して比較し、0件一致・複数件一致(ambiguous)・malformed
-  candidateをすべてfail closedする
+  行う。raw dict完全一致やlist indexに依存せず、送信予定のBot responseと
+  各candidateの双方を、公式candidate schemaのsemantic identityへ
+  projectionしてから比較する。0件一致・複数件一致(ambiguous)に加えて、
+  malformed candidateと未知Action typeのcandidateが1件でも含まれる場合も
+  validation全体をfail closedする(forward compatibilityとして許容するのは
+  既知typeのunknown追加fieldまで)
 - `request_id`はcurrent requestの値をそのままresponseへechoするだけで、
   Adapter内部で生成せず、Policyへも渡さない。`time`は保持のみでPolicy入力へ
   含めない

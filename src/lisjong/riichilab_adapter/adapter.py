@@ -99,9 +99,12 @@ class RiichiLabSeatAdapter:
         response = build_mjai_response(resolved_action, selected)
 
         # 送信payload自体はresolve済みcanonical Actionから構築済みだが、送信
-        # 直前にserver possible_actionsへ改めてsemantic再検証する。ここで
-        # 失敗した場合はresponseを返さない。
-        validate_against_possible_actions(selected, parsed.possible_actions)
+        # 直前にserver possible_actionsへ改めてsemantic再検証する。照合には
+        # canonical `InternalAction`ではなく、実際に送ろうとしている
+        # `response`を使う(`KakanAction`のようにInternalActionが保持しない
+        # 外部semantic情報(元Ponの`consumed`)も落とさずに検証するため、
+        # Issue #38 再レビュー)。ここで失敗した場合はresponseを返さない。
+        validate_against_possible_actions(response, parsed.possible_actions)
 
         return SendReadyResponse(request_id=parsed.request_id, action=response)
 
