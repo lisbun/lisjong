@@ -32,6 +32,10 @@ _MJAI_SUIT_CATEGORIES = {
     "s": TileCategory.SOUZU,
 }
 
+_MJAI_SUIT_LETTERS_BY_CATEGORY = {
+    category: letter for letter, category in _MJAI_SUIT_CATEGORIES.items()
+}
+
 _MJAI_HONOR_TYPES = {
     "E": TileType(TileCategory.HONOR, 1),
     "S": TileType(TileCategory.HONOR, 2),
@@ -40,6 +44,10 @@ _MJAI_HONOR_TYPES = {
     "P": TileType(TileCategory.HONOR, 5),
     "F": TileType(TileCategory.HONOR, 6),
     "C": TileType(TileCategory.HONOR, 7),
+}
+
+_MJAI_HONOR_LETTERS = {
+    tile_type: letter for letter, tile_type in _MJAI_HONOR_TYPES.items()
 }
 
 
@@ -95,3 +103,23 @@ def tile_from_mjai(pai: str) -> Tile:
 
     tile_type = TileType(_MJAI_SUIT_CATEGORIES[body[1]], rank)
     return Tile(tile_type, is_red=is_red)
+
+
+def tile_to_mjai(tile: Tile) -> str:
+    """lisjong `Tile`を、RiichiEnv 0.4.8実測のMJAI牌表記(`tile_from_mjai`の逆)へ変換する。
+
+    `tile_from_mjai`が受理する表記だけを生成する厳密な逆変換であり、
+    赤牌は末尾`"r"`付き(`"5mr"`等)、字牌は`"E"`/`"S"`/`"W"`/`"N"`/`"P"`/`"F"`/`"C"`で
+    表す。RiichiLab送信用MJAI responseのtile field（`pai`等）を、resolve済みの
+    canonical `InternalAction`が持つ牌semantic値から構築するために使う。
+    """
+    if not isinstance(tile, Tile):
+        raise TypeError("tile must be a Tile")
+
+    category = tile.tile_type.category
+    if category is TileCategory.HONOR:
+        return _MJAI_HONOR_LETTERS[tile.tile_type]
+
+    letter = _MJAI_SUIT_LETTERS_BY_CATEGORY[category]
+    suffix = "r" if tile.is_red else ""
+    return f"{tile.tile_type.rank}{letter}{suffix}"

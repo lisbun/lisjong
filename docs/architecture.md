@@ -199,6 +199,40 @@ seat-visibleな現在状態の正規化に限る。Policyの過去判断、AI内
 非公開情報を含めず、requestやtransport固有情報をPolicy入力へ混入させない。
 具体的なcounter algorithmと同期testは後続実装で確定する。
 
+#### `riichilab_adapter` package (Issue #38)
+
+`src/lisjong/riichilab_adapter/`は、RiichiLab Clientが担う責務のうち、
+「parsed済み`request_action`からPolicy判断を経て送信前validation済み
+payloadを構築する、1 request x 1 decisionの変換境界」をIssue #38で実装した
+Python packageである。WebSocket接続そのもの、token、`start_game` /
+`action_ack` / `validation_result` / `end_game`、`request_id`のgame内
+lifecycle管理、timeout schedulerは対象外であり、後続Issue #39が扱う。
+
+- `RiichiLabSeatAdapter`は1 game x 1 seatへ明示的にbindされたstateful
+  runtimeであり、`SeatMaterializedState`と`RiichiEnvActionMappingSession`を
+  requestごとに作り直さず継続保持する
+- `process_request_action()`は、parsed済み`request_action`相当dataを受け取り、
+  `riichienv.Observation.deserialize_from_base64()`でObservationを復元した
+  うえで、既存`riichienv_adapter.build_decision()`と
+  `policy_contract.execute_policy()`をそのまま再利用し、paired mappingの
+  `resolve()`で得たRiichiEnv Actionから送信可能なMJAI response相当を構築する
+- MJAI response構築は`riichienv.Action.to_mjai()`を基底とし、実測で判明した
+  欠落field(hora の`pai`、call系/ronの`target`、dahaiの`tsumogiri`)だけを
+  resolve済みcanonical `InternalAction`から補う
+- 送信直前に、server提示`possible_actions`との送信前semantic validationを
+  行う。raw dict完全一致やlist indexに依存せず、送信予定のBot responseと
+  各candidateの双方を、公式candidate schemaのsemantic identityへ
+  projectionしてから比較する。0件一致・複数件一致(ambiguous)に加えて、
+  malformed candidateと未知Action typeのcandidateが1件でも含まれる場合も
+  validation全体をfail closedする(forward compatibilityとして許容するのは
+  既知typeのunknown追加fieldまで)
+- `request_id`はcurrent requestの値をそのままresponseへechoするだけで、
+  Adapter内部で生成せず、Policyへも渡さない。`time`は保持のみでPolicy入力へ
+  含めない
+
+具体的なnormalization規則、`to_mjai()`実測結果、公式仕様との既知の未確認
+事項は[RiichiLab request_action Adapter](riichilab-adapter.md)を正本とする。
+
 途中再接続を将来にわたって禁止するものではない。RiichiLabの仕様と必要性を
 確認し、別Issueで合意した場合に限り、初期スコープ外の機能として検討する。
 
