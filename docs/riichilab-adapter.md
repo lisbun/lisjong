@@ -305,3 +305,18 @@ lifecycle管理、timeout schedulerはこのpackageの責務ではなく、#39�
 
 `docs/architecture.md`の「RiichiLab Client」節が定める情報境界
 (Policyへ渡してよいのは`DecisionContext`だけ)は、このpackageでも維持する。
+
+## Issue #39実装後の補足
+
+WebSocket接続、`start_game` / `action_ack` / `validation_result` /
+`end_game`、`request_id`のgame内lifecycle管理はIssue #39で
+`src/lisjong/riichilab_client/`として実装済みである。詳細は
+[RiichiLab WebSocket Client](riichilab-client.md)を参照する。
+
+Issue #39実装時点でも、本書冒頭に記載した`riichi.dev`ドメインへの
+network egress blockは解消していない(実装を行ったAI実行環境からの
+確認、2026-08-14)。このため上記「未確認事項・既知の前提(#39で要確認)」の
+うち、`possible_actions`の重複candidate有無、`actor`/`target`の
+server実際表現、honor牌表記の実サーバー一致は、Issue #39でも実live
+validationでの再確認ができていない。学習者環境からのlive validation
+実行後に、実測結果で本書を更新することが望ましい。

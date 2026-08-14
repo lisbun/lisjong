@@ -102,6 +102,25 @@ print(result.scores, result.ranks)
 Policy判断数が含まれます。`max_steps`はhang防止用の安全上限であり、対局終了前に
 到達した場合は正常結果を返さず`StepLimitExceededError`で失敗します。
 
+## RiichiLab validation
+
+`run_validation(policy, token)`は、RiichiLab `/ws/validate`へBearer token付き
+WebSocket接続し、1 validation gameを完走して`ValidationResult`(`passed`を含む)
+を返します。Policy判断・Observation変換・`possible_actions` validationは
+`RiichiLabSeatAdapter`(#38)を再利用し、WebSocket transport lifecycle
+(`start_game` / `request_id` / `action_ack` / `end_game` / `validation_result`)
+だけをこのpackageが担当します。責務境界と設計判断の詳細は
+[RiichiLab WebSocket Client](docs/riichilab-client.md)を参照してください。
+
+実`BOT_TOKEN`を使ったlive validationは、次のコマンドで学習者環境から実行します。
+
+```powershell
+$env:BOT_TOKEN = "<実RiichiLab bot token>"
+python -m lisjong.riichilab_client.validation
+```
+
+`BOT_TOKEN`はrepositoryへcommitせず、環境変数から実行時に注入してください。
+
 ## ロードマップ
 
 1. Python package、test、CI、文書の初期整備
@@ -130,8 +149,10 @@ hashなどを確認し、repository本体とは分離して管理します。
 ## 開発状況
 
 Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
-RiichiEnv Adapter、共通Policy実行境界、Local game runnerまで実装しています。
-RiichiLab Clientと学習・推論機能はまだ実装していません。
+RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
+`request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで
+実装しています。学習・推論機能とRiichiLab ranked接続(`/ws/ranked`)は
+まだ実装していません。
 
 ## License
 
