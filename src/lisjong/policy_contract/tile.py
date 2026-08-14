@@ -77,3 +77,30 @@ NORTH_WIND = TileType(TileCategory.HONOR, 4)
 WHITE_DRAGON = TileType(TileCategory.HONOR, 5)
 GREEN_DRAGON = TileType(TileCategory.HONOR, 6)
 RED_DRAGON = TileType(TileCategory.HONOR, 7)
+
+
+_CATEGORY_ORDER = {
+    TileCategory.MANZU: 0,
+    TileCategory.PINZU: 1,
+    TileCategory.SOUZU: 2,
+    TileCategory.HONOR: 3,
+}
+
+
+def tile_sort_key(tile: Tile) -> tuple[int, int, bool]:
+    """Tileのcanonical順序を返す。
+
+    docs/action-identity.mdが後続実装事項として残していたcanonical sort keyの
+    具体化である。category → rank → red distinctionの順で比較し、
+    TileCategoryのEnum文字列value、Python hash、object identity等の偶然の
+    順序には依存しない。multiset canonicalization（consumed_tiles等）の
+    ソートkeyとして使用する。
+    """
+    if not isinstance(tile, Tile):
+        raise TypeError("tile must be a Tile")
+
+    return (
+        _CATEGORY_ORDER[tile.tile_type.category],
+        tile.tile_type.rank,
+        tile.is_red,
+    )

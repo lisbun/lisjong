@@ -12,6 +12,7 @@ from lisjong.policy_contract.tile import (
     Tile,
     TileCategory,
     TileType,
+    tile_sort_key,
 )
 
 
@@ -166,6 +167,48 @@ class TileTest(unittest.TestCase):
         field_names = {field.name for field in fields(Tile)}
         self.assertEqual(field_names, {"tile_type", "is_red"})
         self.assertNotIn("copy_index", field_names)
+
+
+class TileSortKeyTest(unittest.TestCase):
+    def test_rejects_non_tile(self) -> None:
+        with self.assertRaises(TypeError):
+            tile_sort_key(TileType(TileCategory.MANZU, 1))
+
+    def test_orders_by_category_then_rank_then_red(self) -> None:
+        tiles = [
+            Tile(TileType(TileCategory.HONOR, 1)),
+            Tile(TileType(TileCategory.SOUZU, 9)),
+            Tile(TileType(TileCategory.PINZU, 5), is_red=True),
+            Tile(TileType(TileCategory.PINZU, 5)),
+            Tile(TileType(TileCategory.MANZU, 1)),
+        ]
+        expected_order = [
+            Tile(TileType(TileCategory.MANZU, 1)),
+            Tile(TileType(TileCategory.PINZU, 5)),
+            Tile(TileType(TileCategory.PINZU, 5), is_red=True),
+            Tile(TileType(TileCategory.SOUZU, 9)),
+            Tile(TileType(TileCategory.HONOR, 1)),
+        ]
+        self.assertEqual(sorted(tiles, key=tile_sort_key), expected_order)
+
+    def test_does_not_depend_on_category_enum_string_order(self) -> None:
+        # TileCategoryのEnum定義順 (MANZU, PINZU, SOUZU, HONOR) は
+        # アルファベット順 (HONOR, MANZU, PINZU, SOUZU) とは異なる。
+        # tile_sort_keyが後者に偶然依存していないことを確認する。
+        alphabetical_by_value = sorted(TileCategory, key=lambda c: c.value)
+        self.assertNotEqual(
+            alphabetical_by_value,
+            [
+                TileCategory.MANZU,
+                TileCategory.PINZU,
+                TileCategory.SOUZU,
+                TileCategory.HONOR,
+            ],
+        )
+
+        manzu_tile = Tile(TileType(TileCategory.MANZU, 1))
+        honor_tile = Tile(TileType(TileCategory.HONOR, 1))
+        self.assertLess(tile_sort_key(manzu_tile), tile_sort_key(honor_tile))
 
 
 if __name__ == "__main__":

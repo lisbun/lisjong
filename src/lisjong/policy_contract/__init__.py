@@ -7,6 +7,20 @@ RiichiEnv、RiichiLab、mjai、WebSocket等の外部library固有型へは依存
 Policy、RiichiEnv Adapter、Local game runner、RiichiLab Clientが共通して利用する。
 """
 
+from lisjong.policy_contract.action import (
+    AnkanAction,
+    ChiAction,
+    DaiminkanAction,
+    DiscardAction,
+    InternalAction,
+    KakanAction,
+    KyuushuKyuuhaiAction,
+    PassAction,
+    PonAction,
+    RiichiAction,
+    RonAction,
+    TsumoAction,
+)
 from lisjong.policy_contract.meld import MeldKind
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
@@ -27,16 +41,28 @@ from lisjong.policy_contract.wind import Wind
 __all__ = [
     "EAST_WIND",
     "GREEN_DRAGON",
-    "MeldKind",
     "NORTH_WIND",
     "RED_DRAGON",
-    "RiichiState",
     "SOUTH_WIND",
+    "WEST_WIND",
+    "WHITE_DRAGON",
+    "AnkanAction",
+    "ChiAction",
+    "DaiminkanAction",
+    "DiscardAction",
+    "InternalAction",
+    "KakanAction",
+    "KyuushuKyuuhaiAction",
+    "MeldKind",
+    "PassAction",
+    "PonAction",
+    "RiichiAction",
+    "RiichiState",
+    "RonAction",
     "Seat",
     "Tile",
     "TileCategory",
     "TileType",
-    "WEST_WIND",
-    "WHITE_DRAGON",
+    "TsumoAction",
     "Wind",
 ]
