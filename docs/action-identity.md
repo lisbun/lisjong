@@ -359,8 +359,9 @@ RiichiLab online legality
   `request_action.possible_actions`へ送信前に再検証する
 
 fail closedは、検証されていないActionを外部へ送信しないことを意味する。
-先頭候補、暗黙のpass、任意のfallback Actionへ置換しない。具体的な例外class、
-終了、切断、timeout処理は各callerまたは後続実装で定める。
+先頭候補、暗黙のpass、任意のfallback Actionへ置換しない。共通Policy呼び出し境界の
+validation失敗は`PolicyActionValidationError`とし、Policy自身の例外は変更せず
+伝播する。終了、切断、timeout処理は各callerまたは後続実装で定める。
 
 ## RiichiEnvとRiichiLabの共通原則
 
@@ -440,7 +441,7 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 - RiichiLabのrepresentative tie-break key（RiichiEnv側はIssue #29で確定済み）
 - Kakan後の`PublicMeld`のsequence位置
 - RiichiLab `possible_actions`の具体schema、translation、serialization、照合規則
-- 具体的な例外class、timeout、終了または切断処理
+- timeout、終了または切断処理
 - Local game runner、RiichiLab Clientの本実装
 
 RiichiEnv Adapterのdecision-local mappingとseat-localな所有境界

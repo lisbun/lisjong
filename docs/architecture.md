@@ -50,7 +50,10 @@ Policyは、環境に依存しない1 seat・1 decision分の`DecisionContext`�
 Policyの返却値は、Local game runnerまたはRiichiLab Clientが利用する共通の
 Policy呼び出し境界で`DecisionContext.legal_actions`と照合する。action identity上
 ちょうど1件に一致しない場合は、未検証Actionを外部環境へ送信しない。Policy実装
-自身へこの検証を重複実装させない。
+自身へこの検証を重複実装させない。共通境界は
+`lisjong.policy_contract.execute_policy(policy, decision)`として実装し、一意に
+照合できた`legal_actions`側のcanonicalな`InternalAction`を返す。validation失敗は
+`PolicyActionValidationError`とし、Policy自身の例外は変更せず伝播する。
 
 この決定性は最終的なAction選択に対する論理的な再現性であり、内部数値計算の
 bit-exactな再現性を要求しない。RiichiEnv constructorや`reset(seed=...)`の
@@ -233,9 +236,12 @@ RiichiEnv Adapter、またはRiichiLab Clientで吸収し、Policyへ直接伝�
 `lisjong.policy_contract`は、Policy実装、RiichiEnv Adapter、Local game runner、
 RiichiLab Clientが共有する環境非依存の契約packageである。package rootから
 `Policy`、`DecisionContext`、`PolicyInput`、`InternalAction`各variant、および
-それらを構成するvalue型を公開する。
+それらを構成するvalue型に加え、`execute_policy()`と
+`PolicyActionValidationError`を公開する。
 
 - `policy.py`は最小のstructural `Policy(Protocol)`を定義する
+- `policy_execution.py`は1 seat × 1 decisionのPolicy呼び出しと返却値の
+  runtime validationを担い、semantic identity上一意に一致した合法候補を返す
 - `decision_context.py`と`policy_input.py`は1 decision分の入力境界を定義する
 - `action.py`は11個の独立したfrozen dataclassと、そのunionである
   `InternalAction`を定義する
@@ -303,9 +309,10 @@ decision-local mapping、deterministic representative、revalidationの原則は
 frozen dataclassのvalue equalityとして実装し、順序なしmultiset fieldは生成時に
 canonical tupleへ正規化する。別のaction IDやcanonical keyは導入しない。
 
-外部環境ごとのdeterministic representativeの具体的なtie-break key、
-decision-local mappingの実装構造、Policy評価失敗時の具体的な例外やtimeout処理は、
-各componentの後続実装Issueで決定する。
+RiichiLab外部候補のdeterministic representativeの具体的なtie-break key、
+RiichiLab側decision-local mappingの実装構造、Policy評価のtimeout処理は、
+各componentの後続実装Issueで決定する。共通Policy実行境界のvalidation失敗は
+`PolicyActionValidationError`、Policy自身の例外は変更せず伝播することで確定した。
 
 RiichiEnvで未実測のAction種別、`Observation`の未確認field、実際の
 RiichiLab WebSocket requestとのaction照合等は、確認済みの実測として扱わない。

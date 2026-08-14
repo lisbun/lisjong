@@ -13,10 +13,9 @@ docs/policy-contract.md「基本契約」「Policyの出力と事後条件」「
 
 `choose_action`のtype signature（引数・戻り値の型）だけがこのProtocolで
 強制される契約であり、以下はPythonの型システムでは表現できない
-behavioral contractとして、実装者が守るべき責務にとどまる。実行時の違反
-検出はここでは実装せず、後続のPolicy契約testおよび最小Policy実装Issueへ
-残す。共通base classやtemplate method（`choose_action`を呼び出し先で
-wrapしてvalidationを挟む設計等）もここでは導入しない。
+behavioral contractとして、実装者が守るべき責務にとどまる。返却値と
+`legal_actions`のruntime照合は`policy_execution.execute_policy()`が担う。
+`Policy`自体へ共通base classやtemplate methodは導入しない。
 
 - 意思決定に`DecisionContext`以外の入力を使わない。RiichiEnv
   Observation、外部Action、PRNG、seed、runner state、以前のdecision等を

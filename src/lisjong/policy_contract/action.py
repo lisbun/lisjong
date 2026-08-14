@@ -21,6 +21,7 @@ game state mutation、hand / river / meld実体へのobject referenceは持た�
 """
 
 from dataclasses import dataclass
+from typing import TypeIs
 
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import (
@@ -269,3 +270,23 @@ type InternalAction = (
     | PassAction
     | KyuushuKyuuhaiAction
 )
+
+
+_INTERNAL_ACTION_TYPES = (
+    DiscardAction,
+    RiichiAction,
+    ChiAction,
+    PonAction,
+    DaiminkanAction,
+    AnkanAction,
+    KakanAction,
+    RonAction,
+    TsumoAction,
+    PassAction,
+    KyuushuKyuuhaiAction,
+)
+
+
+def _is_internal_action(value: object) -> TypeIs[InternalAction]:
+    """値がruntime上いずれかのInternalAction variantであるかを返す。"""
+    return isinstance(value, _INTERNAL_ACTION_TYPES)

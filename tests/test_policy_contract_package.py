@@ -20,6 +20,8 @@ _EXPECTED_NAMES = (
     "PolicyInput",
     "DecisionContext",
     "Policy",
+    "PolicyActionValidationError",
+    "execute_policy",
 )
 
 _PROBE_SCRIPT = (
@@ -27,6 +29,8 @@ _PROBE_SCRIPT = (
     "import lisjong.policy_contract as module\n"
     "import lisjong.policies\n"
     "assert 'riichienv' not in sys.modules, sorted(sys.modules)\n"
+    "assert 'mjai' not in sys.modules, sorted(sys.modules)\n"
+    "assert 'websocket' not in sys.modules, sorted(sys.modules)\n"
     + "\n".join(
         f"assert hasattr(module, {name!r}), {name!r}" for name in _EXPECTED_NAMES
     )
