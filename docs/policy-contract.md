@@ -126,8 +126,16 @@ equalityと一致する。照合は次に依存しない。
 | RiichiLab Client | オンライン経路で、送信Actionが`request_action.possible_actions`と整合することを送信前に再検証する |
 
 Policy呼び出し境界の検証はPolicy実装自身へ重複実装させない。Local game runner
-およびRiichiLab ClientがPolicyを呼び出す際に利用する共通責務とするが、
-具体的なclass名、wrapper、module構成は本書で確定しない。
+およびRiichiLab Clientは、`lisjong.policy_contract.execute_policy(policy,
+decision)`を共通境界として利用する。この関数は受け取った`DecisionContext`を
+そのまま`Policy.choose_action()`へ渡し、返却値を既存のdataclass value equalityで
+`decision.legal_actions`へ照合する。ちょうど1件一致した場合は、Policyが返した
+objectではなく`legal_actions`側のcanonicalな候補を返す。
+
+Policy返却値が`InternalAction`でない、安全に比較できない、または一致件数が0件・
+複数件の場合は`PolicyActionValidationError`を送出する。Policy自身が送出した例外は
+捕捉・置換せず、そのままcallerへ伝播させる。いずれの失敗でもfallback Actionを
+返さない。
 
 semantic identityと共通の照合原則は
 [Action identity](action-identity.md)で定める。RiichiLabの実際の
@@ -197,7 +205,8 @@ RiichiEnv constructorや`reset(seed=...)`等の外部環境側seedをPolicy契�
 - Policy返却Actionと合法候補の一致が0件
 - Policy返却Actionと合法候補の一致が複数件
 
-具体的な例外class、timeout値、retry方法は本書で確定しない。
+Policy返却値のvalidation失敗は`PolicyActionValidationError`で表す。Policy自身の
+例外は変更せず伝播する。timeout値、retry方法は本書で確定しない。
 
 ## fail closed
 
@@ -230,13 +239,16 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
   canonical keyを設けない
 - 順序なしmultiset fieldだけを生成時にcanonical tupleへ正規化し、履歴、公開順、
   seat位置を持つsequenceは並べ替えない
+- `policy_execution.py`の`execute_policy()`は`DecisionContext`だけをPolicyへ渡し、
+  一意に一致した`legal_actions`側の`InternalAction`を返す
+- Policy返却値を検証できない場合は`PolicyActionValidationError`でfail closedし、
+  Policy自身の例外は変更せず伝播する
 
 ## 引き続き未確定の項目
 
 次は各componentの後続実装Issueで決定し、本書では確定しない。
 
 - 外部候補のdeterministic representativeを選ぶ具体的なtie-break key
-- 具体的な例外class
 - timeout値、retry方法
 - asyncおよびbatch interface
 - thread safetyの詳細

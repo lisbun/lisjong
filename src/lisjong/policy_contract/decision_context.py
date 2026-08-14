@@ -37,40 +37,8 @@ legal_actionsの並び順は、docs/policy-contract.mdが「並び順に契約�
 
 from dataclasses import dataclass
 
-from lisjong.policy_contract.action import (
-    AnkanAction,
-    ChiAction,
-    DaiminkanAction,
-    DiscardAction,
-    InternalAction,
-    KakanAction,
-    KyuushuKyuuhaiAction,
-    PassAction,
-    PonAction,
-    RiichiAction,
-    RonAction,
-    TsumoAction,
-)
+from lisjong.policy_contract.action import InternalAction, _is_internal_action
 from lisjong.policy_contract.policy_input import PolicyInput
-
-# InternalActionはPython 3.12 type文によるtype alias（union）であり、
-# isinstance()の第2引数へ直接使用できない
-# （TypeError: isinstance() arg 2 must be a type, a tuple of types, or a union）。
-# 実行時型検証のため、11 variant classを明示的なtupleとしてまとめる。
-# public ActionKind enumや共通base classは新設しない。
-_INTERNAL_ACTION_TYPES = (
-    DiscardAction,
-    RiichiAction,
-    ChiAction,
-    PonAction,
-    DaiminkanAction,
-    AnkanAction,
-    KakanAction,
-    RonAction,
-    TsumoAction,
-    PassAction,
-    KyuushuKyuuhaiAction,
-)
 
 
 def _normalize_legal_actions(values: object) -> tuple[InternalAction, ...]:
@@ -79,7 +47,7 @@ def _normalize_legal_actions(values: object) -> tuple[InternalAction, ...]:
         items = tuple(values)
     except TypeError:
         raise TypeError("legal_actions must be an iterable") from None
-    if any(not isinstance(item, _INTERNAL_ACTION_TYPES) for item in items):
+    if any(not _is_internal_action(item) for item in items):
         raise TypeError("legal_actions must contain only InternalAction instances")
 
     return items

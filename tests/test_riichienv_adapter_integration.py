@@ -9,8 +9,8 @@
 CI実行時間を抑えるため、seed数とstep上限を絞る。より広い範囲の実測は
 Issue #28の調査段階で個別に実施済みであり(docs/riichienv-investigation.md)、
 ここでは実装の回帰を検出できる最小限の再現に絞る。Issue #23の最終統合では、
-1 decisionについてPolicyInput、Action mapping、DecisionContext、MinimalPolicy、
-元のRiichiEnv Actionまでの完全往復も固定する。
+1 decisionについてPolicyInput、Action mapping、DecisionContext、共通Policy実行境界、
+MinimalPolicy、元のRiichiEnv Actionまでの完全往復も固定する。
 """
 
 import unittest
@@ -18,6 +18,7 @@ import unittest
 from riichienv import RiichiEnv
 
 from lisjong.policies import MinimalPolicy
+from lisjong.policy_contract import execute_policy
 from lisjong.policy_contract.action import PassAction
 from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.policy_input import PolicyInput
@@ -185,7 +186,7 @@ class RiichiEnvDecisionIntegrationTest(unittest.TestCase):
         # Policyへ渡すのはRiichiEnvDecision全体ではなく、raw外部objectへ到達
         # できないDecisionContextだけである。
         self.assertFalse(_module_is_leaked_from_riichienv(decision.context, set()))
-        selected = MinimalPolicy().choose_action(decision.context)
+        selected = execute_policy(MinimalPolicy(), decision.context)
         self.assertTrue(
             any(selected is action for action in decision.context.legal_actions)
         )
@@ -259,7 +260,7 @@ class RiichiEnvDecisionIntegrationTest(unittest.TestCase):
         with self.assertRaises(StaleActionMappingError):
             first.mapping.resolve(first.context.legal_actions[0])
 
-        selected = MinimalPolicy().choose_action(second.context)
+        selected = execute_policy(MinimalPolicy(), second.context)
         resolved = second.mapping.resolve(selected)
         self.assertTrue(
             any(

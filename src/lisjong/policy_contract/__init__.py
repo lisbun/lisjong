@@ -27,6 +27,10 @@ from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy import Policy
+from lisjong.policy_contract.policy_execution import (
+    PolicyActionValidationError,
+    execute_policy,
+)
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.round_state import RoundState
@@ -67,6 +71,7 @@ __all__ = [
     "PassAction",
     "PlayerPublicState",
     "Policy",
+    "PolicyActionValidationError",
     "PolicyInput",
     "PonAction",
     "PublicMeld",
@@ -80,4 +85,5 @@ __all__ = [
     "TileType",
     "TsumoAction",
     "Wind",
+    "execute_policy",
 ]
