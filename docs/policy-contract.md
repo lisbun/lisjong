@@ -21,8 +21,7 @@ class Policy(Protocol):
     def choose_action(
         self,
         decision: DecisionContext,
-    ) -> InternalAction:
-        ...
+    ) -> InternalAction: ...
 ```
 
 `Policy`、`choose_action`、`DecisionContext`、`InternalAction`を、
