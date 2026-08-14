@@ -210,9 +210,8 @@ class SeatMaterializedState:
             return
         if event_type == "kakan":
             # Observation.meldsから直接構築するため、meld state自体は
-            # ここでは更新しない。pending_chankan_actorの更新は呼び出し元の
-            # _apply_eventが行う。
-            return
+            # ここでは更新しない。pending_chankan_actor /
+            # pending_chankan_tileの更新は呼び出し元の_apply_eventが行う。
             return
         if event_type in _NO_OP_EVENT_TYPES:
             return
