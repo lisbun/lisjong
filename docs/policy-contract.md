@@ -7,6 +7,8 @@ Policyの公開契約を定める。上位の責務と依存方向は
 [Architecture](architecture.md)、RiichiEnv 0.4.8の公式情報、実測、
 推測・未確認事項、設計判断の区別は
 [RiichiEnv調査記録](riichienv-investigation.md)を正本とする。
+`DecisionContext`に含まれるPolicy入力の具体的な許可fieldと意味契約は、
+[Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
 
 本書の非空な合法手集合等の条件はlisjongの設計判断である。特に、
 RiichiEnvの`legal_actions()`が常に1件以上を返すことを確認済みという意味では
@@ -52,12 +54,14 @@ Policyは次を所有しない。
 
 - Policy入力と`legal_actions`は、同じseat・同じ判断時点から生成する
 - 1つのContext内で観測状態と合法手の時点をずらさない
+- すべての`legal_actions.actor`はPolicy入力の`self_seat`と一致する
 - Policy評価中にContextの意味内容を変更しない
 - Policy自身もContextや合法候補を変更しない
 - 外部環境が次の状態へ進んだ後、古いContextを新しいdecisionへ再利用しない
 
-immutable class、`tuple`、frozen dataclass等の具体的な実装方式は、
-Policy入力のスキーマとともにIssue #11の後続項目で決定する。
+Policy入力の具体的なschema、不変性、canonicalizationは
+[Policy入力の最小スキーマ](policy-input-schema.md)で定める。immutable class、
+`tuple`、frozen dataclass等の具体的な実装方式は後続実装で決定する。
 
 ## legal_actionsの事前条件
 
@@ -112,7 +116,7 @@ Policyを完全なstateless objectには限定しない。次は保持してよ�
 
 - model
 - 固定されたmodel parameter
-- 明示的なPolicy設定
+- 明示的なPolicy設定。Policy instanceへbindされた不変なMatchRulesを含み得る
 - 1回のdecision中だけ使用する探索・推論用の一時状態
 - 最終Action選択へ影響しないcache
 - metrics
@@ -120,6 +124,9 @@ Policyを完全なstateless objectには限定しない。次は保持してよ�
 
 境界の基準はmutableかimmutableかではなく、Policyの出力へ影響する呼び出し間状態を
 暗黙の内部状態として保持しないことである。
+
+固定MatchRulesとPolicy設定の分離および初期`DecisionContext`へrulesetを複製しない
+方針は、[Policy入力の最小スキーマ](policy-input-schema.md)を参照する。
 
 ## Policyが隠れて所有してはいけない状態
 
@@ -190,11 +197,9 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 
 次はIssue #11の後続項目または後続Issueで決定し、本書では確定しない。
 
-- Policy入力の具体的なfield
 - InternalActionの具体的なschema
 - action identityの具体的な正規化規則
 - 赤牌や`consumed`等のidentity詳細
-- event履歴をPolicy入力へ含めるかどうか
 - Python package、module、class構成
 - 具体的な例外class
 - timeout値、retry方法
@@ -202,3 +207,6 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 - thread safetyの詳細
 - recurrent model等の明示的な呼び出し間state契約
 - RiichiLab `possible_actions`との具体的な照合規則
+
+Policy入力の具体的なfieldと、raw event履歴を初期入力へ含めない判断は、
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
