@@ -493,6 +493,122 @@ kakan     -> tsumo -> 後続Observationで dora -> dahai
 
 seat-visible event deltaを継続処理して現在状態へ正規化し、Policyには不変snapshotを渡す設計を支持する根拠としてIssue #11へ引き継ぐ。ただし、RiichiEnv AdapterまたはRiichiLab Clientが必ずmaterialized stateを所有するとは本書で確定せず、責務配置は`docs/architecture.md`で別途決定する。
 
+### 2026-08-14: Issue #27向け追加実測
+
+[Issue #27](https://github.com/lisbun/lisjong/issues/27)のスコープに沿って、Issue #23「RiichiEnv Adapterを実装する」のproduction実装で未確認事項を推測しないため、未確認だった7 Action variant、target/from_seat解決、representative選択に使えるphysical field、kakan元pon解決、live-wall算出、event重複防止を追加実測した。このIssueは調査Issueであり、production Adapterコードは追加していない。調査用スクリプトは一時領域だけに置き、正式な調査コードとしては残していない。
+
+#### 実測環境（既存基準環境とは別環境）
+
+今回はWindows実機ではなく、コンテナ環境で実測した。既存の基準環境（Windows / CPython 3.14.6）とは異なる環境であるため、区別して記録する。
+
+| 項目 | 値 |
+| --- | --- |
+| OS | Linux 6.18.5-fc-v20（glibc 2.39） |
+| Python | 通常版CPython 3.11.15 |
+| RiichiEnv | 0.4.8（`pip show`で確認。当該環境の`.venv`へ新規インストール） |
+| PyYAML | 6.0.3（RiichiEnvからの依存として確認） |
+| IPython | 9.16.1（RiichiEnvからの依存として確認） |
+
+`riichienv==0.4.8`のLinux / cp311向けwheelが存在し、このコンテナ環境へインストールできることを実測した。既存文書はWindows x86-64 wheelの存在だけを公式情報として確認していたが、Linux wheelの存在と実際のインストール成功は今回はじめて実測した。RiichiEnvのPython API自体の挙動はOS非依存と推測されるが、本節の実測結果は基準環境と別環境として区別し、基準環境表へは統合しない。
+
+#### 未確認だった7 Action variantの実測
+
+多数seedで`RiichiEnv(seed=...)`を実行し、`legal_actions()`に対象`ActionType`が出現した時点でそのActionを選択する探索方針で、次の7 variant全てを実際に出現させた（各1事例）。
+
+| variant | `ActionType` | 実測した公開属性 | `to_mjai()`実測例 |
+| --- | --- | --- | --- |
+| riichi | `RIICHI` | `tile=None`、`consume_tiles=[]` | `{"actor":2,"type":"reach"}` |
+| daiminkan | `DAIMINKAN` | `tile`=召し上げ牌、`consume_tiles`=手牌側3枚 | `{"actor":2,"consumed":["8s","8s","8s"],"pai":"8s","type":"daiminkan"}` |
+| ankan | `ANKAN` | `tile`=4枚のうち1枚、`consume_tiles`=4枚全部 | `{"actor":3,"consumed":["W","W","W","W"],"pai":"W","type":"ankan"}` |
+| kakan | `KAKAN` | `tile`=追加牌、`consume_tiles`=既存pon側3枚 | `{"actor":0,"consumed":["1p","1p","1p"],"pai":"1p","type":"kakan"}` |
+| ron | `RON` | `tile`=和了牌、`consume_tiles=[]` | `{"actor":2,"type":"hora"}` |
+| tsumo | `TSUMO` | `tile`=実測範囲内では`drawn_tile`と一致 | `{"actor":1,"type":"hora"}` |
+| kyuushu_kyuuhai | `KYUSHU_KYUHAI` | `tile=None`、`consume_tiles=[]` | `{"actor":3,"type":"ryukyoku"}`（reason等の追加fieldは含まない） |
+
+7 variant全てで`Action -> to_mjai() -> json.loads() -> Observation.select_action_from_mjai() -> Action`のround-tripに成功し、再変換後の`to_mjai()`も元の値と一致した。ただし各variant1事例のみの実測であり、全局面・全出現パターンを網羅したものではない。riichiとkan各種の局面遷移は#11向け追加実測で既に一部確認済みだったが、ron・tsumo・kyuushu_kyuuhaiの個別round-tripは今回はじめて実測した。
+
+#### Actionのtarget/from_seatに関する追加実測
+
+`Action`クラスの公開属性は全variant共通で`action_type`、`actor`、`consume_tiles`、`tile`、`to_dict()`、`to_mjai()`だけであり、`target`に相当する属性はどのvariantにも存在しないことを`dir()`で確認した。さらに、Chi / Pon / Daiminkan / Ronの`to_mjai()`出力そのものにも`target`が含まれないことを実測した。
+
+```text
+Chi.to_mjai()       -> {"actor":1,"consumed":["2m","4m"],"pai":"3m","type":"chi"}
+Pon.to_mjai()       -> {"actor":2,"consumed":["2p","2p"],"pai":"2p","type":"pon"}
+Daiminkan.to_mjai() -> {"actor":2,"consumed":["8s","8s","8s"],"pai":"8s","type":"daiminkan"}
+Ron.to_mjai()       -> {"actor":2,"type":"hora"}
+```
+
+（`target`が現れるのは、Action適用後に`new_events()`へ記録される結果eventの側であり、Action自体にはtargetが乗らない。この区別は既存文書では明示していなかった。）
+
+一方、`Observation.last_discard`が「直近に打牌したseat」を表す整数値を返すことを実測した。値域は実測範囲で常に`{0, 1, 2, 3}`であり、seed=7の対局では87回の比較全てで直近`dahai` eventの`actor`と一致した。ron候補が出現した3事例（seed=19, 170, 200）でも、`last_discard`は実際にron対象となった打牌のseatと一致した。
+
+したがって、`ChiAction.target` / `PonAction.target` / `DaiminkanAction.target` / `RonAction.target`は、RiichiEnvの`Action`側からではなく、そのdecision時点の`Observation.last_discard`から解決できることが実測で裏付けられた。`winning_tile`（ron）や召し上げ牌（chi / pon / daiminkan）は`action.tile`から取得できる。
+
+未確認: 槍槓（暗槓に対するchankan）等、直近の打牌以外がron対象になり得るケースでの`last_discard`の挙動は今回検証していない。
+
+#### representative選択に利用可能なphysical field
+
+同一Observation内で`to_mjai()`が完全に一致する複数の`legal_actions()`が存在するかを広く走査した。
+
+| ActionType | 重複の有無 | 実測例 |
+| --- | --- | --- |
+| DISCARD | あり | `{"pai":"6p",...}`に対し`tile=57`と`tile=59`の2候補 |
+| CHI | あり | `{"consumed":["4s","5s"],"pai":"3s",...}`に対し`consume_tiles`が`[85,89]` / `[86,89]` / `[87,89]`の3候補 |
+| PON | あり | `{"consumed":["8s","8s"],"pai":"8s",...}`に対し`consume_tiles`が`[100,101]` / `[100,103]` / `[101,103]`の3候補 |
+| ANKAN / KAKAN / DAIMINKAN | 400 seed・延べ219回の合法提示で確認されず | — |
+
+DISCARD / CHI / PONの重複候補は、`consume_tiles`（および`tile`）に含まれるRiichiEnv物理牌ID（整数）を使えば、入力順序に依存しない代表選択が可能である（例: 物理牌IDの昇順で先頭を選ぶ等）。物理牌IDそのものをPolicy契約へ持ち込まない前提は維持できる。具体的な採用規則の確定は本Issueのスコープ外とする。
+
+ANKAN / KAKAN / DAIMINKANで重複候補が一度も出現しなかったことは、各鳴き牌種が最大4枚しか存在しないため「同一牌種内の組み合わせ選択」が構造的に発生しない（ankanは4枚全部、daiminkanは残り3枚全部、kakanは残り最大1枚を使用する）という組み合わせ論的な理由と整合する。ただしこれは全パターンを数学的に証明したものではなく、400 seedでの非出現という実測に基づく推測である。
+
+今回の重複候補には赤牌が絡む牌種の事例は出現しなかった。赤牌を含む物理牌が候補に混在する場合、`to_mjai()`の`consumed`表現が赤牌の有無で変わるため、そもそも別candidateとして扱われ「同一identityの重複」にはならないと考えられるが、これは未確認の推論であり実測による確証ではない。
+
+#### kakan元pon解決とmeld公開状態
+
+kakan実行前後の`Observation.melds`（`list[list[Meld]]`、seat別）を比較した（seed=2, step=46, actor=0）。
+
+```text
+kakan前: melds[0][1] = Meld(meld_type=Pon,   tiles=[36,37,38],    called_tile=38, from_who=1, opened=True)
+kakan後: melds[0][1] = Meld(meld_type=Kakan, tiles=[36,37,38,39], called_tile=38, from_who=1, opened=True)
+```
+
+同一player・同一list indexでPon meldがKakan meldへin-place更新され、`tiles`は元の3枚に追加牌1枚を加えた4枚になり、`called_tile`と`from_who`は元ponの値のまま保持された。`action.consume_tiles`（kakan前のpon側3枚）は更新後meldの先頭3 tilesと完全一致した。
+
+これは`docs/internal-action-model.md`のKakanAction設計（`source_meld_id` / `source_meld_index`を使わず、`from_seat`と`called_tile`で元Ponをちょうど1件へ照合する）と整合する実測結果である。実測した1事例では「`meld_type == Pon`かつ`tiles`が`action.consume_tiles`の3枚と一致するmeld」が該当playerのmeld一覧中にちょうど1件存在し、0件・複数件のfail closedケースは今回発生しなかった（未確認）。
+
+wall長は槓処理と嶺上ツモを含む同一`step()`内で45から44へ1減少し、既存実測（#11向け追加実測の「daiminkan / ankan / kakanと嶺上ツモ時のwall」節）と整合した。
+
+#### `live_wall_tiles_remaining`に関する追加実測
+
+`RiichiEnv`オブジェクトには`turn_count`、`rinshan_draw_count`、`wall`等の進行カウンタが公開されているが、`Observation`側の公開属性一覧にはこれらに相当するfieldが存在しないことを`dir()`で確認した。
+
+つまり、`RiichiEnv`本体を直接保持するLocal game runnerは`env.wall`等から直接壁残数を算出できるが、`Observation`だけを受け取るRiichiEnv Adapter（特にRiichiLabのserialized observationを復元する経路）にはこの手段がない。既存文書が示した「`tsumo` eventを数える」方式が、Observationだけを前提にする場合の実質的に唯一の選択肢であることが、今回の公開属性調査で追加的に裏付けられた。
+
+#### event重複防止に関する追加実測
+
+`chi`、`dahai`、`pon`、`ankan`、`daiminkan`、`kakan`、`dora`、`reach`、`reach_accepted`、`start_game`、`start_kyoku`、`tsumo`の全event typeについてJSON keyを収集したが、一意なevent IDやシーケンス番号に相当するfieldは存在しなかった。
+
+また、`Observation.events`と`Observation.new_events()`は同一Observation instanceに対して常に同じ内容・同じ長さを返し、対局全体を通じて増加し続けるcumulativeな履歴ではないことを確認した（既存実測どおり、instance単位のnon-consuming/delta挙動と整合する）。したがって`events`の長さを重複防止用カウンタとして使うこともできない。
+
+Adapterが複数のObservationにまたがるevent適用の重複を避けるには、RiichiEnv側が提供する識別子に頼ることができない。「同一seatについて新しいObservationを受け取るたびに、その`new_events()`全体を1回だけ未適用分として扱う」という、既存実測済みのnon-consuming / delta契約そのものを運用規則として守る以外の手段が今回のevent key網羅調査でも見つからなかった。
+
+#### 和了(ron / tsumo)の役・点数詳細に関する追加実測（本Issueのスコープ外だが記録）
+
+RON / TSUMOの`to_mjai()`は`{"actor":...,"type":"hora"}`のみであり、役・符・点数移動・裏ドラ等は一切含まれない。それらの詳細は`env.mjai_log`側の`hora` event（`deltas`、`target`、`ura_markers`等を含む）にのみ存在し、seat別Observationからは取得できないことを実測した。対局終了後の`observations`は既存実測どおり空mapになるため、どのseatの`new_events()`からも`hora` / `end_kyoku` / `end_game`は届かなかった。
+
+既存の設計判断14「`env.mjai_log`はPolicyから隔離する」と合わせると、和了の役・点数詳細は現状Policy / RiichiEnv Adapter層では取得できず、必要であればLocal game runner側の責務として別途整理する必要がある。本Issueのスコープ外の発見だが、後続Issueの判断材料として記録する。
+
+なお、`Observation.find_action(action_id: int)`という追加APIも発見した。これは初期観測での`action_space_size`（82）に対応する固定長RL action-space index用のlookupであり、`select_action_from_mjai()`によるMJAI round-tripとは無関係と判断し、これ以上は深追いしていない。
+
+#### 今回追加で未確認のまま残った事項
+
+- 槍槓等、直近の打牌以外がron対象になるケースでの`last_discard`の挙動。
+- 複数ron（多家和）が同時に競合する場合の採用順序と、各`RonAction`の`target`解決。
+- ANKAN / KAKAN / DAIMINKANで重複candidateが構造的に発生しないという結論の数学的な証明（400 seedでの非出現という実測に基づく推測にとどまる）。
+- 赤牌を含む牌種でPon / Chiの重複candidateが発生する場合の`to_mjai()`表現とrepresentative選択への影響。
+- `Observation.find_action(action_id)`の入出力仕様全体。
+- 今回の実測はLinux / CPython 3.11.15コンテナ環境で行っており、既存の基準環境（Windows / CPython 3.14.6）での再現性は未検証。
+
 ## 最小再現コード
 
 次のコードは、環境ループと合法手の最小確認を目的とした調査案であり、正式な Policy 実装ではない。同等の`legal_actions()[0]`選択方針による1局完走は実測済みだが、この掲載コードを恒久的な調査コードとして保存したものではない。
@@ -584,7 +700,7 @@ ranks:
 
 - `legal_actions()` の並び順が、実行間やバージョン間で安定するか。
 - `legal_actions()`が空になる局面の有無と、Actionの比較・同一性に必要なfield。
-- CPUのみでの利用条件、Windows / WSL2 / Linuxの差、native runtime要件。
+- CPUのみでの利用条件、Windows / WSL2 / Linuxの差、native runtime要件。Issue #27向け追加実測（2026-08-14）で、Linuxコンテナ環境（CPython 3.11.15）へのインストールとimport、1局分を大きく超える多数対局の実行には成功したが、基準環境との挙動差の網羅的な比較はしていない。
 - `RiichiEnv(...)`の既定rule、game modeごとの初期化引数、不正な初期化引数に対する例外。
 - 公式文書上の`act(obs: Observation) -> Action`以外にAgent登録APIが存在するか、環境loopをlisjong側で管理することが正式な利用方法か。
 - constructor seedの再現性が、今回と異なるrule、game mode、Action選択方針、RiichiEnvバージョンでも保たれるか。
@@ -600,8 +716,8 @@ ranks:
 - `done()`後に空でないActionを渡した場合や、`step({})`を繰り返した場合の挙動。
 - 今回のWindows環境ではimportとstepに成功したが、追加のDLLまたはruntimeが既存環境に依存していないか、別環境でも同じ条件で動作するか。
 - 通常版CPython 3.14.6で、複数対局の反復や長時間実行が安定するか。
-- ron、複数ron等を含むclaim競合と、pon / chi以外の優先順位。
-- ron、tsumo agari、riichi、kan各種等、既存の一括round-trip probeで確認できなかったActionの完全なMJAI round-trip。riichiとkan各種の個別進行は追加実測済みだが、全Action種の変換確認ではない。
+- 複数ron（多家和）等を含むclaim競合と、pon / chi以外の優先順位。単独ronの`target`解決（`Observation.last_discard`）はIssue #27向け追加実測（2026-08-14）で確認したが、複数ron競合時の採用順序と各`RonAction`への解決は未確認。
+- riichi、daiminkan、ankan、kakan、ron、tsumo agari、kyuushu kyuuhaiは、Issue #27向け追加実測（2026-08-14）でそれぞれ1事例ずつAction/MJAI round-tripを確認した。全局面・全出現パターンを網羅した完全実測ではない。
 - 不正または曖昧なMJAI入力を`select_action_from_mjai()`へ渡した場合の挙動。
 - 実際のRiichiLab WebSocket requestにおける`possible_actions`と生成Actionの照合方法。生JSON dictの全field完全一致は未実測。
 - Python公開属性と`to_dict()`の差は一部実測済みだが、`Observation.tsumogiri_flags`の詳細な更新挙動、furiten、ippatsu、`waits` / `is_tenpai`のPolicy入力への採否を含むseat別情報の最小範囲。
@@ -649,16 +765,27 @@ PolicyInputの許可fieldとaction identityはIssue #11の各正本文書で確�
 `lisjong.policy_contract`として実装済みである。counter更新式等の実装詳細は後続の
 Adapter実装Issueで扱う。責務と依存方向は[Architecture](architecture.md)を正本とする。
 
+### Issue #27で追加実測し、Issue #23へ引き継ぐ判断候補
+
+次はIssue #27の追加実測から、Issue #23「RiichiEnv Adapterを実装する」へ引き継ぐ判断候補である。本書だけでAdapterの実装方式を確定するものではなく、採否は#23側で判断する。
+
+1. Chi / Pon / Daiminkan / RonのAction識別だけからは`target`（from_seat）を得られないため、同一decision時点の`Observation.last_discard`から解決する。
+2. Kakanの元Pon解決は、`meld_type == Pon`かつ`tiles`が`action.consume_tiles`と一致するmeldを対象playerのmeld一覧から1件に絞り込む方式が実測と整合する。0件・複数件はfail closedとする。
+3. Ankan / Kakan / Daiminkanでは、同一identityの複数RiichiEnv Action候補が生じる組み合わせ論的余地がない可能性が高い（400 seedで非出現）。一方Discard / Chi / Ponでは、物理牌IDに基づく入力順序非依存の代表選択が必要である。
+4. `live_wall_tiles_remaining`は、`Observation`だけを持つAdapter経路（RiichiLabのserialized observation復元を含む）では`tsumo` event計数以外の直接手段がない。`turn_count`等のcounterは`RiichiEnv`本体にのみ公開され、`Observation`側には存在しない。
+5. event適用の重複防止は、RiichiEnv側の識別子（event ID等）に頼れないため、seatごとの新規Observation受信ごとに`new_events()`全体を1回だけ未適用分として扱う運用規則に依拠する。
+6. Ron / Tsumoの役・点数・裏ドラ等の詳細はseat別Observationから得られない（`env.mjai_log`側の`hora` eventにのみ存在する）ため、必要であればLocal game runner側の責務として別途設計する。
+
 ### 実測から設計・実装へ引き継ぐ判断
 
 | 判断対象 | 今回までの実測 | 確定済み設計と残る確認 |
 | --- | --- | --- |
 | Policy 入力の最小スキーマ | 自他家の情報境界、seat別eventのmaskとdelta、Python公開属性と`to_dict()`の差、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 許可field、不変snapshot、canonicalizationはIssue #11で確定済み。残る確認はAdapterでの生成・同期、counter algorithm、将来拡張fieldの実測とtest |
-| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripに加え、同種の物理牌Actionが同じMJAI打牌へ潰れる例と手出し / ツモ切り差を確認。意味fieldとidentity規則はIssue #11で確定済み | 全Action種の完全実測、不正・曖昧なMJAI入力、Adapter変換実装とtest |
+| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripに加え、同種の物理牌Actionが同じMJAI打牌へ潰れる例と手出し / ツモ切り差を確認。riichi / daiminkan / ankan / kakan / ron / tsumo / kyuushu_kyuuhaiの各1事例のround-tripと、Chi / Pon / Daiminkan / Ronの`target`が`Observation.last_discard`で解決できることをIssue #27で追加実測。意味fieldとidentity規則はIssue #11で確定済み | 全出現パターンの完全実測、複数ron競合、不正・曖昧なMJAI入力、Adapter変換実装とtest |
 | 乱数・再現性の境界 | constructor seedでevent列まで再現。`reset(seed=...)`では期待した再現性を確認できず | rule、game mode、バージョンを変えた場合の適用範囲 |
 | エラー変換方針 | 不正Action型、player ID 99、`done()`後の空actionを確認 | 要求先不一致、欠落・余分な応答、別局面Action等 |
 | 局・対局のライフサイクル | single / east / halfを完走し、延長、`end_game`、`done()`、最終空map、scores、ranksを確認 | 他rule・score条件での終了挙動 |
-| materialized state | seat別event delta、鳴かれたdiscard、リーチ段階、通常ツモ・槓時のwall変化を一部確認 | schema、更新規則、所有component、長期間・終局・他seat・RiichiLab経路での同値性 |
+| materialized state | seat別event delta、鳴かれたdiscard、リーチ段階、通常ツモ・槓時のwall変化を一部確認。Issue #27でkakan元pon解決（meldのin-place更新）、`live_wall_tiles_remaining`の情報境界（`Observation`側に非公開）、event重複防止（IDなし）を追加実測 | schema、更新規則、所有component、長期間・終局・他seat・RiichiLab経路での同値性 |
 | RiichiLab との共通 Adapter 範囲 | 公式serialized Observation / Action応答境界と、ローカルの一部Action / MJAI round-tripを確認 | 実WebSocket requestの`possible_actions`照合、未出現Actionとの対応、seat-visible eventからの同値なstate再構成 |
 | runtime dependencyへの追加 | 通常版CPython 3.14でインストール、import、1局完走、依存version、明示取得したwheelのhashを確認 | 別環境・長時間実行の安定性 |
 
@@ -694,3 +821,4 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-13 | RiichiEnv 0.4.8 | OS、PowerShell、PyYAML、IPythonの正確な環境情報と、CPython 3.14 Windows x86-64 wheelのSHA-256が公式メタデータと一致することを追加実測 |
 | 2026-08-13 | RiichiEnv 0.4.8 | single / east / halfの終了、完全`mjai_log`とseat別eventの境界、RiichiLabとの共通Agent範囲を追加記録 |
 | 2026-08-14 | RiichiEnv 0.4.8 | Observation公開属性と`to_dict()`の差、seat別event delta、Discard物理牌identity、通常・槓時のwall、鳴かれたdiscard、リーチ状態遷移をIssue #11向けに追加実測 |
+| 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15、既存基準環境とは別環境） | Issue #27向けに、未確認7 Action variant（riichi / daiminkan / ankan / kakan / ron / tsumo / kyuushu_kyuuhai）のround-trip、Chi / Pon / Daiminkan / Ronの`target`解決（`Observation.last_discard`）、representative選択に使える物理牌ID、kakan元pon解決とmeld公開状態、`live_wall_tiles_remaining`の情報境界、event重複防止の欠如を追加実測 |
