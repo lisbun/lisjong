@@ -130,23 +130,31 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 
 ## `start_game` / seat bind
 
-**設計判断**(公式field名は未確認、Issue #39本文セクション12の要求を
-具体化): `start_game` eventの`seat` fieldを`int`として読み取り、
+**公式情報**(Issue #39初回レビューで確認): RiichiLab公式Protocolの
+`start_game` eventは、bot seat indexを`seat`ではなく**`id`** fieldで
+表す。公式例は次の形である。
+
+```json
+{"type": "start_game", "id": 0}
+```
+
+**設計判断**: `start_game` eventの`id` fieldを`int`として読み取り、
 `Seat`へ変換して`RiichiLabSeatAdapter(self_seat=Seat.SEAT_0, policy=policy)`
 を1回だけ生成する。
 
-- `seat`が欠落・`bool`・`int`以外・`0`-`3`範囲外の場合はfail closed
+- `id`が欠落・`bool`・`int`以外・`0`-`3`範囲外の場合はfail closed
   (`ProtocolError`)
-- validationでは`seat == 0`を要求する。`0`以外はsilent補正せずfail closed
+- validationでは`id == 0`を要求する。`0`以外はsilent補正せずfail closed
 - `start_game`前に`request_action`を受信した場合はfail closed
-- duplicate `start_game`は安全側で扱う: 同一seatを再度報告した場合は
+- duplicate `start_game`は安全側で扱う: 同一`id`を再度報告した場合は
   既存`RiichiLabSeatAdapter` runtimeをそのまま維持し、作り直さない。
-  異なるseatを報告した場合はfail closed(silent補正しない)
-
-**推測・未確認**: `start_game`の実際のfield名(`seat`という名前自体を
-含む)は、network egress blockにより実サーバーで確認できていない。
-学習者環境でのlive validationで実測し、異なる場合は本書と
-`session.py`の実装を更新する必要がある。
+  異なる`id`を報告した場合はfail closed(silent補正しない)
+- `seat` fieldをfallbackとして併用しない。`{"type": "start_game", "seat": 0}`
+  のように`id`を伴わないeventは、`id`欠落としてfail closedする
+  (初回実装の誤り、`tests/test_riichilab_client_session.py`の
+  `test_legacy_seat_field_alone_is_not_treated_as_id`で回帰防止済み)。
+  `id`と`seat`が両方存在する場合、正本は`id`であり`seat`はunknown extra
+  fieldとしてforward-compatibleに無視する
 
 ## `request_action` / `request_id` lifecycle
 
@@ -357,7 +365,7 @@ raw Observationは表示しない)。失敗時は非zero exit codeを返し、
 `RiichiLabClientError`のtypeとmessageをstderrへ出力する(いずれも
 tokenを含まない)。
 
-live validation実行後、確認できた実際の`start_game` field名、
-Bot-to-Server response schema、`end_game`/`validation_result`の受信
-順序、`action_ack` `rejected`/`unparseable`後のserver側継続有無等を
-本書へ反映することが望ましい。
+live validation実行後、確認できた実際のBot-to-Server response schema、
+`end_game`/`validation_result`の受信順序、`action_ack`
+`rejected`/`unparseable`後のserver側継続有無等を本書へ反映することが
+望ましい。

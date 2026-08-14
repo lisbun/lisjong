@@ -60,8 +60,8 @@ def _fake_adapter_factory(**kwargs):
     return factory
 
 
-def _start_game(seat: int = 0) -> dict:
-    return {"type": "start_game", "seat": seat}
+def _start_game(seat_id: int = 0) -> dict:
+    return {"type": "start_game", "id": seat_id}
 
 
 def _request_action(request_id: int, **extra) -> dict:
@@ -97,20 +97,28 @@ class StartGameTest(unittest.TestCase):
             with self.assertRaises(ProtocolError):
                 session.handle_event(_start_game(1))
 
-    def test_rejects_missing_seat_field(self) -> None:
+    def test_rejects_missing_id_field(self) -> None:
         session = ValidationSession(MinimalPolicy())
         with self.assertRaises(ProtocolError):
             session.handle_event({"type": "start_game"})
 
-    def test_rejects_non_integer_seat(self) -> None:
+    def test_rejects_non_integer_id(self) -> None:
         session = ValidationSession(MinimalPolicy())
         with self.assertRaises(ProtocolError):
-            session.handle_event({"type": "start_game", "seat": "0"})
+            session.handle_event({"type": "start_game", "id": "0"})
 
-    def test_rejects_boolean_seat(self) -> None:
+    def test_rejects_boolean_id(self) -> None:
         session = ValidationSession(MinimalPolicy())
         with self.assertRaises(ProtocolError):
-            session.handle_event({"type": "start_game", "seat": False})
+            session.handle_event({"type": "start_game", "id": False})
+
+    def test_legacy_seat_field_alone_is_not_treated_as_id(self) -> None:
+        # 公式Protocolのseat index fieldは`id`であり、`seat`ではない
+        # (Issue #39初回review blocking finding)。`seat`だけを送る
+        # eventは`id`欠落としてfail closedし続けることを回帰確認する。
+        session = ValidationSession(MinimalPolicy())
+        with self.assertRaises(ProtocolError):
+            session.handle_event({"type": "start_game", "seat": 0})
 
     def test_duplicate_start_game_same_seat_is_safe_noop(self) -> None:
         session = ValidationSession(MinimalPolicy())
@@ -130,7 +138,14 @@ class StartGameTest(unittest.TestCase):
     def test_unknown_extra_field_on_start_game_is_ignored(self) -> None:
         session = ValidationSession(MinimalPolicy())
         with patch(_PATCH_TARGET, _fake_adapter_factory()):
-            session.handle_event({"type": "start_game", "seat": 0, "game_id": "abc"})
+            session.handle_event({"type": "start_game", "id": 0, "game_id": "abc"})
+
+    def test_seat_field_is_treated_as_an_unknown_extra_field(self) -> None:
+        # `id`が正本なので、`seat`が同時に含まれていてもunknown extra
+        # fieldとしてforward-compatibleに無視し、`id`だけで判定する。
+        session = ValidationSession(MinimalPolicy())
+        with patch(_PATCH_TARGET, _fake_adapter_factory()):
+            session.handle_event({"type": "start_game", "id": 0, "seat": 99})
 
 
 class RequestBeforeStartGameTest(unittest.TestCase):

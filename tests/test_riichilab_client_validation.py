@@ -86,7 +86,7 @@ class SeatAdapterMinimalPolicyIntegrationTest(unittest.TestCase):
                 return MinimalPolicy().choose_action(decision)
 
         session = ValidationSession(_RecordingPolicy())
-        session.handle_event({"type": "start_game", "seat": int(seat)})
+        session.handle_event({"type": "start_game", "id": int(seat)})
 
         request = server_style_request_action(observation, request_id=1)
         outgoing = session.handle_event(request)
@@ -129,7 +129,7 @@ class RunValidationEndToEndTest(unittest.TestCase):
 
         request_1 = server_style_request_action(observation, request_id=1)
         incoming = [
-            _event_text({"type": "start_game", "seat": 0}),
+            _event_text({"type": "start_game", "id": 0}),
             _event_text(request_1),
         ]
 
@@ -179,7 +179,7 @@ class RunValidationEndToEndTest(unittest.TestCase):
             asyncio.run(run_validation(MinimalPolicy(), ""))
 
     def test_run_validation_raises_on_unexpected_disconnect(self) -> None:
-        transport = _FakeTransport([_event_text({"type": "start_game", "seat": 0})])
+        transport = _FakeTransport([_event_text({"type": "start_game", "id": 0})])
         captured_tokens: list[str] = []
 
         async def _run():
@@ -206,7 +206,7 @@ class MultiRequestFullGameFakeServerTest(unittest.TestCase):
         observations = env.reset()
 
         session = ValidationSession(MinimalPolicy())
-        session.handle_event({"type": "start_game", "seat": 0})
+        session.handle_event({"type": "start_game", "id": 0})
 
         request_id = 0
         self_requests_processed = 0

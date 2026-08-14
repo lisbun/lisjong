@@ -80,7 +80,7 @@ class TextJsonRoundTripTest(unittest.TestCase):
         session = ValidationSession(MinimalPolicy())
         transport = FakeTransport(
             [
-                _event_text({"type": "start_game", "seat": 0}),
+                _event_text({"type": "start_game", "id": 0}),
                 _event_text(
                     {
                         "type": "request_action",
@@ -127,7 +127,7 @@ class TextJsonRoundTripTest(unittest.TestCase):
     def test_known_event_malformed_field_fails_closed(self) -> None:
         session = ValidationSession(MinimalPolicy())
         transport = FakeTransport(
-            [_event_text({"type": "start_game", "seat": "not-an-int"})]
+            [_event_text({"type": "start_game", "id": "not-an-int"})]
         )
         with self.assertRaises(ProtocolError):
             _run(drive_validation_session(session, transport))
@@ -167,7 +167,7 @@ class SendFailureTest(unittest.TestCase):
         session = ValidationSession(MinimalPolicy())
         transport = FakeTransport(
             [
-                _event_text({"type": "start_game", "seat": 0}),
+                _event_text({"type": "start_game", "id": 0}),
                 _event_text(
                     {
                         "type": "request_action",
@@ -194,7 +194,7 @@ class SendFailureTest(unittest.TestCase):
         session = ValidationSession(MinimalPolicy())
         transport = FakeTransport(
             [
-                _event_text({"type": "start_game", "seat": 0}),
+                _event_text({"type": "start_game", "id": 0}),
                 _event_text(
                     {
                         "type": "request_action",

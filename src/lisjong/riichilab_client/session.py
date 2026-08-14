@@ -187,11 +187,14 @@ class ValidationSession:
         return None
 
     def _handle_start_game(self, event: Mapping) -> None:
-        seat_value = event.get("seat")
+        # 公式RiichiLab Protocolでは、bot seat indexは`seat`ではなく`id`
+        # fieldである(`{"type": "start_game", "id": 0}`、Issue #39初回
+        # review blocking finding)。`seat`をfallbackとして併用しない。
+        seat_value = event.get("id")
         if isinstance(seat_value, bool) or not isinstance(seat_value, int):
-            raise ProtocolError("start_game is missing a valid integer seat")
+            raise ProtocolError("start_game is missing a valid integer id")
         if seat_value not in (0, 1, 2, 3):
-            raise ProtocolError(f"start_game seat out of range: {seat_value!r}")
+            raise ProtocolError(f"start_game id out of range: {seat_value!r}")
         seat = Seat(seat_value)
 
         if self._adapter is not None:
