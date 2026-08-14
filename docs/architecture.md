@@ -14,8 +14,9 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 
 Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具体的な許可fieldと
 意味契約は[Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
-内部Actionの具体的なschema、action identityの詳細とPythonのpackage構成は、
-引き続きIssue #11の後続項目で設計する。
+内部Actionのvariant、field、意味契約は
+[内部Actionモデル](internal-action-model.md)を正本とする。action identityの詳細と
+Pythonのpackage構成は、引き続きIssue #11の後続項目で設計する。
 
 ## 責務境界
 
@@ -56,7 +57,8 @@ seed挙動もPolicy契約へ持ち込まない。
 Policy入力の具体的な許可field、raw event履歴を初期入力へ含めない判断、
 不変性、canonicalizationは
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
-具体的なschemaとaction identityの規則はIssue #11の後続項目で確定する。
+variantとfieldは[内部Actionモデル](internal-action-model.md)で確定する。
+action identityの規則はIssue #11の後続項目で確定する。
 
 ### RiichiEnv Adapter
 
@@ -88,7 +90,8 @@ Adapter自身はPolicy呼び出しを仲介しない。
 materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
 現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定する。状態更新と同期の
-機械的な検証方法、内部Action、action identityの規則は後続で確定する。
+機械的な検証方法とaction identityの規則は後続で確定する。内部Actionのvariantと
+fieldは[内部Actionモデル](internal-action-model.md)を参照する。
 
 ### Local game runner
 
@@ -229,10 +232,11 @@ Policy公開契約では、`Policy`、`choose_action`、`DecisionContext`、
 Policy入力の具体的な許可field、意味契約、不変性、canonicalization、固定rulesetの
 bind方針、初期入力へ含めない情報は
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
+内部Actionのvariant、field、麻雀上の意味、Actionと結果stateの分離は
+[内部Actionモデル](internal-action-model.md)で確定済みである。
 
 次はIssue #11の後続項目で決定するため、本書では確定しない。
 
-- InternalActionのAction種別ごとの具体的なschema
 - action identityの正規化規則
 - 赤牌や`consumed`の具体的なidentity規則
 - 設計用語を表す具体的なPython型の実装方式
@@ -251,7 +255,7 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- Issue #11で扱う内部Action schemaとaction identityの詳細確定
+- Issue #11で扱うaction identityの詳細確定
 - Policy、Adapter、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合

@@ -13,8 +13,9 @@
 
 本書はPolicyへ渡す情報を許可リスト方式で定義する。Pythonの具体的なclass、
 dataclass、enum、collection型、package、module構成は確定しない。
-`InternalAction`の全schemaとaction identityは、Issue #11の後続項目
-「3. 内部Action表現」と「4. Action identity」で確定する。
+`InternalAction`のvariant、field、意味契約は
+[内部Actionモデル](internal-action-model.md)を正本とする。action identityは、
+Issue #11の後続項目「4. Action identity」で確定する。
 
 ## DecisionContext
 
@@ -294,8 +295,7 @@ kakanでは元ponの`called_tile`を維持する。
 
 `melds`は現在状態の所定の順序で保持する。ただし、kakanで既存ponを更新した際に、
 sequence上の位置を元pon成立時の位置に維持するか、kakan発生時点へ移すかは
-未確定である。Issue #11の「3. 内部Action表現」または
-「4. Action identity」で必ず固定する。
+未確定である。Issue #11の「4. Action identity」で必ず固定する。
 
 ## RiichiState
 
@@ -527,16 +527,16 @@ stateにしない。
 - generic `extras`またはarbitrary `dict`
 - runtime `schema_version`
 
-## InternalAction設計への引継ぎ
+## InternalAction設計との関係
 
 RiichiEnv 0.4.8の追加実測では、同じ牌種について、ツモ切りと手出しが別の
 RiichiEnv `Action`でありながら、`to_mjai()`が同一になるケースを確認した。
 
-したがって、Discard `InternalAction`はphysical tile identityを使用せず、
-少なくともtileとtsumogiriの意味差を保持できなければならない。
+この要件を受け、Discard `InternalAction`はphysical tile identityを使用せず、
+tileとtsumogiriの意味差を保持する。詳細は
+[内部Actionモデル](internal-action-model.md)を参照する。
 
-本書では`InternalAction`の全schema、最終的なaction identity、`consumed`の
-正規化規則は確定しない。
+最終的なaction identityと`consumed`の正規化規則は本書で確定しない。
 
 ## 後方互換性
 
@@ -574,7 +574,6 @@ Replay、cross-process Policy、plugin API、persistent serialization等で互�
 
 - Pythonの具体的なclass、enum、collection、package、module構成
 - `Tile`の具体符号化
-- `InternalAction`の全schema
 - action identityと`consumed`の正規化規則
 - kakanで既存ponを更新した際のmeld sequence上の位置
 - 将来`ippatsu_active`等を追加する場合のリーチ宣言牌位置の表現

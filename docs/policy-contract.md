@@ -9,6 +9,8 @@ Policyの公開契約を定める。上位の責務と依存方向は
 [RiichiEnv調査記録](riichienv-investigation.md)を正本とする。
 `DecisionContext`に含まれるPolicy入力の具体的な許可fieldと意味契約は、
 [Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
+Policyが選択する`InternalAction`のvariant、field、意味契約は、
+[内部Actionモデル](internal-action-model.md)を正本とする。
 
 本書の非空な合法手集合等の条件はlisjongの設計判断である。特に、
 RiichiEnvの`legal_actions()`が常に1件以上を返すことを確認済みという意味では
@@ -91,7 +93,9 @@ Policyは`InternalAction`を1件返す。返却Actionは
 - list index
 - 合法手候補の並び順
 
-具体的なaction identityの正規化規則はIssue #11の後続項目で定義する。
+`InternalAction`の具体的なvariantとfieldは
+[内部Actionモデル](internal-action-model.md)で定める。action identityの
+正規化規則はIssue #11の後続項目で定義する。
 
 ## 合法性検証の責務
 
@@ -197,7 +201,6 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 
 次はIssue #11の後続項目または後続Issueで決定し、本書では確定しない。
 
-- InternalActionの具体的なschema
 - action identityの具体的な正規化規則
 - 赤牌や`consumed`等のidentity詳細
 - Python package、module、class構成
@@ -210,3 +213,5 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 
 Policy入力の具体的なfieldと、raw event履歴を初期入力へ含めない判断は、
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
+`InternalAction`のvariant、field、麻雀上の意味、不変条件は、
+[内部Actionモデル](internal-action-model.md)で確定済みである。
