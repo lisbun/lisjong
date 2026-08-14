@@ -40,20 +40,24 @@ _WIND_BY_BAKAZE = {"E": Wind.EAST, "S": Wind.SOUTH, "W": Wind.WEST, "N": Wind.NO
 _WIND_BY_ROUND_WIND_INDEX = {0: Wind.EAST, 1: Wind.SOUTH, 2: Wind.WEST, 3: Wind.NORTH}
 
 # kyoku開始後に届く、特別な状態更新を必要としないevent種別。
-# ankan / kakanはObservation.meldsから直接構築するためここでは扱わない。
+# ankanはObservation.meldsから直接構築するためここでは扱わない。kakanは
+# 別途_dispatch_eventでpending_chankan_actorを更新するため、ここには含めない。
 # hora / ryukyoku / end_kyoku / end_gameはkyoku・対局の終了を表すが、
 # 後続のstart_kyokuが無条件に全stateをresetするため、ここでの個別処理は
 # 不要である。start_game(kyoku開始前に届く)は_dispatch_eventで別途扱う。
-_NO_OP_EVENT_TYPES = frozenset(
-    {"ankan", "kakan", "hora", "ryukyoku", "end_kyoku", "end_game"}
-)
+_NO_OP_EVENT_TYPES = frozenset({"ankan", "hora", "ryukyoku", "end_kyoku", "end_game"})
+
+# 単一のexcept節で複数typeを指定するとparenthesizeが必要になるが、
+# ローカルのruff format実行環境で括弧が意図せず削除される既知の問題が
+# あったため、named constantへ切り出して単一nameのexceptにしている。
+_ROUND_WIND_LOOKUP_ERRORS = (KeyError, TypeError)
 
 
 def wind_from_round_wind_index(value: object) -> Wind:
     """`Observation.round_wind`(int)をlisjong `Wind`へ変換する。"""
     try:
         return _WIND_BY_ROUND_WIND_INDEX[value]
-    except KeyError, TypeError:
+    except _ROUND_WIND_LOOKUP_ERRORS:
         raise AdapterSyncError(f"unrecognized round_wind index: {value!r}") from None
 
 
@@ -84,6 +88,7 @@ class SeatMaterializedState:
         self._riichi_state: list[RiichiState] = [RiichiState.NONE] * 4
         self._dora_indicators: list = []
         self._tsumo_count = 0
+        self._pending_chankan_actor: Seat | None = None
         self._last_applied_observation: object | None = None
 
     @property
@@ -105,6 +110,18 @@ class SeatMaterializedState:
     @property
     def tsumo_count(self) -> int:
         return self._tsumo_count
+
+    @property
+    def pending_chankan_actor(self) -> Seat | None:
+        """直近に適用したeventがkakanだった場合、そのkakanのactor。
+
+        それ以外のeventが1件でも適用されると`None`へ戻る。RiichiEnv 0.4.8の
+        実装事実(`docs/riichienv-investigation.md`の「槍槓(chankan)のtarget
+        解決」)どおり、kakan成立直後に届くchankan ron応答機会のObservationを
+        識別するためだけに使う値であり、それ以外のcontextでkakan発生を推測する
+        用途には使わない。
+        """
+        return self._pending_chankan_actor
 
     def apply_observation(self, observation: object) -> None:
         """このseatの新しいObservationが持つ`new_events()`を1回だけ適用する。
@@ -134,6 +151,13 @@ class SeatMaterializedState:
             raise AdapterSyncError(
                 f"malformed {event_type!r} event: missing {exc}"
             ) from exc
+
+        # pending_chankan_actorは「直近に適用したeventがkakanか」だけを表す
+        # ため、kakan以外のeventが1件でも処理されたらここで必ずNoneへ戻す。
+        if event_type == "kakan":
+            self._pending_chankan_actor = Seat(int(event["actor"]))
+        else:
+            self._pending_chankan_actor = None
 
     def _dispatch_event(self, event_type: object, event: dict) -> None:
         if event_type == "start_kyoku":
@@ -166,6 +190,12 @@ class SeatMaterializedState:
         if event_type == "dora":
             self._dora_indicators.append(tile_from_mjai(event["dora_marker"]))
             return
+        if event_type == "kakan":
+            # Observation.meldsから直接構築するため、meld state自体は
+            # ここでは更新しない。pending_chankan_actorの更新は呼び出し元の
+            # _apply_eventが行う。
+            return
+            return
         if event_type in _NO_OP_EVENT_TYPES:
             return
 
@@ -187,6 +217,7 @@ class SeatMaterializedState:
         self._riichi_state = [RiichiState.NONE] * 4
         self._dora_indicators = [tile_from_mjai(event["dora_marker"])]
         self._tsumo_count = 0
+        self._pending_chankan_actor = None
 
     def _apply_dahai(self, event: dict) -> None:
         actor = Seat(int(event["actor"]))

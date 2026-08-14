@@ -128,12 +128,13 @@ def build_policy_input(
         riichi_state = tracker.riichi_state[seat_index]
         riichi_declared = observation.riichi_declared[seat_index]
         if riichi_declared and riichi_state is RiichiState.NONE:
-            # RiichiEnv 0.4.8実測(docs/riichienv-investigation.md「materialized
-            # state設計への示唆」を参照): riichi_declaredはreach_accepted event
-            # がこのseatのnew_events()へ届く1 Observation前にTrueへ切り替わる
-            # ことがある(宣言牌discardがchi/ponでclaim可能な場合)。DECLAREDと
-            # ACCEPTEDのどちらもこのlagの範囲内として許容するが、reach event
-            # 自体を取りこぼしたことを示すNONEとの組み合わせはfail closedする。
+            # RiichiEnv 0.4.8実測(docs/riichienv-investigation.mdの
+            # 「Issue #28実装時の追加実測」1.を参照): riichi_declaredは
+            # reach_accepted eventがこのseatのnew_events()へ届く1 Observation
+            # 前にTrueへ切り替わることがある(宣言牌discardがchi/ponでclaim
+            # 可能な場合)。DECLAREDとACCEPTEDのどちらもこのlagの範囲内として
+            # 許容するが、reach event自体を取りこぼしたことを示すNONEとの
+            # 組み合わせはfail closedする。
             raise AdapterSyncError(
                 f"Observation reports riichi_declared for seat {seat_index} "
                 "but materialized state is still NONE"
@@ -159,11 +160,22 @@ def build_policy_input(
 
     raw_drawn_tile = observation.drawn_tile
     if raw_drawn_tile is not None and raw_drawn_tile not in observation.hand:
-        # RiichiEnv 0.4.8実測: 槍槓(chankan)のron応答機会では、応答するseatの
-        # drawn_tileがそのseatの手牌にない、kakanで加えられた牌(相手の牌)を
-        # 指す値になる。このseatは実際には何もツモっていないため、
-        # docs/policy-input-schema.mdの「対応するdrawn tileがない場合は
-        # Noneとする」規則をここでも適用し、Noneへ正規化する。
+        if tracker.pending_chankan_actor is None:
+            # 「handにないdrawn_tile」という条件だけでは、未確認の別variantや
+            # 実装不整合を槍槓と取り違えかねない。直近に適用したeventが実際に
+            # kakanであったことを`pending_chankan_actor`で確認できる場合だけ
+            # 槍槓と扱い、それ以外はfail closedする。
+            raise AdapterSyncError(
+                "drawn_tile is not part of this seat's hand, but no kakan "
+                "event was observed immediately before this decision to "
+                "explain it as a chankan ron response opportunity"
+            )
+        # RiichiEnv 0.4.8実測(docs/riichienv-investigation.mdの
+        # 「Issue #28実装時の追加実測」2.を参照): 槍槓(chankan)のron応答機会
+        # では、応答するseatのdrawn_tileがそのseatの手牌にない、kakanで
+        # 加えられた牌(相手の牌)を指す値になる。このseatは実際には何も
+        # ツモっていないため、docs/policy-input-schema.mdの「対応するdrawn
+        # tileがない場合はNoneとする」規則をここでも適用し、Noneへ正規化する。
         raw_drawn_tile = None
 
     own_hand = OwnHandState(

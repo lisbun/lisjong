@@ -125,11 +125,22 @@ class SnapshotProjectionTest(unittest.TestCase):
         self.assertEqual(policy_input.own_hand.drawn_tile, MANZU_1)
         self.assertEqual(len(policy_input.own_hand.concealed_tiles), 13)
 
-    def test_normalizes_drawn_tile_not_in_hand_to_none(self) -> None:
-        # 槍槓のron応答機会の実測(RiichiEnv 0.4.8): drawn_tileが自席の手牌に
-        # ない値になることがある。その場合はNoneへ正規化する。
+    def test_normalizes_drawn_tile_not_in_hand_to_none_when_kakan_just_occurred(
+        self,
+    ) -> None:
+        # 槍槓のron応答機会の実測(RiichiEnv 0.4.8): 直前にkakan eventが観測
+        # されている場合に限り、drawn_tileが自席の手牌にない値になることがある。
+        # その場合はNoneへ正規化する。
         tracker = SeatMaterializedState(Seat.SEAT_0)
-        observation = _initial_observation(hand=[0, 4, 8], drawn_tile=44)
+        observation = _initial_observation(
+            events=[
+                _START_KYOKU,
+                {"type": "tsumo", "actor": 0, "pai": "1m"},
+                {"type": "kakan", "actor": 1, "pai": "1p", "consumed": []},
+            ],
+            hand=[0, 4, 8],
+            drawn_tile=44,
+        )
         policy_input = build_policy_input(tracker, observation)
         self.assertIsNone(policy_input.own_hand.drawn_tile)
 
@@ -282,6 +293,15 @@ class FailClosedSyncTest(unittest.TestCase):
         observation = _initial_observation(
             melds=[[_FakeMeld("Nuki", [120], None, -1)], [], [], []]
         )
+        with self.assertRaises(AdapterSyncError):
+            build_policy_input(tracker, observation)
+
+    def test_rejects_drawn_tile_not_in_hand_without_a_preceding_kakan(self) -> None:
+        # 「handにないdrawn_tile」というだけでは槍槓と断定しない。直前に
+        # kakan eventが観測されていない場合はfail closedする。#28レビュー
+        # (drawn_tile正規化を槍槓以外へ一般化しない)に対応する回帰test。
+        tracker = SeatMaterializedState(Seat.SEAT_0)
+        observation = _initial_observation(hand=[0, 4, 8], drawn_tile=44)
         with self.assertRaises(AdapterSyncError):
             build_policy_input(tracker, observation)
 

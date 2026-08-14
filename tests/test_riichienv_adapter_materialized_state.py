@@ -325,6 +325,58 @@ class NoOpEventTest(unittest.TestCase):
         self.assertEqual(tracker.tsumo_count, 0)
 
 
+class PendingChankanActorTest(unittest.TestCase):
+    def test_none_before_any_kakan(self) -> None:
+        tracker = _tracker_after_start_kyoku()
+        self.assertIsNone(tracker.pending_chankan_actor)
+
+    def test_set_to_kakan_actor_immediately_after_kakan_event(self) -> None:
+        tracker = _tracker_after_start_kyoku()
+        tracker.apply_observation(
+            _FakeObservation(
+                0, [{"type": "kakan", "actor": 2, "pai": "1p", "consumed": []}]
+            )
+        )
+        self.assertEqual(tracker.pending_chankan_actor, Seat.SEAT_2)
+
+    def test_cleared_by_any_subsequent_event(self) -> None:
+        tracker = _tracker_after_start_kyoku()
+        tracker.apply_observation(
+            _FakeObservation(
+                0,
+                [
+                    {"type": "kakan", "actor": 2, "pai": "1p", "consumed": []},
+                    {"type": "tsumo", "actor": 1, "pai": "?"},
+                ],
+            )
+        )
+        self.assertIsNone(tracker.pending_chankan_actor)
+
+    def test_cleared_by_start_kyoku(self) -> None:
+        tracker = _tracker_after_start_kyoku()
+        tracker.apply_observation(
+            _FakeObservation(
+                0, [{"type": "kakan", "actor": 2, "pai": "1p", "consumed": []}]
+            )
+        )
+        tracker.apply_observation(
+            _FakeObservation(
+                0,
+                [
+                    {
+                        "type": "start_kyoku",
+                        "bakaze": "E",
+                        "kyoku": 2,
+                        "honba": 0,
+                        "oya": 1,
+                        "dora_marker": "2p",
+                    }
+                ],
+            )
+        )
+        self.assertIsNone(tracker.pending_chankan_actor)
+
+
 class FailClosedTest(unittest.TestCase):
     def test_rejects_event_before_any_start_kyoku(self) -> None:
         tracker = SeatMaterializedState(Seat.SEAT_0)
