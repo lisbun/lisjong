@@ -12,9 +12,10 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 推測・未確認事項、設計判断の区別は
 [RiichiEnv調査記録](riichienv-investigation.md)を正本とする。
 
-Policyの公開契約は[Policy契約](policy-contract.md)を正本とする。Policy入力の
-具体的なfield、内部Actionの具体的なschema、action identityの詳細と、Pythonの
-package構成は、引き続きIssue #11の後続項目で設計する。
+Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具体的な許可fieldと
+意味契約は[Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
+内部Actionの具体的なschema、action identityの詳細とPythonのpackage構成は、
+引き続きIssue #11の後続項目で設計する。
 
 ## 責務境界
 
@@ -52,8 +53,10 @@ Policy呼び出し境界で`DecisionContext.legal_actions`と照合する。acti
 bit-exactな再現性を要求しない。RiichiEnv constructorや`reset(seed=...)`の
 seed挙動もPolicy契約へ持ち込まない。
 
-Policy入力の具体的なfield、event履歴の採否、内部Actionの具体的なschema、
-action identityの規則はIssue #11の後続項目で確定する。
+Policy入力の具体的な許可field、raw event履歴を初期入力へ含めない判断、
+不変性、canonicalizationは
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
+具体的なschemaとaction identityの規則はIssue #11の後続項目で確定する。
 
 ### RiichiEnv Adapter
 
@@ -61,12 +64,18 @@ RiichiEnv Adapterは、seat別のRiichiEnv外部型とlisjong内部型の間を�
 
 - RiichiEnvの`Observation`と合法な`Action`を、Policyが扱う環境非依存の
   入力と合法手へ変換する
+- seat-visibleなObservationとevent deltaを継続的に処理し、Policy入力の生成に
+  必要なseat別の現在状態を正規化してmaterializeしてよい
+- Policy入力を生成するとき、materialized state、Observation、合法手を
+  同じseat・同じdecision時点まで同期する
 - Policyが選択した内部actionを、同じseatの
   `Observation.legal_actions()`に含まれるRiichiEnv `Action`へ対応付ける
 - Action要求先のplayer IDとObservation内のplayer IDの整合性を確認する
 - seatごとの可視性を維持し、別seatの観測や合法手を混同しない
 - Policyの選択結果を外部環境へ返す前に、元の合法手に対して再検証する
 - `Observation.to_dict()`やevent履歴を無加工・全量でPolicyへ渡さない
+- materialized stateへ他家の非公開情報、完全な山、`env.mjai_log`、Policyの
+  過去判断、AI内部memory、transport固有情報を含めない
 - 対局loop、環境の生成・初期化、学習アルゴリズム、Policy固有の判断を所有しない
 - Policyを呼び出さず、Policy判断の実行順序や複数seatのオーケストレーションを
   所有しない
@@ -76,8 +85,10 @@ Local game runnerまたはRiichiLab Clientが、AdapterとPolicy contractをそ�
 利用してPolicy判断を実行し、選択結果をAdapterへ戻して対応付け・再検証する。
 Adapter自身はPolicy呼び出しを仲介しない。
 
-変換後の具体的なPolicy入力、内部Action、action identityの規則はIssue #11で
-確定する。
+materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
+現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。状態更新と同期の
+機械的な検証方法、内部Action、action identityの規則は後続で確定する。
 
 ### Local game runner
 
@@ -111,6 +122,10 @@ RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycle�
 - 認証、接続、受信、送信、timeout・time budget、ack、終了処理を担当する
 - `request_action`を受信し、必要なRiichiEnv SDK機能を使ってserialized
   observationをRiichiEnvの`Observation`として復元する
+- serialized Observation、seat-visibleなevent delta、online session内の
+  seat別現在状態から、Policy入力の生成に必要なmaterialized stateを維持してよい
+- Policy入力を生成するとき、materialized state、復元したObservation、合法手を
+  同じseat・同じdecision時点まで同期する
 - 復元したObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
   Policy入力と合法な内部action候補へ変換する
 - Policy contractを通じてPolicy判断を実行し、共通のPolicy呼び出し境界で
@@ -124,6 +139,11 @@ RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycle�
   ゲーム途中からの再接続・復旧を試みない
 - tokenをログ、例外、Replay、test fixtureへ含めない
 - Policy固有の判断や学習処理を所有しない
+
+RiichiLab Clientが保持してよいmaterialized stateは、Policy入力に必要な
+seat-visibleな現在状態の正規化に限る。Policyの過去判断、AI内部memory、
+非公開情報を含めず、requestやtransport固有情報をPolicy入力へ混入させない。
+具体的なcounter algorithmと同期testは後続実装で確定する。
 
 途中再接続を将来にわたって禁止するものではない。RiichiLabの仕様と必要性を
 確認し、別Issueで合意した場合に限り、初期スコープ外の機能として検討する。
@@ -188,11 +208,14 @@ Issue #3のRiichiEnv 0.4.8に対する実測では、`env.mjai_log`の
 - 完全対局ログを保持する責務と、seat別Policy入力を生成する責務を分離する
 - AdapterとClientの変換testでは、値の対応だけでなく禁止情報が欠落している
   ことも確認する
+- 固定rulesetは各`DecisionContext`へ複製せず、明示的で不変なPolicy
+  configurationとしてPolicy instanceへbindする
 
 他家の未公開牌、山の並び、将来のevent、環境内部だけが持つ完全状態は
 Policyへ渡さない。Issue #3で確認したseat別eventのmaskだけから
 `Observation`の全fieldが安全であるとは一般化しない。Policy入力へ採用する
-具体的なfieldとevent履歴の採否はIssue #11で確定する。
+具体的な許可field、materialized state、raw event履歴を初期入力へ含めない判断は
+[Policy入力の最小スキーマ](policy-input-schema.md)を参照する。
 
 ## 確定事項と未決定事項
 
@@ -203,13 +226,15 @@ Policy公開契約では、`Policy`、`choose_action`、`DecisionContext`、
 `InternalAction`を設計上の用語として一貫して使用する。具体的なPython宣言は
 実装時に契約を損なわない形で定義する。
 
+Policy入力の具体的な許可field、意味契約、不変性、canonicalization、固定rulesetの
+bind方針、初期入力へ含めない情報は
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
+
 次はIssue #11の後続項目で決定するため、本書では確定しない。
 
-- Policy入力の具体的な全field
 - InternalActionのAction種別ごとの具体的なschema
 - action identityの正規化規則
 - 赤牌や`consumed`の具体的なidentity規則
-- event履歴をPolicy入力へ含めるかどうか
 - 設計用語を表す具体的なPython型の実装方式
 - Python package、module、classの構成
 
@@ -226,8 +251,7 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- Issue #11で扱うPolicy入力の具体field、内部Action schema、action identityの
-  詳細確定
+- Issue #11で扱う内部Action schemaとaction identityの詳細確定
 - Policy、Adapter、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
