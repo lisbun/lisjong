@@ -14,8 +14,8 @@
 本書はPolicyへ渡す情報を許可リスト方式で定義する。Pythonの具体的なclass、
 dataclass、enum、collection型、package、module構成は確定しない。
 `InternalAction`のvariant、field、意味契約は
-[内部Actionモデル](internal-action-model.md)を正本とする。action identityは、
-Issue #11の後続項目「4. Action identity」で確定する。
+[内部Actionモデル](internal-action-model.md)、semantic identityと外部合法候補との
+対応は[Action identity](action-identity.md)を正本とする。
 
 ## DecisionContext
 
@@ -295,7 +295,8 @@ kakanでは元ponの`called_tile`を維持する。
 
 `melds`は現在状態の所定の順序で保持する。ただし、kakanで既存ponを更新した際に、
 sequence上の位置を元pon成立時の位置に維持するか、kakan発生時点へ移すかは
-未確定である。Issue #11の「4. Action identity」で必ず固定する。
+未確定である。これはAction identityではなく、結果stateのcanonicalizationとして
+materialized stateの更新規則と同期testを設計する際に決定する。
 
 ## RiichiState
 
@@ -438,7 +439,7 @@ legal_actions
 | --- | --- |
 | `players` | seat 0から3の順 |
 | `discards` | 各seatの打牌順。各entryはglobal `order`を持つ |
-| `melds` | 現在meldの所定の順序。kakan更新時の順序規則は後続で確定 |
+| `melds` | 現在meldの所定の順序。kakan更新時の順序規則は結果stateのcanonicalizationとして後続で確定 |
 | `dora_indicators` | 公開順 |
 | `concealed_tiles` | 意味上順序なし。canonical order |
 | `PublicMeld.tiles` | multisetとしてcanonical representation |
@@ -536,7 +537,8 @@ RiichiEnv `Action`でありながら、`to_mjai()`が同一になるケースを
 tileとtsumogiriの意味差を保持する。詳細は
 [内部Actionモデル](internal-action-model.md)を参照する。
 
-最終的なaction identityと`consumed`の正規化規則は本書で確定しない。
+action identityと`consumed`の正規化規則は
+[Action identity](action-identity.md)を正本とする。
 
 ## 後方互換性
 
@@ -574,7 +576,7 @@ Replay、cross-process Policy、plugin API、persistent serialization等で互�
 
 - Pythonの具体的なclass、enum、collection、package、module構成
 - `Tile`の具体符号化
-- action identityと`consumed`の正規化規則
+- Pythonでの具体的なaction equality、hash、canonical key表現
 - kakanで既存ponを更新した際のmeld sequence上の位置
 - 将来`ippatsu_active`等を追加する場合のリーチ宣言牌位置の表現
 - `live_wall_tiles_remaining`をlocalとonlineで生成する具体的なcounter algorithm

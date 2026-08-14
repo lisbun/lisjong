@@ -16,7 +16,7 @@
 本書は`InternalAction`のvariant、field、麻雀上の意味、不変条件を定める。
 具体的なPythonのclass、dataclass、enum、tagged union、Protocol、ABC、package、
 module構成は確定しない。semantic equality、canonicalization、deduplication、
-外部合法Actionとの一意対応は、Issue #11の「4. Action identity」で確定する。
+外部合法Actionとの対応は[Action identity](action-identity.md)を正本とする。
 
 RiichiEnv調査記録で未実測とされているAction種別やRiichiLabオンライン経路を、
 本書によって実測済みへ格上げしない。本書のvariantとfieldはlisjongの設計判断で
@@ -84,7 +84,8 @@ action.actor == DecisionContext.input.self_seat
 この不変条件により、Action単体で主体を明示し、複数seatが同時に判断を要求された
 場合の混線を検出できる。`turn`、`phase`、`next_player`はActionへ持たせない。
 
-`actor`をaction identityへ含めるかは「4. Action identity」で確定する。
+`actor`は[Action identity](action-identity.md)で、すべてのvariantのsemantic
+identityへ含める。
 
 ## 不変条件の区分
 
@@ -96,7 +97,8 @@ action.actor == DecisionContext.input.self_seat
 | Context整合条件 | 同じdecisionのPolicyInput、materialized state、legal candidateとの照合が必要 | 対象discardが直前のclaim対象であること、Kakan対象の元Ponが存在すること |
 
 どちらも合法な内部Action候補を生成する境界で満たす必要がある。ただし、
-具体的な照合方法とaction identityは本書で確定しない。
+具体的なContext整合検証の実装方法は本書で確定しない。semantic identityは
+[Action identity](action-identity.md)を参照する。
 
 ## Tileに関する共通用語
 
@@ -113,7 +115,8 @@ action.actor == DecisionContext.input.self_seat
 本書の「同じ麻雀牌種」は、赤牌か通常牌かの差を無視した基礎牌種が同じことを
 意味する。一方、各fieldに保持する`Tile`値は赤牌差を失わない。
 
-具体的な符号化とcanonical representationは後続で決定する。
+具体的な符号化は後続で決定する。Tile identityは基礎牌種と赤牌区分で構成し、
+physical copyを含めない。詳細は[Action identity](action-identity.md)を参照する。
 
 ## DiscardAction
 
@@ -176,7 +179,8 @@ Context整合条件として、`target`と`called_tile`は同じdecisionでclaim
 ならない。
 
 `consumed_tiles`は赤牌差を保持する。並び順に麻雀上の意味を持たせず、具体的な
-canonicalizationは「4. Action identity」で確定する。
+semantic identityでは順序なしmultisetとしてcanonicalizeする。詳細は
+[Action identity](action-identity.md)を参照する。
 
 ## PonAction
 
@@ -201,7 +205,8 @@ Context整合条件として、`target`と`called_tile`は同じdecisionでclaim
 打牌に対応し、`consumed_tiles`はactorのconcealed handから使用可能でなければ
 ならない。
 
-赤牌差は保持する。`consumed_tiles`の並び順とsemantic identityは後続で確定する。
+赤牌差は保持する。`consumed_tiles`はsemantic identity上、順序なしmultisetとして
+比較する。
 
 ## DaiminkanAction
 
@@ -226,7 +231,8 @@ Context整合条件として、`target`と`called_tile`は同じdecisionでclaim
 打牌に対応し、`consumed_tiles`はactorのconcealed handから使用可能でなければ
 ならない。
 
-赤牌差は保持する。`consumed_tiles`の並び順とsemantic identityは後続で確定する。
+赤牌差は保持する。`consumed_tiles`はsemantic identity上、順序なしmultisetとして
+比較する。
 
 ## AnkanAction
 
@@ -251,7 +257,8 @@ Context整合条件として、4枚はactorのconcealed handから使用可能�
 decisionでankanが合法でなければならない。
 
 `tiles`の並び順に意味を持たせない。RiichiEnvのphysical tile IDを含めず、
-具体的なcanonicalizationは「4. Action identity」で確定する。
+semantic identityでは順序なしmultisetとしてcanonicalizeする。詳細は
+[Action identity](action-identity.md)を参照する。
 
 牌種だけのfieldにしない。`AnkanAction(actor, tile_kind)`では赤牌構成が失われるため、
 PolicyInput、PublicMeld、InternalActionで共通する`Tile`概念を使用する。
@@ -288,13 +295,13 @@ Context整合条件は次である。
 - Python object identity
 - `PublicMeld` objectへの直接参照
 
-元Ponを外部または実装object identityで識別しない。次は「4. Action identity」で
-確定する。
+元Ponを外部または実装object identityで識別しない。同じContextで`from_seat`と
+`called_tile`に対応する元Ponをちょうど1件へ照合する。0件または複数件なら
+fail closedとする。semantic identityと外部合法Actionへの対応は
+[Action identity](action-identity.md)を参照する。
 
-- このfield構成で元Ponをsemanticに一意特定する規則
-- 赤牌差のidentity上の扱い
-- RiichiEnv合法Actionへの一意対応
-- Kakan後のmeld sequence位置
+Kakan後のmeld sequence位置はAction identityではなく結果stateの
+canonicalizationであり、materialized stateの更新規則を設計する際に決定する。
 
 ## RonAction
 
@@ -390,23 +397,18 @@ KakanAction
 Actionは今何を選ぶかを表し、PublicMeld等は現在どのような状態かを表す。
 state mutation、手番更新、局進行はInternalActionへ埋め込まない。
 
-## 「4. Action identity」への引継ぎ
+## Action identityとの関係
 
-本書はfieldの存在と意味を定義するが、そのfieldを理由にidentity規則まで暗黙に
-確定した扱いにしない。少なくとも次を「4. Action identity」で決定する。
+variant、`actor`、variant固有のsemantic fieldから構成するidentity、Tileの赤牌区分、
+`consumed_tiles`およびAnkan `tiles`のmultiset比較、Kakan元PonのContext照合、
+Ron / Tsumoの`winning_tile`比較は
+[Action identity](action-identity.md)を正本とする。
 
-- `actor`をidentityへ含めるか
-- `consumed_tiles`および`tiles`のcanonicalization
-- collection順序の比較規則
-- 赤牌差を各variantのidentityへ反映する規則
-- 同じ通常牌を表す複数のphysical RiichiEnv Actionをdeduplicateする規則
-- Kakanの元Ponに対するsemantic identity
-- Kakan後のmeld sequence規則
-- RonおよびTsumoの`winning_tile`をidentity比較へ使用する規則
-- variant全体のsemantic equality
-- RiichiEnv合法ActionからInternalActionを生成し、Policy選択後に元の合法Actionへ
-  一意に対応付ける規則
-- RiichiLab `possible_actions`との具体的な照合規則
+同じsemantic identityへ正規化される複数のexternal candidateはPolicyへ渡す前に
+集約し、decision-local mappingで外部候補を保持する。Pythonの具体的なequality、
+hash、canonical key、外部環境ごとのrepresentative tie-breakは後続実装で定める。
+RiichiLab `possible_actions`の具体的なtranslationと照合規則は、未実測事項として
+後続へ残す。
 
 ## 後続実装testへの引継ぎ
 
