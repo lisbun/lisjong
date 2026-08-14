@@ -25,6 +25,7 @@ _EXPECTED_NAMES = (
 _PROBE_SCRIPT = (
     "import sys\n"
     "import lisjong.policy_contract as module\n"
+    "import lisjong.policies\n"
     "assert 'riichienv' not in sys.modules, sorted(sys.modules)\n"
     + "\n".join(
         f"assert hasattr(module, {name!r}), {name!r}" for name in _EXPECTED_NAMES
@@ -33,11 +34,11 @@ _PROBE_SCRIPT = (
 
 
 class PolicyContractImportTest(unittest.TestCase):
-    def test_imports_without_riichienv(self) -> None:
+    def test_policy_contract_and_policies_import_without_riichienv(self) -> None:
         # `python -m unittest discover`は全test moduleを同一processへimportする
         # ため、riichienvへ正当に依存するtest(tests/test_riichienv_adapter_*.py)が
         # 同じ実行に含まれると、共有sys.modulesではこのpackage自体の依存を
-        # 検証できない。独立したsubprocessでlisjong.policy_contractだけを
+        # 検証できない。独立したsubprocessでlisjong.policy_contractとpoliciesを
         # importし、riichienvが道連れでimportされないことを確認する。
         result = subprocess.run(
             [sys.executable, "-c", _PROBE_SCRIPT],
