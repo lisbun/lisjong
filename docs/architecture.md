@@ -93,10 +93,36 @@ Adapter自身はPolicy呼び出しを仲介しない。
 
 materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
 現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
-[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。状態更新と同期の
-機械的な検証方法は後続で確定する。内部Actionのvariantとfieldは
-[内部Actionモデル](internal-action-model.md)、semantic identityと外部候補との
-対応は[Action identity](action-identity.md)を参照する。
+[Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
+variantとfieldは[内部Actionモデル](internal-action-model.md)、semantic
+identityと外部候補との対応は[Action identity](action-identity.md)を参照する。
+
+#### `riichienv_adapter` package (Issue #28)
+
+`src/lisjong/riichienv_adapter/`は、上記責務のうち「seat-visible
+materialized stateの同期」と「`PolicyInput`生成」をIssue #28で実装した
+Python packageである。RiichiEnv legal ActionをInternalActionへ対応付ける
+decision-local mapping、Policy呼び出し、Local game runnerは対象外とし、
+Issue #29/#23へ引き継ぐ。
+
+- `SeatMaterializedState`は1つのself_seat視点について、
+  `Observation.new_events()`から discard順序・tsumogiri・`called_by`、
+  riichi段階(NONE/DECLARED/ACCEPTED)、公開済みdora indicator、live wall
+  算出用のtsumo event数、kyoku identity(場風・局・本場・親)を同期する
+- `build_policy_input()`は、`SeatMaterializedState`と現在の`Observation`を
+  同じseat・同じdecision時点まで突き合わせ、一致しない場合は`PolicyInput`を
+  生成せず`AdapterSyncError`を送出する
+- 公開副露(meld)state自体は独自に追跡せず、`Observation.melds`を毎decision
+  直接`PublicMeld`へ変換する。RiichiEnv 0.4.8実測(kakan成立時に既存Pon要素を
+  in-place更新し、sequence上の位置も維持する)がこの設計を裏付けている
+- RiichiEnvの物理牌ID(0-135)とMJAI牌文字列の両方を、実測に基づき
+  `tile_conversion.py`でlisjong `Tile`へ変換する。物理牌IDはOwnHandStateと
+  現在meld、MJAI文字列はevent由来の値(discard、dora indicator等)に使う
+- `policy_contract` / `policies`とは異なり、このpackageは`riichienv`へ
+  runtime dependencyとして依存する。依存の逆流はさせない
+
+このpackageは`lisjong.policy_contract`とは別packageであり、後述の
+「共通Policy契約package」がRiichiEnv非依存を維持する境界を壊さない。
 
 ### Local game runner
 

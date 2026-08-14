@@ -175,9 +175,21 @@ Python実装は入力順を変更せずtupleへ正規化する。`RoundState`値
 `len(env.wall)`そのものをPolicy契約にしない。
 
 RiichiEnv調査記録では、通常ツモとdaiminkan、ankan、kakan後の嶺上ツモに伴う
-wall変化をRiichiEnv 0.4.8で実測している。一方、localとonlineの双方で同じ値を
-生成する具体的なcounter algorithmは未確定であり、後続のAdapter実装とtestで
-検証する。fieldの意味契約と具体的な算出方法を分離する。
+wall変化をRiichiEnv 0.4.8で実測している。RiichiEnv Adapter実装(Issue #28)では、
+`Observation`だけからこの値を再構築できるよう、次の算出方法を採用した。
+
+```text
+live_wall_tiles_remaining = 84 - (そのkyokuのstart_kyoku以降に発生した
+                                   tsumo event数。dealerの最初の1枚を含む)
+```
+
+`RiichiEnv`本体が公開する`turn_count`等の内部counterは`Observation`側には
+存在しないため、seat-visible `new_events()`中の`"tsumo"` event数を数える
+方式を実装の正本とする。この式は`docs/riichienv-investigation.md`の
+「`live_wall_tiles_remaining`のcounter algorithm」で10,579 + 3,569ステップ・
+不一致0件まで検証済みであり、`src/lisjong/riichienv_adapter/`の実装と
+testでも踏襲する。3人麻雀および実際のRiichiLabオンライン経路での同値性は
+未確認のまま引き継ぐ。
 
 ## PlayerPublicState
 
@@ -305,10 +317,16 @@ kakanでは元ponの`called_tile`を維持する。
 
 ### kakan時のmeld順序
 
-`melds`は現在状態の所定の順序で保持する。ただし、kakanで既存ponを更新した際に、
-sequence上の位置を元pon成立時の位置に維持するか、kakan発生時点へ移すかは
-未確定である。これはAction identityではなく、結果stateのcanonicalizationとして
-materialized stateの更新規則と同期testを設計する際に決定する。
+`melds`は現在状態の所定の順序で保持する。kakanで既存ponを更新した際、
+sequence上の位置は元pon成立時の位置を維持する。これはAction identityではなく、
+結果stateのcanonicalizationである。
+
+RiichiEnv Adapter実装(Issue #28)では、`Observation.melds`自体がkakan成立時に
+既存Pon要素をKakanへin-place更新し(`from_who` / `called_tile`は元Ponの値を
+保持したまま)、list上の位置も変えないことを実測・実装の両方で確認した
+(`docs/riichienv-investigation.md`の「kakan元pon解決とmeld公開状態」)。
+そのためAdapterはdecisionごとに`Observation.melds`を直接`PublicMeld`へ
+変換するだけでよく、meld履歴を独自に追跡・更新する必要はない。
 
 ## RiichiState
 
@@ -460,8 +478,13 @@ Observation
 legal_actions
 ```
 
-機械的な検証方法は、後続のAdapter実装とtestで具体化する。同期条件を後続Issueの
-明示的なtest項目へ引き継ぐ。
+`materialized state`と`Observation`の機械的な検証方法は、Issue #28で
+`src/lisjong/riichienv_adapter/`として実装した。`SeatMaterializedState`が
+seat-visible eventから同期したkyoku identity(場風・局・本場・親)、discard
+multiset、dora indicator数、riichi段階を、`build_policy_input()`が現在の
+`Observation`と突き合わせ、一致しない場合は`PolicyInput`を生成せず
+`AdapterSyncError`を送出する。`legal_actions`との同期検証は、RiichiEnv legal
+ActionをInternalActionへ対応付ける後続Issue(#29)のスコープとして引き継ぐ。
 
 ## Canonicalization
 
@@ -615,8 +638,13 @@ Adapter等の後続実装では、少なくとも次を確認する。
 
 次は後続設計または実装で確定する。
 
-- kakanで既存ponを更新した際のmeld sequence上の位置
 - 将来`ippatsu_active`等を追加する場合のリーチ宣言牌位置の表現
-- `live_wall_tiles_remaining`をlocalとonlineで生成する具体的なcounter algorithm
-- materialized state、Observation、`legal_actions`の同期を機械的に検証する方法
+- `live_wall_tiles_remaining`を実際のRiichiLabオンライン経路、3人麻雀でも
+  同一algorithmで再構成できるか(RiichiEnv Adapter側は#28で確定済み)
+- materialized stateと`legal_actions`の同期を機械的に検証する方法
+  (materialized stateと`Observation`の同期はAdapter側で#28で実装済み)
 - `own_furiten`、`ippatsu_active`、正規化済みevent等の将来拡張
+
+kakanで既存ponを更新した際のmeld sequence上の位置は、RiichiEnv Adapter実装
+(Issue #28)で「元pon成立時の位置を維持する」と確定した。詳細は前掲の
+「kakan時のmeld順序」を参照する。
