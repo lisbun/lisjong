@@ -369,7 +369,7 @@ drawn_tileがmultisetとしてconcealed_tiles内に存在する
 
 ## Tileの意味契約
 
-具体的な符号化はIssue #11の後続項目で確定する。初期schemaでは次の意味を
+具体的な符号化はIssue #20で確定する。初期schemaでは次の意味を
 固定する。
 
 - lisjong内部の麻雀牌値である

@@ -175,6 +175,65 @@ Python表現は固定しない。どの表現でも次を満たす。
 - physical tile copyの差を要素へ持ち込まない
 - Python hashだけをidentityの正本にしない
 
+## RiichiEnv ActionからInternalActionへの代表変換例
+
+本節は新しいAction設計を追加するものではない。RiichiEnv 0.4.8の実測記録と、
+本書および[内部Actionモデル](internal-action-model.md)で確定済みの設計を対応付け、
+Issue #11の設計確認例として整理する。
+
+### 実測した範囲
+
+[RiichiEnv調査記録](riichienv-investigation.md)では、各`Observation`の
+`legal_actions()`について次の経路を実行した。
+
+```text
+Action
+  -> Action.to_mjai()
+  -> json.loads()
+  -> Observation.select_action_from_mjai()
+  -> Action
+```
+
+90 stepの実行経路で、通常牌打牌、赤牌を含む打牌、chi、pon、noneが出現し、
+round-tripに成功した。赤牌のMJAI表現として`5pr`、`5sr`が出現した。一方、ron、
+tsumo agari、riichi、kan各種はこの一括probeに出現せず、完全なround-tripは
+未確認である。RiichiLab `possible_actions`との変換も未実測である。
+
+### 確定済み設計への正規化
+
+次の表の「実測」はAction種別とround-tripの確認範囲を表す。「正規化」は、
+その実測を根拠としてlisjongで確定した設計判断である。保存されていない局面の
+physical tile ID、`actor`、`target`、`consumed_tiles`の具体値は例示しない。
+
+| RiichiEnv 0.4.8で実測した操作 | 変換境界が取得・検証する意味情報 | lisjongへの正規化結果 |
+| --- | --- | --- |
+| 通常牌打牌 | 同じdecisionのRiichiEnv `Action`、`Observation`、seat-visible contextから`actor`、牌種、赤牌区分、手出し / ツモ切りを取得・検証する。physical tile copy IDは除外する | `DiscardAction(actor, tile, tsumogiri)` |
+| 赤牌打牌 | MJAI表面では`5pr`、`5sr`等が実測された。境界でMJAI文字列そのものではないlisjong `Tile`へ変換し、red distinctionを保持する。physical tile copy IDは除外する | `DiscardAction(actor, tile, tsumogiri)`。`tile`が赤牌区分を保持する |
+| chi | 同じdecisionのRiichiEnv `Action`、`Observation`、seat-visible contextから`actor`、`target`、`called_tile`、自席から使用する2枚を取得・検証する。各牌をlisjong `Tile`へ変換する | `ChiAction(actor, target, called_tile, consumed_tiles)` |
+| pon | 同じdecisionのRiichiEnv `Action`、`Observation`、seat-visible contextから`actor`、`target`、`called_tile`、自席から使用する2枚を取得・検証する。各牌をlisjong `Tile`へ変換する | `PonAction(actor, target, called_tile, consumed_tiles)` |
+| none | 外部のnoneを、Policyが値を返さない状態ではなく、当該seatが応答機会をpassする明示的な選択として正規化する | `PassAction(actor)` |
+
+chiおよびponの`consumed_tiles`はphysical copy identityを持たず、赤牌構成と重複枚数を
+保持する。semantic identityでは順序なしmultisetとして比較する。
+
+noneを`None`、空の`legal_actions`、Actionなしへ変換しない。passが合法なdecision
+では、`PassAction(actor)`を明示的なlegal candidateとしてPolicyへ渡す。
+
+### `to_mjai()`だけに依存しない変換
+
+上記round-tripは外部変換経路の実測であり、RiichiEnv Adapterの正規化algorithmを
+`to_mjai()`だけで構成するという意味ではない。
+
+RiichiEnv 0.4.8の追加実測では、同じ牌種の別physical Discard Actionが同一の
+MJAI打牌へ変換されながら、`is_drawn`等の差によって手出し / ツモ切りという
+semantic differenceを持つケースを確認した。このため、変換境界は同じdecisionの
+RiichiEnv `Action`、`Observation`、seat-visible contextを合わせて使用し、
+`DiscardAction.tsumogiri`を取得・検証する。
+
+通常牌のphysical copy差だけで麻雀上の意味差がない候補は同じsemantic groupへ
+集約できる。一方、手出し / ツモ切り差、通常牌 / 赤牌差、chi / ponの
+`consumed_tiles`の赤牌構成差は別のsemantic identityとして保持する。
+
 ## External Actionのsemantic aggregation
 
 外部環境は、同じsemantic identityへ正規化される複数のphysical candidateを返す
@@ -324,9 +383,14 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 - 通常牌と赤牌の差があればidentityが一致しない
 - 同じ通常牌のphysical copy差だけならidentityが一致する
 - Discardの`tsumogiri`差があればidentityが一致しない
+- RiichiEnv Discard変換が`to_mjai()`だけに依存せず、手出し / ツモ切り差を保持する
+- RiichiEnv赤牌打牌がMJAI文字列ではなく、red distinctionを持つlisjong `Tile`へ
+  変換される
 - `consumed_tiles`の順序差だけならidentityが一致する
 - `consumed_tiles`の赤牌構成または重複枚数差があればidentityが一致しない
+- RiichiEnv chi / pon変換でphysical copy identityを除外し、赤牌構成を保持する
 - Ankan `tiles`の順序差だけならidentityが一致する
+- RiichiEnv noneが`None`や空集合ではなく、明示的な`PassAction`へ変換される
 - Kakan元Ponが0件または複数件ならfail closedとなる
 - 複数external candidateから1つのsemantic InternalActionを生成する
 - 意味差を確認できないexternal candidateを同じgroupへ集約しない
@@ -349,4 +413,3 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 - RiichiLab `possible_actions`の具体schema、translation、serialization、照合規則
 - 具体的な例外class、timeout、終了または切断処理
 - Adapter、Policy、Runner、Clientの本実装
-

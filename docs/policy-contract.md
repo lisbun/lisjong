@@ -204,7 +204,7 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 
 ## 後続項目
 
-次はIssue #11の後続項目または後続Issueで決定し、本書では確定しない。
+次はIssue #20または各componentの後続実装Issueで決定し、本書では確定しない。
 
 - Pythonでの具体的なaction equality、hash、canonical key表現
 - `Tile`の具体符号化

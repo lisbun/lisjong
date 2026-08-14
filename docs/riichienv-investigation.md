@@ -430,7 +430,7 @@ drawn tileと同種牌をもう1枚持つ局面で、次の2件が別々の合�
 
 同じ局面では、drawn tileではない同種牌の複数合法Actionとして、物理牌ID `85`と`86`がいずれもMJAI牌`"4s"`へ変換される例も確認した。RiichiEnvの物理牌identity上は別Actionでも、MJAI表現上は同一になる場合がある。
 
-この実測は、RiichiEnvの物理牌IDをPolicyへそのまま持ち込まず、物理牌差がゲーム上の意味差を生む場合だけ意味fieldへ正規化する判断を支持する。特にdrawn tileと同種牌を捨てる場合の手出し / ツモ切り差は保持する必要がある。ただし、Discard InternalActionの具体的なidentityはIssue #11の後続設計で確定する。
+この実測は、RiichiEnvの物理牌IDをPolicyへそのまま持ち込まず、物理牌差がゲーム上の意味差を生む場合だけ意味fieldへ正規化する判断を支持する。特にdrawn tileと同種牌を捨てる場合の手出し / ツモ切り差は保持する必要がある。確定したDiscard InternalActionのidentityと代表変換例は[Action identity](action-identity.md)を正本とする。
 
 #### 通常進行のwallと鳴かれたdiscard
 
@@ -634,9 +634,9 @@ ranks:
 
 これらは[Architecture](architecture.md)のPolicy、Local game runner、RiichiEnv Adapter、RiichiLab Clientの責務分離を具体化する判断である。Policyの詳細契約は[Policy契約](policy-contract.md)を正本とする。
 
-### Issue #11へ引き継ぐ判断候補と根拠
+### Issue #11へ引き継いだ判断候補と根拠
 
-次は追加実測が支持する判断候補であり、本書だけでPolicyInput schema、InternalAction identity、materialized stateの責務配置を確定するものではない。
+次は追加実測からIssue #11へ引き継いだ判断候補である。本書だけでPolicyInput schema、InternalAction identity、materialized stateの責務配置を確定するものではなく、現在の採否と意味契約は各正本文書を参照する。
 
 1. `Observation.to_dict()`をObservationの完全表現とみなさず、Policy入力fieldを許可リストで個別に取得・変換する。
 2. RiichiEnvの物理牌IDをPolicyへ直接持ち込まず、物理牌差がゲーム上の意味差を生む場合だけ意味fieldへ正規化する。Discardでは手出し / ツモ切り差を保持する。
@@ -644,14 +644,17 @@ ranks:
 4. 鳴かれたdiscardの`called_by`、リーチの宣言・受理段階、live-wall関連状態は、単一Observationだけでなくseat-visible event deltaを使って構成する候補とする。
 5. 環境非依存なlive-wall残数概念を検討するが、`len(env.wall)`や未検証のevent計数式をそのまま契約の意味にしない。
 
-具体的なfield名、型、counter更新式、action identity、状態所有componentはIssue #11の各設計項目と`docs/architecture.md`で確定する。
+PolicyInputの許可fieldとaction identityはIssue #11の各正本文書で確定済みである。
+具体的なPython型とpackage / module構成はIssue #20、counter更新式等の実装詳細は
+後続のAdapter実装Issueで扱う。責務と依存方向は[Architecture](architecture.md)を
+正本とする。
 
-### 実測後に確定する判断
+### 実測から設計・実装へ引き継ぐ判断
 
-| 判断対象 | 今回までの実測 | 確定に必要な残りの実測 |
+| 判断対象 | 今回までの実測 | 確定済み設計と残る確認 |
 | --- | --- | --- |
-| Policy 入力の最小スキーマ | 自他家の情報境界、seat別eventのmaskとdelta、Python公開属性と`to_dict()`の差、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 許可fieldの採否、`tsumogiri_flags`等の詳細挙動、furiten、ippatsu、不変snapshotと後方互換性の具体化 |
-| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripに加え、同種の物理牌Actionが同じMJAI打牌へ潰れる例と手出し / ツモ切り差を確認 | 全Action種の完全実測、不正・曖昧なMJAI入力、意味fieldとidentity規則の確定 |
+| Policy 入力の最小スキーマ | 自他家の情報境界、seat別eventのmaskとdelta、Python公開属性と`to_dict()`の差、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 許可field、不変snapshot、canonicalizationはIssue #11で確定済み。残る確認はAdapterでの生成・同期、counter algorithm、将来拡張fieldの実測とtest |
+| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripに加え、同種の物理牌Actionが同じMJAI打牌へ潰れる例と手出し / ツモ切り差を確認。意味fieldとidentity規則はIssue #11で確定済み | 全Action種の完全実測、不正・曖昧なMJAI入力、Adapter変換実装とtest |
 | 乱数・再現性の境界 | constructor seedでevent列まで再現。`reset(seed=...)`では期待した再現性を確認できず | rule、game mode、バージョンを変えた場合の適用範囲 |
 | エラー変換方針 | 不正Action型、player ID 99、`done()`後の空actionを確認 | 要求先不一致、欠落・余分な応答、別局面Action等 |
 | 局・対局のライフサイクル | single / east / halfを完走し、延長、`end_game`、`done()`、最終空map、scores、ranksを確認 | 他rule・score条件での終了挙動 |
