@@ -14,9 +14,9 @@
   [RiichiEnv調査記録](riichienv-investigation.md)を正本とする
 
 本書は`InternalAction`のvariant、field、麻雀上の意味、不変条件を定める。
-具体的なPythonのclass、dataclass、enum、tagged union、Protocol、ABC、package、
-module構成は確定しない。semantic equality、canonicalization、deduplication、
-外部合法Actionとの対応は[Action identity](action-identity.md)を正本とする。
+Python実装は`lisjong.policy_contract.action`を正本とし、semantic equality、
+canonicalization、deduplication、外部合法Actionとの対応は
+[Action identity](action-identity.md)を正本とする。
 
 RiichiEnv調査記録で未実測とされているAction種別やRiichiLabオンライン経路を、
 本書によって実測済みへ格上げしない。本書のvariantとfieldはlisjongの設計判断で
@@ -67,6 +67,17 @@ InternalAction
 3人麻雀固有の操作は初期対象外である。自動成立する途中流局や、Action実行後の
 結果eventはvariantへ含めない。
 
+### Python表現
+
+11 variantはそれぞれ独立した`@dataclass(frozen=True, slots=True)`として実装する。
+共通Action base classと`ActionKind` fieldは設けない。`InternalAction`は11 classの
+type alias unionである。各dataclassのvalue equalityがsemantic identityと一致し、
+variant、`actor`、variant固有fieldを比較する。
+
+constructorは単一Actionだけで検証できるAction値不変条件を検証する。
+PolicyInput、materialized state、legal candidateとの照合が必要なContext整合条件は
+各Action constructorへ取り込まず、Adapter / Policy呼び出し境界へ残す。
+
 ## 共通field: actor
 
 すべてのvariantは次のrequired fieldを持つ。
@@ -115,8 +126,9 @@ identityへ含める。
 本書の「同じ麻雀牌種」は、赤牌か通常牌かの差を無視した基礎牌種が同じことを
 意味する。一方、各fieldに保持する`Tile`値は赤牌差を失わない。
 
-具体的な符号化は後続で決定する。Tile identityは基礎牌種と赤牌区分で構成し、
-physical copyを含めない。詳細は[Action identity](action-identity.md)を参照する。
+`Tile`は`TileType(category, rank)`と`is_red`から成るfrozen dataclassとして実装する。
+Tile identityは基礎牌種と赤牌区分で構成し、physical copyを含めない。詳細は
+[Action identity](action-identity.md)を参照する。
 
 ## DiscardAction
 
@@ -405,14 +417,17 @@ Ron / Tsumoの`winning_tile`比較は
 [Action identity](action-identity.md)を正本とする。
 
 同じsemantic identityへ正規化される複数のexternal candidateはPolicyへ渡す前に
-集約し、decision-local mappingで外部候補を保持する。Pythonの具体的なequality、
-hash、canonical key、外部環境ごとのrepresentative tie-breakは後続実装で定める。
+集約し、decision-local mappingで外部候補を保持する。Action dataclassのvalue
+equalityをsemantic identityとし、`consumed_tiles`とAnkan `tiles`は生成時に
+canonical tupleへ正規化する。Python hash値そのものをidentityの正本にせず、
+別のcanonical keyやaction IDも設けない。外部環境ごとのrepresentative tie-breakは
+後続実装で定める。
 RiichiLab `possible_actions`の具体的なtranslationと照合規則は、未実測事項として
 後続へ残す。
 
-## 後続実装testへの引継ぎ
+## 検証境界とtest観点
 
-少なくとも次を後続実装のtest観点とする。
+共通型の単体testとAdapter等の後続境界testを合わせ、少なくとも次を確認する。
 
 - すべてのvariantがrequired `actor`を持つ
 - `action.actor == DecisionContext.input.self_seat`

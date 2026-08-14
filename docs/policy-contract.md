@@ -20,7 +20,8 @@ RiichiEnvの`legal_actions()`が常に1件以上を返すことを確認済み�
 
 ## 基本契約
 
-Policyは概念上、次の公開契約を持つ。
+Policyは`lisjong.policy_contract.policy`で、次のstructural `Protocol`として
+実装する。
 
 ```python
 class Policy(Protocol):
@@ -30,9 +31,11 @@ class Policy(Protocol):
     ) -> InternalAction: ...
 ```
 
-`Policy`、`choose_action`、`DecisionContext`、`InternalAction`を、
-Issue #11の設計上の用語として一貫して使用する。本書はPython実装を追加せず、
-具体的なclass表現やpackage構成を固定しない。
+`Policy`、`choose_action`、`DecisionContext`、`InternalAction`を公開契約の用語
+として一貫して使用する。`Policy`は明示的な継承を要求せず、
+`@runtime_checkable`を付けない。Protocolが型として表現するのは
+`choose_action`の引数と戻り値であり、決定性、hidden state非依存、合法候補との
+semantic match等は、型シグネチャだけでは強制できないbehavioral contractである。
 
 PolicyはRiichiEnv、RiichiLab、mjai、WebSocket固有型を受け取らず、それらの型を
 返さない。
@@ -63,9 +66,14 @@ Policyは次を所有しない。
 - Policy自身もContextや合法候補を変更しない
 - 外部環境が次の状態へ進んだ後、古いContextを新しいdecisionへ再利用しない
 
+`DecisionContext`は`input: PolicyInput`と`legal_actions`を持つfrozen dataclass
+として実装する。`legal_actions`は入力順を変更せずtupleへ正規化し、生成時に
+非空、全Actionのactor一致、semantic identity上の重複禁止を検証する。
+
 Policy入力の具体的なschema、不変性、canonicalizationは
-[Policy入力の最小スキーマ](policy-input-schema.md)で定める。immutable class、
-`tuple`、frozen dataclass等の具体的な実装方式は後続実装で決定する。
+[Policy入力の最小スキーマ](policy-input-schema.md)で定める。同じdecisionへの同期や
+各Actionの麻雀上の合法性等、外部stateを必要とするContext整合条件は
+`DecisionContext` constructorへ取り込まず、Adapter等の境界で検証する。
 
 ## legal_actionsの事前条件
 
@@ -89,7 +97,8 @@ Policyは`InternalAction`を1件返す。返却Actionは
 `DecisionContext.legal_actions`内の候補へ、action identity上で意味的に
 ちょうど1件一致しなければならない。
 
-照合は次に依存しない。
+`InternalAction`のsemantic identityは、実装では各variantのdataclass value
+equalityと一致する。照合は次に依存しない。
 
 - Python object identity
 - hash
@@ -202,14 +211,25 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 将来fallbackを導入する場合は、明示的なPolicyまたは明示的な契約として別途
 設計する。
 
-## 後続項目
+## Python実装で確定した契約
 
-次はIssue #20または各componentの後続実装Issueで決定し、本書では確定しない。
+共通Policy契約型は`src/lisjong/policy_contract/`へ配置する。
 
-- Pythonでの具体的なaction equality、hash、canonical key表現
-- `Tile`の具体符号化
+- `Policy`は最小のstructural `Protocol`とする
+- `DecisionContext`、`PolicyInput`、それらを構成するstate値は、再帰的に
+  immutableなfrozen dataclassまたはEnumとする
+- `InternalAction`は共通base classや`ActionKind` fieldを持たない11個の独立した
+  frozen dataclassとし、`InternalAction`はそれらのtype alias unionとする
+- Actionのdataclass value equalityをsemantic identityとし、別のaction IDや
+  canonical keyを設けない
+- 順序なしmultiset fieldだけを生成時にcanonical tupleへ正規化し、履歴、公開順、
+  seat位置を持つsequenceは並べ替えない
+
+## 引き続き未確定の項目
+
+次は各componentの後続実装Issueで決定し、本書では確定しない。
+
 - 外部候補のdeterministic representativeを選ぶ具体的なtie-break key
-- Python package、module、class構成
 - 具体的な例外class
 - timeout値、retry方法
 - asyncおよびbatch interface

@@ -645,9 +645,9 @@ ranks:
 5. 環境非依存なlive-wall残数概念を検討するが、`len(env.wall)`や未検証のevent計数式をそのまま契約の意味にしない。
 
 PolicyInputの許可fieldとaction identityはIssue #11の各正本文書で確定済みである。
-具体的なPython型とpackage / module構成はIssue #20、counter更新式等の実装詳細は
-後続のAdapter実装Issueで扱う。責務と依存方向は[Architecture](architecture.md)を
-正本とする。
+具体的なPython型とpackage / module構成はIssue #20で
+`lisjong.policy_contract`として実装済みである。counter更新式等の実装詳細は後続の
+Adapter実装Issueで扱う。責務と依存方向は[Architecture](architecture.md)を正本とする。
 
 ### 実測から設計・実装へ引き継ぐ判断
 

@@ -7,8 +7,9 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 分離し、各seatが判断時点で観測可能な情報だけをPolicyへ渡すことを最優先の
 境界とする。
 
-本書は、Issue #3のRiichiEnv 0.4.8に対する調査結果とIssue #11の前提を受けて、
-初期段階の責務と依存方向を定める。Issue #3で確認した公式情報、実測、
+本書は、Issue #3のRiichiEnv 0.4.8に対する調査結果、Issue #11の設計、
+Issue #20で具体化した共通Policy契約型を受けて、初期段階の責務と依存方向を
+定める。Issue #3で確認した公式情報、実測、
 推測・未確認事項、設計判断の区別は
 [RiichiEnv調査記録](riichienv-investigation.md)を正本とする。
 
@@ -17,7 +18,7 @@ Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具�
 内部Actionのvariant、field、意味契約は
 [内部Actionモデル](internal-action-model.md)、semantic identity、外部候補の集約、
 decision-local mappingは[Action identity](action-identity.md)を正本とする。
-Pythonのpackage / module構成はIssue #20で設計する。
+共通Policy契約型のPython packageは`src/lisjong/policy_contract/`である。
 
 ## 責務境界
 
@@ -189,6 +190,25 @@ Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
 mjai、WebSocketへ依存しない。外部環境の仕様変更はLocal game runner、
 RiichiEnv Adapter、またはRiichiLab Clientで吸収し、Policyへ直接伝播させない。
 
+### 共通Policy契約package
+
+`lisjong.policy_contract`は、Policy実装、RiichiEnv Adapter、Local game runner、
+RiichiLab Clientが共有する環境非依存の契約packageである。package rootから
+`Policy`、`DecisionContext`、`PolicyInput`、`InternalAction`各variant、および
+それらを構成するvalue型を公開する。
+
+- `policy.py`は最小のstructural `Policy(Protocol)`を定義する
+- `decision_context.py`と`policy_input.py`は1 decision分の入力境界を定義する
+- `action.py`は11個の独立したfrozen dataclassと、そのunionである
+  `InternalAction`を定義する
+- seat、wind、tile、discard、meld、riichiの基本value型は同名のmodule、局・player・
+  自席手牌stateは`round_state.py`、`player_state.py`、`own_hand_state.py`へ分離する
+
+このpackageはPython標準libraryとpackage内の型だけへ依存し、RiichiEnv、
+RiichiLab、mjai、WebSocketその他の外部protocol固有型をimportしない。Policy実装と
+Adapterはこのpackageへ依存し、Runner / ClientはAdapterとこのpackageを利用する。
+逆向きの依存は作らない。
+
 ## 情報境界
 
 Policyへ渡してよい情報は、そのseatのプレイヤーが判断時点で観測できる情報に
@@ -231,8 +251,8 @@ Policyへ渡さない。Issue #3で確認したseat別eventのmaskだけから
 Issue #11ですでに前提とした方針である。
 
 Policy公開契約では、`Policy`、`choose_action`、`DecisionContext`、
-`InternalAction`を設計上の用語として一貫して使用する。具体的なPython宣言は
-実装時に契約を損なわない形で定義する。
+`InternalAction`を一貫して使用する。これらは`lisjong.policy_contract`で
+Python型として実装済みである。
 
 Policy入力の具体的な許可field、意味契約、不変性、canonicalization、固定rulesetの
 bind方針、初期入力へ含めない情報は
@@ -241,14 +261,13 @@ bind方針、初期入力へ含めない情報は
 [内部Actionモデル](internal-action-model.md)で確定済みである。
 semantic identity、multiset canonicalization、外部候補のsemantic aggregation、
 decision-local mapping、deterministic representative、revalidationの原則は
-[Action identity](action-identity.md)で確定済みである。
+[Action identity](action-identity.md)で確定済みである。Action identityは11個の
+frozen dataclassのvalue equalityとして実装し、順序なしmultiset fieldは生成時に
+canonical tupleへ正規化する。別のaction IDやcanonical keyは導入しない。
 
-次はIssue #20または各componentの後続実装Issueで決定するため、本書では確定しない。
-
-- Pythonでの具体的なaction equality、hash、canonical key表現
-- 外部環境ごとのdeterministic representativeの具体的なtie-break key
-- 設計用語を表す具体的なPython型の実装方式
-- Python package、module、classの構成
+外部環境ごとのdeterministic representativeの具体的なtie-break key、
+decision-local mappingの実装構造、Policy評価失敗時の具体的な例外やtimeout処理は、
+各componentの後続実装Issueで決定する。
 
 RiichiEnvで未実測のAction種別、`Observation`の未確認field、実際の
 RiichiLab WebSocket requestとのaction照合等は、確認済みの実測として扱わない。
@@ -263,8 +282,8 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- action identity、Adapter、Clientの具体的なPython実装
-- Policy、Adapter、Local game runner、RiichiLab Clientの本実装
+- RiichiEnv Adapterの具体的なPython実装
+- 具体Policyの判断ロジック、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
 - 3人麻雀対応
