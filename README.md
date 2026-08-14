@@ -74,8 +74,33 @@ python -m ruff check .
 python -m unittest discover -s tests -v
 ```
 
-現時点のtestはpackageをimportできることだけを確認します。RiichiEnvなどの依存は
-調査Issueで実APIと利用条件を確認してから追加します。
+testではPolicy契約、RiichiEnv Adapter、共通Policy実行境界、Local game runnerを
+単体確認し、RiichiEnv 0.4.8を使う固定seed半荘のintegration testも実行します。
+
+## Local game runner
+
+`LocalGameRunner`は4 seatそれぞれのPolicyをRiichiEnvへ接続し、`env.done()`まで
+1半荘を進行します。再現性のためseedは`RiichiEnv`のconstructorへ渡します。
+
+```python
+from lisjong.local_game_runner import LocalGameRunner
+from lisjong.policies import MinimalPolicy
+from lisjong.policy_contract import Seat
+
+policies = {seat: MinimalPolicy() for seat in Seat}
+result = LocalGameRunner(
+    policies,
+    seed=12345,
+    game_mode="4p-red-half",
+    max_steps=10_000,
+).run()
+
+print(result.scores, result.ranks)
+```
+
+返却される`LocalGameResult`にはseed、game mode、最終scores / ranks、step数、
+Policy判断数が含まれます。`max_steps`はhang防止用の安全上限であり、対局終了前に
+到達した場合は正常結果を返さず`StepLimitExceededError`で失敗します。
 
 ## ロードマップ
 
@@ -104,8 +129,9 @@ hashなどを確認し、repository本体とは分離して管理します。
 
 ## 開発状況
 
-Python 3.14の最小package、import test、Ruff、GitHub Actions CIを初期開発基盤と
-しています。Policy、RiichiEnv Adapter、RiichiLab Clientはまだ実装していません。
+Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
+RiichiEnv Adapter、共通Policy実行境界、Local game runnerまで実装しています。
+RiichiLab Clientと学習・推論機能はまだ実装していません。
 
 ## License
 
