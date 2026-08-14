@@ -107,13 +107,16 @@ def tile_sort_key(tile: Tile) -> tuple[int, int, bool]:
 
 
 def _canonicalize_tile_multiset(
-    tiles: object, expected_count: int, field_name: str
+    tiles: object, expected_count: int | None, field_name: str
 ) -> tuple[Tile, ...]:
     """multiset fieldを、入力順序に依存しないcanonical tupleへ正規化する。
 
     要素数と型だけを検証し、physical copy identityが存在しないlisjongの
     Tileでは正常な重複（同一semantic Tileの複数枚）を拒否しない。
-    `InternalAction`のconsumed_tiles/tilesと、`PublicMeld.tiles`の双方が
+    `expected_count`が`None`の場合、要素数を検証しない
+    （`OwnHandState.concealed_tiles`等、副露数やdecision phaseにより
+    枚数が変わる固定長を持たないmultiset向け）。`InternalAction`の
+    consumed_tiles/tiles、`PublicMeld.tiles`、`OwnHandState.concealed_tiles`が
     使用する共通のcanonicalizationロジックである。
     """
     try:
@@ -122,7 +125,7 @@ def _canonicalize_tile_multiset(
         raise TypeError(f"{field_name} must be an iterable of Tile") from None
     if any(not isinstance(tile, Tile) for tile in values):
         raise TypeError(f"{field_name} must contain only Tile instances")
-    if len(values) != expected_count:
+    if expected_count is not None and len(values) != expected_count:
         raise ValueError(f"{field_name} must contain exactly {expected_count} tiles")
 
     return tuple(sorted(values, key=tile_sort_key))

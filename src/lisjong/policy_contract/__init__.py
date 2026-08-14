@@ -23,7 +23,9 @@ from lisjong.policy_contract.action import (
 )
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
+from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
+from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.round_state import RoundState
 from lisjong.policy_contract.seat import Seat
@@ -58,8 +60,10 @@ __all__ = [
     "KakanAction",
     "KyuushuKyuuhaiAction",
     "MeldKind",
+    "OwnHandState",
     "PassAction",
     "PlayerPublicState",
+    "PolicyInput",
     "PonAction",
     "PublicMeld",
     "RiichiAction",

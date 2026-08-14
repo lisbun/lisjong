@@ -247,6 +247,15 @@ class CanonicalizeTileMultisetTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             _canonicalize_tile_multiset(123, 1, "tiles")
 
+    def test_allows_any_length_when_expected_count_is_none(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        for count in (0, 1, 5):
+            with self.subTest(count=count):
+                result = _canonicalize_tile_multiset(
+                    (pinzu_5,) * count, None, "concealed_tiles"
+                )
+                self.assertEqual(len(result), count)
+
 
 class RequireUniformTileTypeTest(unittest.TestCase):
     def test_accepts_matching_base_tile_kind(self) -> None:
