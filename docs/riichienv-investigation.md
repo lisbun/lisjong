@@ -332,15 +332,20 @@ RiichiEnv 0.4.8の今回のprobeでは、`env.mjai_log`はPythonの`dict`を要�
 
 #### RiichiLabとローカルRiichiEnvの共通化範囲
 
-RiichiLab公式仕様とローカル実測を合わせると、RiichiEnvの`Observation`を受け取って`Action`を返すRiichiEnv-facing Agentは、ローカルとオンラインで共通化できる。lisjongのPolicyにRiichiEnv固有型を直接持ち込まない既存方針は維持し、共通Agentの内側でRiichiEnv `Observation` / `Action`とlisjong内部型を変換する。
+RiichiLab公式仕様とローカル実測を合わせると、RiichiEnvの`Observation`を受け取って`Action`を返す外部境界は、ローカルとオンラインで共通化できる。現在のlisjongでは、対局やsessionのオーケストレーションをLocal game runnerまたはRiichiLab Clientが担い、RiichiEnv AdapterがRiichiEnv外部型とlisjong内部型を変換し、Policyは環境非依存の内部型だけを扱う。
 
 | 層 | 責務 |
 | --- | --- |
-| 共通Agent / Policy境界 | seat別観測から行動を選択する。RiichiEnv-facing Agentは`Observation -> Action`を提供し、その内側のPolicyはlisjong内部型を使用する |
-| Local adapter | `reset()`、`step()`、複数playerのAction要求、`done()`、ローカル対局loopを管理する |
-| RiichiLab Client adapter | WebSocket、`request_id`、`possible_actions`整合確認、timeout / time budget、`action_ack`、再接続、オンライン応答を管理する |
+| Policy contract / implementation | 1 seat・1 decision分のlisjong内部型を使用してActionを選択する。RiichiEnv、RiichiLab、mjai、WebSocket固有型や対局・session lifecycleを所有しない |
+| Local game runner | `RiichiEnv`の生成・初期化、`reset()`、`step()`、`done()`、ローカル対局loop、複数player要求の進行管理、seatごとのPolicy判断のオーケストレーション、検証済みAction集合の返却を担当する |
+| RiichiEnv Adapter | RiichiEnv `Observation` / `Action`とlisjong内部型の変換、seat別の情報境界維持、Policy入力・内部合法Action候補への変換、Policy選択Actionと元のRiichiEnv合法Actionの対応付け・再検証を担当する。対局loopや`reset()` / `step()` / `done()`を管理しない |
+| RiichiLab Client | WebSocket等の通信、認証、接続、受信、送信、`request_id`、`possible_actions`、timeout / time budget、`action_ack`、Policy判断のオーケストレーション、送信前のオンライン合法性再検証、session終了処理を担当する |
 
-RiichiLab Clientはserialized observationを`Observation.deserialize_from_base64()`で復元し、Agentが返した`Action`を`to_mjai()`で応答形式へ変換できる。WebSocket protocol固有情報をPolicyへ持ち込まない。
+RiichiLab Clientはserialized observationを`Observation.deserialize_from_base64()`で復元し、RiichiEnv Adapterを通じてPolicy入力と内部合法Action候補へ変換する。Policy判断後は、Adapterが元のRiichiEnv合法Actionへ対応付けて再検証し、Clientが`possible_actions`との整合を送信前に再検証して、`to_mjai()`による応答形式へ変換する。WebSocket protocol固有情報をPolicyへ持ち込まない。
+
+初期スコープでは、オンライン対局中に接続が切断された場合、ゲーム途中からの再接続・復旧を試みず、安全にsessionを終了する。将来の再接続対応を永久に禁止するものではなく、RiichiLabの仕様と必要性を確認し、別Issueで合意した場合に検討する。
+
+現在の責務分離と依存方向は[Architecture](architecture.md)を、Policyの詳細契約は[Policy契約](policy-contract.md)を正本とする。本書は外部仕様、実測結果、およびそれらからlisjongの設計へ引き継いだ根拠を記録する。
 
 今回確認済みなのは、RiichiLabが`possible_actions`を合法手候補として提示する公式仕様、serialized observationを復元する公式境界、`Action.to_mjai()`をオンライン応答に使う公式設計、およびローカルRiichiEnvでの一部ActionのMJAI round-tripである。実際のWebSocket requestに含まれる`possible_actions`と生成Actionの生JSON dictが全fieldで完全一致することは実測していない。照合実装とオンライン実測は後続のRiichiLab Client側で行う。
 
@@ -470,16 +475,16 @@ ranks:
 5. RiichiLab 固有の WebSocket、request ID、再接続、送受信形式を Policy に持ち込まない。
 6. プレイヤーに見えてよい情報だけを Policy へ渡し、イベント履歴を自動的に全量入力しない。
 7. 調査用コードと正式な Policy 実装を、配置、依存、Issue のすべてで分離する。
-8. Adapterは`reset()` / `step()`の戻り値を、その時点で`Action`選択を要求されているplayerから`Observation`へのmapとして扱い、「現在手番」や単一playerを前提にしない。
+8. Local game runnerは`reset()` / `step()`の戻り値を、その時点で`Action`選択を要求されているplayerから`Observation`へのmapとして扱い、「現在手番」や単一playerを前提にしない。各seatを独立した変換・Policy判断単位としてRiichiEnv AdapterとPolicy contractへ渡す。
 9. 再現性が必要な実験では、現時点ではconstructorの`RiichiEnv(seed=...)`を使用する。`reset(seed=...)`を再現性の根拠にはしない。
 10. RiichiEnvが不正player IDを必ず例外化することを前提にせず、Adapter側でAction要求playerと入力player IDの整合性を検証する。
 11. 複数playerへ同時に応答する場合も、各playerの`Observation`と合法手を混同せず、seatごとに変換・検証する。
-12. ローカルとRiichiLabでRiichiEnv-facing Agentの`Observation -> Action`境界を共通化できる。Agentの内側ではRiichiEnv固有型をlisjong内部型へ変換し、Policyへ直接持ち込まない。
+12. ローカルとRiichiLabでは、RiichiEnv AdapterとPolicy contractを共通利用できる。RiichiEnv固有型とlisjong内部型の変換はRiichiEnv Adapterへ閉じ込め、Policyへ直接持ち込まない。
 13. RiichiEnv利用時の対局終了は`round_wind`や`kyoku_idx`から推測せず、`env.done()`を正本とする。
 14. `env.mjai_log`は非公開情報を含み得る完全対局ログとしてPolicyから隔離し、Replay、調査、監査等のPolicy外用途に限定する。
-15. eventをPolicy入力に使う場合は、`env.mjai_log`ではなくseat別`Observation`の情報境界を維持する。WebSocket、`request_id`、`possible_actions`照合、timeout、`action_ack`、再接続はRiichiLab Clientへ閉じ込める。
+15. eventをPolicy入力に使う場合は、`env.mjai_log`ではなくseat別`Observation`の情報境界を維持する。WebSocket、`request_id`、`possible_actions`照合、timeout、`action_ack`、session終了処理はRiichiLab Clientへ閉じ込める。初期スコープでは切断後の途中再接続・復旧を試みず、安全に終了する。
 
-これらは [architecture.md](architecture.md) の Policy、RiichiEnv Adapter、RiichiLab Client の責務分離を具体化する判断である。
+これらは[Architecture](architecture.md)のPolicy、Local game runner、RiichiEnv Adapter、RiichiLab Clientの責務分離を具体化する判断である。Policyの詳細契約は[Policy契約](policy-contract.md)を正本とする。
 
 ### 実測後に確定する判断
 
