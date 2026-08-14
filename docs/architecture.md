@@ -141,10 +141,12 @@ legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で�
 
 ### Local game runner
 
-Local game runnerは、RiichiEnvを使用するローカル対局のライフサイクルを
-管理する。
+`src/lisjong/local_game_runner.py`は、RiichiEnvを使用するローカル対局の
+ライフサイクルを管理する実装である。`LocalGameRunner`はone-shotとし、4 seat
+すべてのPolicy、`SeatMaterializedState`、`RiichiEnvActionMappingSession`を
+seatごとに独立して所有する。
 
-- `RiichiEnv`を生成・初期化する
+- 再現可能性のためseedをconstructorへ渡して`RiichiEnv`を生成・初期化する
 - `reset()`、`step()`、`done()`を呼び出し、対局loopを進行する
 - `reset()`または`step()`が返した、Action選択を要求されているplayerから
   seat別`Observation`へのmapを処理する
@@ -157,12 +159,15 @@ Local game runnerは、RiichiEnvを使用するローカル対局のライフサ
 - 複数playerへ同時にActionが要求された場合、各seatのObservationと合法手を
   混同せず、検証済みのAction集合を組み立てて`step()`へ返す
 - `env.done()`を対局終了判定の正本とし、局情報から独自に終了を推測しない
-- 対局終了後のscores、ranks等の結果を取得する
-- 必要に応じて完全対局ログを記録・評価等のPolicy外用途へ渡す
+- 対局終了後のscores、ranks、step数、Policy判断数を`LocalGameResult`で返す
+- 任意の`max_steps`へ終了前に到達した場合は、正常結果にせず明示的に失敗する
 
 Local game runnerはRiichiEnv外部型からPolicy内部型への変換やPolicy固有の判断を
-所有しない。完全対局ログを取得できる場合も、Policy入力を生成する経路とは
-分離する。ログの永続化先や評価componentの具体的な構成は本書では確定しない。
+所有しない。あるstepで1 seatでもAdapter変換、Policy実行、返却値検証、paired
+mappingによるresolveに失敗した場合は、部分的なAction集合やfallbackで
+`env.step()`を呼び出さず、元の例外を伝播する。完全対局ログを取得できる場合も、
+Policy入力を生成する経路とは分離する。ログの永続化先や評価componentの具体的な
+構成は本書では確定しない。
 
 ### RiichiLab Client
 
@@ -327,7 +332,7 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- 具体Policyの判断ロジック、Local game runner、RiichiLab Clientの本実装
+- 具体Policyの戦略改善、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
 - 3人麻雀対応
