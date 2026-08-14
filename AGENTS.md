@@ -10,8 +10,10 @@ Issueまたはユーザーの明示的な指示が本書と異なる場合は、
 - GitHub Issueを作業の目的、スコープ、完了条件の正本とする
 - `main`へ直接pushせず、Issue専用branchとPull Requestを使用する
 - 1つのPull Requestでは1つの主目的を扱い、無関係な変更を混ぜない
-- branch作成、commit、push、Pull Request作成、Ready化、merge、Issue closeは、
-  それぞれ実行前にユーザーの明示的な承認を得る
+- AIによる通常の実装作業では、branch作成、commit、push、Pull Request作成、
+  Ready for review化までを個別のユーザー承認なしで進めてよい
+- merge、Issue closeは成果を確定する操作として、実行前にユーザーの明示的な
+  承認を得る
 - 破壊的操作、外部公開、課金、認証情報の使用は、対象と影響を示して承認を得る
 
 ## 実装規則
