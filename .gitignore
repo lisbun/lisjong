@@ -231,3 +231,4 @@ __marimo__/
 /data/raw/
 /artifacts/
 /runs/
+.claude/
