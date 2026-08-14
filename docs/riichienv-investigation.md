@@ -81,8 +81,8 @@ RiichiLabの`request_action`には、少なくとも`request_id`、`possible_act
 | `done()` | ゲーム終了を返す | single / east / halfの終了と延長を実測済み。他rule・score条件は未確認 |
 | `scores()` / `ranks()` | 終了時の点数と順位を返す | single / east / half終了時の戻り値は実測済み。取得可能な全タイミングは未確認 |
 | `Observation.legal_actions()` | 合法な `Action` の一覧を返す | 順序、同一性、空リストの有無 |
-| `Observation.new_events()` | そのプレイヤーに対する新規 MJAI JSON イベントを返す | 可視情報の境界と、同一objectでの連続呼び出しが非消費であることは実測済み。観測更新をまたぐ意味は未確認 |
-| `Observation.events` | 観測窓におけるイベント履歴を提供する | 履歴範囲と情報漏えいの有無 |
+| `Observation.new_events()` | そのプレイヤーに対する新規 MJAI JSON イベントを返す | 可視情報の境界、同一objectでの連続呼び出しが非消費であること、seatごとのObservation更新間のdelta挙動を一部実測済み |
+| `Observation.events` | 観測窓におけるイベント履歴を提供する | `new_events()`と同内容になる局面を含むseat別delta挙動を一部実測済み。全局面・全versionの履歴範囲は未確認 |
 | `Observation.select_action_from_mjai(...)` | MJAI 応答を合法な `Action` へ対応付ける | 実行経路に出現した打牌、pon、chi、noneのround-tripは実測済み。不正・曖昧な入力と未出現Actionは未確認 |
 | `Observation.deserialize_from_base64(...)` | RiichiLabから受け取るserialized observationを復元する | RiichiLab Clientと共通Agentの境界 |
 | `RiichiEnv.mjai_log` | 対局のMJAI event列を提供する | Python公開形、完全ログとseat別eventの情報境界 |
@@ -349,6 +349,150 @@ RiichiLab Clientはserialized observationを`Observation.deserialize_from_base64
 
 今回確認済みなのは、RiichiLabが`possible_actions`を合法手候補として提示する公式仕様、serialized observationを復元する公式境界、`Action.to_mjai()`をオンライン応答に使う公式設計、およびローカルRiichiEnvでの一部ActionのMJAI round-tripである。実際のWebSocket requestに含まれる`possible_actions`と生成Actionの生JSON dictが全fieldで完全一致することは実測していない。照合実装とオンライン実測は後続のRiichiLab Client側で行う。
 
+### 2026-08-14: Issue #11向け追加実測
+
+Windows / CPython 3.14.6 / RiichiEnv 0.4.8の同じ基準環境で、Policy入力と内部Actionの設計根拠を補う追加probeを実施した。以下は今回の実測結果であり、RiichiEnvの全version・全局面へ一般化しない。
+
+#### `Observation`公開属性と`to_dict()`の差
+
+Pythonから直接参照可能な`Observation`属性として、少なくとも次を確認した。
+
+```text
+player_id
+hand
+hands
+melds
+discards
+dora_indicators
+scores
+riichi_declared
+honba
+riichi_sticks
+round_wind
+oya
+kyoku_index
+waits
+is_tenpai
+tsumogiri_flags
+riichi_sutehais
+last_tedashis
+last_discard
+drawn_tile
+events
+```
+
+同じ追加probeで`Observation.to_dict()`に含まれたkeyは次のとおりだった。
+
+```text
+discards
+dora_indicators
+events
+hands
+honba
+legal_actions
+melds
+oya
+player_id
+riichi_declared
+riichi_sticks
+round_wind
+scores
+```
+
+少なくとも`drawn_tile`、`kyoku_index`、`waits`、`is_tenpai`、`tsumogiri_flags`、`riichi_sutehais`、`last_tedashis`、`last_discard`はPython公開属性として存在する一方、今回の`to_dict()`には含まれなかった。初期局面では`drawn_tile == 62`で、物理牌ID `62`が`hand`内にも存在した。これはdrawn tileを現在手牌内のmetadataとして扱える可能性を支持する実測だが、Policy入力での具体表現は未確定である。
+
+したがって、`Observation.to_dict()`だけをObservationの完全表現として扱わない。Policy入力へ採用するfieldは、Issue #11で許可リストとして個別に明示し、境界側で取得・変換する必要がある。
+
+#### `events` / `new_events()`のseat単位delta挙動
+
+同一`Observation`に対する`new_events()`の2回連続呼び出しは、今回確認した全局面で同じ内容を返した。呼び出し自体によるevent消費は確認されなかった。
+
+複数のObservationをseat別に追跡すると、あるseatが連続してObservationを受け取った場合は新たに発生したeventだけが返り、そのseatがしばらくObservationを受け取らなかった場合は、その間に発生した複数player分のseat-visible eventが次のObservationでまとめて返った。
+
+RiichiEnv 0.4.8の今回の実測範囲では、`events` / `new_events()`を「そのseatについて、前回Observationが構築されてから今回Observationが構築されるまでに増えたseat-visible MJAI event群」と捉えることと整合した。ただし、全version・全局面における厳密な契約や、長期間の蓄積挙動までは確認していない。
+
+この結果は、raw event deltaをそのままPolicyへ渡すより、境界側でseat-visible eventを現在状態へ正規化し、Policyへsnapshotを渡す設計の根拠になる。どのcomponentがmaterialized stateを所有するかはArchitecture側で別途確定する。
+
+#### Discard Actionの物理牌identityとMJAI表現
+
+drawn tileと同種牌をもう1枚持つ局面で、次の2件が別々の合法なDiscard Actionとして存在した。
+
+| 物理牌ID | MJAI牌 | `is_drawn` |
+| ---: | --- | --- |
+| 78 | `"2s"` | `False` |
+| 79 | `"2s"` | `True` |
+
+この局面の`drawn_tile`は`79`だった。両Actionの`to_mjai()`は、ともに次の同一表現になった。
+
+```json
+{"actor":3,"pai":"2s","type":"dahai"}
+```
+
+同じ局面では、drawn tileではない同種牌の複数合法Actionとして、物理牌ID `85`と`86`がいずれもMJAI牌`"4s"`へ変換される例も確認した。RiichiEnvの物理牌identity上は別Actionでも、MJAI表現上は同一になる場合がある。
+
+この実測は、RiichiEnvの物理牌IDをPolicyへそのまま持ち込まず、物理牌差がゲーム上の意味差を生む場合だけ意味fieldへ正規化する判断を支持する。特にdrawn tileと同種牌を捨てる場合の手出し / ツモ切り差は保持する必要がある。ただし、Discard InternalActionの具体的なidentityはIssue #11の後続設計で確定する。
+
+#### 通常進行のwallと鳴かれたdiscard
+
+初期局面では既存実測どおり`len(env.wall) == 83`だった。通常進行では、chi / pon等でdecision数が増えてもwall長は減らず、通常ツモが発生したときに`83 -> 82 -> 81 -> ...`のように1ずつ減少した。
+
+seat 0の打牌をseat 1がchiした局面では、chi前後とも`discards[0] == [9]`で、元の打牌は`Observation.discards`から削除されなかった。seat-visible eventには次が含まれた。
+
+```json
+{"actor":1,"consumed":["2m","4m"],"pai":"3m","target":0,"type":"chi"}
+```
+
+RiichiEnv 0.4.8の今回の実測範囲では、`Observation.discards`は「現在卓上に残っている牌だけの表示状態」より、「各playerが行った打牌履歴」として扱うことと整合した。他の鳴き種別・全局面には一般化しない。
+
+Policy snapshotに`called_by`等を含める場合は、`dahai`に続く`chi` / `pon` / `daiminkan`をseat-visible eventから対応するdiscard occurrenceへ反映する方式が候補になる。具体schemaと状態所有者は未確定である。
+
+#### リーチ状態遷移
+
+seed=6、step=15、seat=1で、次の遷移を確認した。
+
+| 観測点 | `riichi_declared` | `riichi_sutehais` | 宣言者score | `riichi_sticks` | 主なevent |
+| --- | --- | --- | ---: | ---: | --- |
+| reach Action直前 | `[False, False, False, False]` | `[None, None, None, None]` | 25000 | 0 | reach関連eventなし |
+| reach Action後 / 宣言牌discard前 | `[False, False, False, False]` | `[None, None, None, None]` | 25000 | 0 | `reach` |
+| 宣言牌discardを含む`step()`後 | `[False, True, False, False]` | `[None, None, None, None]` | 24000 | 1 | `dahai` → `reach_accepted` |
+| `reach_accepted`後の宣言者Observation | `[False, True, False, False]` | `[None, None, None, None]` | 24000 | 1 | 通常進行 |
+
+reach Action実行後、宣言牌discard前の独立Observationが存在した。その時点では`reach` eventは発生済みだが、`riichi_declared == False`、scoreは25000、`riichi_sticks == 0`だった。宣言牌discard後の同じ`step()`内で`reach_accepted`まで進み、次に取得できたObservationでは`riichi_declared == True`、scoreは24000、`riichi_sticks == 1`だった。
+
+`riichi_declared == True`だが`reach_accepted`未発生という独立Observationは今回確認されなかった。`riichi_sutehais`は観測範囲で`None`のままであり、宣言牌位置の確認済み取得元とは扱わない。
+
+単純なboolだけでは「reach Action実行済み・宣言牌discard前」を表現できないため、将来のPolicy入力で`NONE` / `DECLARED` / `ACCEPTED`等の段階を区別できる表現を検討する根拠になる。具体的な型と導出規則は未確定である。
+
+#### daiminkan / ankan / kakanと嶺上ツモ時のwall
+
+次の3ケースを実測した。
+
+| kan kind | 条件 | 槓直前wall長 | 槓処理後wall長 | 嶺上ツモ後wall長 | dora追加タイミング |
+| --- | --- | ---: | ---: | ---: | --- |
+| daiminkan | seed=4 / step=83 / seat=3 | 17 | 16 | 16 | 槓処理後ではなく、その後の打牌を処理した次Observation |
+| ankan | seed=4 / step=76 / seat=2 | 21 | 20 | 20 | 槓処理と同一Observation |
+| kakan | seed=2 / step=46 / seat=0 | 45 | 44 | 44 | 槓処理後ではなく、その後の打牌を処理した次Observation |
+
+槓処理と嶺上ツモは同一`env.step()`内で処理され、別Observationとしては取得できなかった。event順序は概ね次のとおりだった。
+
+```text
+daiminkan -> tsumo -> 後続Observationで dora -> dahai
+ankan     -> dora -> tsumo
+kakan     -> tsumo -> 後続Observationで dora -> dahai
+```
+
+通常ツモと同様に、3種類すべてで嶺上ツモ時にwall長が1減少した。試験的に「槓直前の`len(env.wall)`から、以降の`new_events()`内の`tsumo` event数を引く」計算を行うと、今回の3ケースでは実際のwall長と一致した。
+
+この結果は、環境非依存な`live_wall_tiles_remaining`概念をPolicy入力候補として検討する根拠を強める。一方、`len(env.wall)`そのものをPolicy fieldの意味とはせず、`tsumo` eventを数えれば常に正確に更新できるとも確定しない。
+
+未確認範囲には、複数ツモ・複数槓を跨ぐ長期間、宣言者以外のseat視点、終局・流局・海底 / 河底、対局全体での累積誤差、RiichiLab実オンライン経路が含まれる。Policy入力への採否、境界での正確なcounter構築、local / online共通化は分けて判断する。
+
+#### materialized state設計への示唆
+
+今回までの実測から、`discards[].tsumogiri`、`discards[].order`、`discards[].called_by`、`players[].riichi`、live-wall関連状態等は、単一Observationを無加工変換するだけでは不足する可能性がある。
+
+seat-visible event deltaを継続処理して現在状態へ正規化し、Policyには不変snapshotを渡す設計を支持する根拠としてIssue #11へ引き継ぐ。ただし、RiichiEnv AdapterまたはRiichiLab Clientが必ずmaterialized stateを所有するとは本書で確定せず、責務配置は`docs/architecture.md`で別途決定する。
+
 ## 最小再現コード
 
 次のコードは、環境ループと合法手の最小確認を目的とした調査案であり、正式な Policy 実装ではない。同等の`legal_actions()[0]`選択方針による1局完走は実測済みだが、この掲載コードを恒久的な調査コードとして保存したものではない。
@@ -449,18 +593,22 @@ ranks:
 - `scores()` / `ranks()`を取得できるすべての時点と、点数移動がある終了時の値。
 - Python公開面より下の内部可変状態まで、4席の`Observation`が共有されず独立しているか。
 - `Observation`、`Action` の比較やhashに依存してよいか。シリアライズの安定性とバージョン互換性。
-- `new_events()`の観測更新をまたぐ差分範囲と、`Observation.events`との関係。
-- `Observation.events`の履歴範囲、`apply_event(...)`、`get_observation(player_id)`、`observe_event(...)`の実際の入出力と例外。
+- `events` / `new_events()`はseatごとのObservation更新間のdeltaと整合したが、全version・全局面、長期間、終局を跨ぐ厳密な範囲と蓄積挙動。
+- `apply_event(...)`、`get_observation(player_id)`、`observe_event(...)`の実際の入出力と例外。
 - 今回確認していないfieldや局面を含め、各プレイヤーの`Observation`にPolicyが見てはいけない非公開情報が含まれないか。
 - player ID 99以外の不正ID、合法だが要求先と異なるplayerのAction、別局面のAction、欠落・余分な応答等に対する`step()`の挙動。
 - `done()`後に空でないActionを渡した場合や、`step({})`を繰り返した場合の挙動。
 - 今回のWindows環境ではimportとstepに成功したが、追加のDLLまたはruntimeが既存環境に依存していないか、別環境でも同じ条件で動作するか。
 - 通常版CPython 3.14.6で、複数対局の反復や長時間実行が安定するか。
 - ron、複数ron等を含むclaim競合と、pon / chi以外の優先順位。
-- ron、tsumo agari、riichi、kan各種等、今回出現しなかったActionのMJAI round-trip。
+- ron、tsumo agari、riichi、kan各種等、既存の一括round-trip probeで確認できなかったActionの完全なMJAI round-trip。riichiとkan各種の個別進行は追加実測済みだが、全Action種の変換確認ではない。
 - 不正または曖昧なMJAI入力を`select_action_from_mjai()`へ渡した場合の挙動。
 - 実際のRiichiLab WebSocket requestにおける`possible_actions`と生成Actionの照合方法。生JSON dictの全field完全一致は未実測。
-- `Observation.new_events()`以外の未確認fieldを含め、Policy入力に採用できるseat別情報の最小範囲。
+- Python公開属性と`to_dict()`の差は一部実測済みだが、`Observation.tsumogiri_flags`の詳細な更新挙動、furiten、ippatsu、`waits` / `is_tenpai`のPolicy入力への採否を含むseat別情報の最小範囲。
+- live-wall counterの一般的な更新式と、local / onlineで同値な状態を再構成できるか。
+- 鳴かれたdiscard、リーチ段階、wall関連状態を含むmaterialized stateの具体schema、正確な更新規則、所有component。
+- RiichiLab実WebSocket経路で、seat-visible eventから同値なstateを再構成できるか。
+- RiichiEnvの全機能と全Action種の完全実測。
 - `mjai_log`の永続化形式とReplay API。完全ログとしての取得方法と情報境界は確認済み。
 - timeoutまたはstep上限をRiichiEnv側で設定できるか。CPU、メモリ、実行時間の参考値。
 
@@ -486,16 +634,29 @@ ranks:
 
 これらは[Architecture](architecture.md)のPolicy、Local game runner、RiichiEnv Adapter、RiichiLab Clientの責務分離を具体化する判断である。Policyの詳細契約は[Policy契約](policy-contract.md)を正本とする。
 
+### Issue #11へ引き継ぐ判断候補と根拠
+
+次は追加実測が支持する判断候補であり、本書だけでPolicyInput schema、InternalAction identity、materialized stateの責務配置を確定するものではない。
+
+1. `Observation.to_dict()`をObservationの完全表現とみなさず、Policy入力fieldを許可リストで個別に取得・変換する。
+2. RiichiEnvの物理牌IDをPolicyへ直接持ち込まず、物理牌差がゲーム上の意味差を生む場合だけ意味fieldへ正規化する。Discardでは手出し / ツモ切り差を保持する。
+3. rawなseat-visible event deltaをPolicyへ直接渡すのではなく、境界側で現在状態へ正規化して不変snapshotを渡す構成を検討する。
+4. 鳴かれたdiscardの`called_by`、リーチの宣言・受理段階、live-wall関連状態は、単一Observationだけでなくseat-visible event deltaを使って構成する候補とする。
+5. 環境非依存なlive-wall残数概念を検討するが、`len(env.wall)`や未検証のevent計数式をそのまま契約の意味にしない。
+
+具体的なfield名、型、counter更新式、action identity、状態所有componentはIssue #11の各設計項目と`docs/architecture.md`で確定する。
+
 ### 実測後に確定する判断
 
 | 判断対象 | 今回までの実測 | 確定に必要な残りの実測 |
 | --- | --- | --- |
-| Policy 入力の最小スキーマ | 自他家の情報境界、seat別`new_events()`のmask、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 未確認field、内部可変状態の独立性 |
-| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripを確認 | 未出現Action、不正・曖昧なMJAI入力、比較・hashの要否 |
+| Policy 入力の最小スキーマ | 自他家の情報境界、seat別eventのmaskとdelta、Python公開属性と`to_dict()`の差、複数seatのPython object・読み取り操作の独立性を一部確認。`mjai_log`は対象外 | 許可fieldの採否、`tsumogiri_flags`等の詳細挙動、furiten、ippatsu、不変snapshotと後方互換性の具体化 |
+| 内部行動の識別方法 | Action属性、MJAI変換、打牌・pon・chi・noneのround-tripに加え、同種の物理牌Actionが同じMJAI打牌へ潰れる例と手出し / ツモ切り差を確認 | 全Action種の完全実測、不正・曖昧なMJAI入力、意味fieldとidentity規則の確定 |
 | 乱数・再現性の境界 | constructor seedでevent列まで再現。`reset(seed=...)`では期待した再現性を確認できず | rule、game mode、バージョンを変えた場合の適用範囲 |
 | エラー変換方針 | 不正Action型、player ID 99、`done()`後の空actionを確認 | 要求先不一致、欠落・余分な応答、別局面Action等 |
 | 局・対局のライフサイクル | single / east / halfを完走し、延長、`end_game`、`done()`、最終空map、scores、ranksを確認 | 他rule・score条件での終了挙動 |
-| RiichiLab との共通 Adapter 範囲 | 公式serialized Observation / Action応答境界と、ローカルの一部Action / MJAI round-tripを確認 | 実WebSocket requestの`possible_actions`照合、未出現Actionとの対応 |
+| materialized state | seat別event delta、鳴かれたdiscard、リーチ段階、通常ツモ・槓時のwall変化を一部確認 | schema、更新規則、所有component、長期間・終局・他seat・RiichiLab経路での同値性 |
+| RiichiLab との共通 Adapter 範囲 | 公式serialized Observation / Action応答境界と、ローカルの一部Action / MJAI round-tripを確認 | 実WebSocket requestの`possible_actions`照合、未出現Actionとの対応、seat-visible eventからの同値なstate再構成 |
 | runtime dependencyへの追加 | 通常版CPython 3.14でインストール、import、1局完走、依存version、明示取得したwheelのhashを確認 | 別環境・長時間実行の安定性 |
 
 RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境でインストールと最小再現が成功し、必要性と依存範囲を確認した後に別の変更として行う。
@@ -529,3 +690,4 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-13 | RiichiEnv 0.4.8 | 1局完走、seed、異常系、複数player同時要求、pon / chi競合、Observation独立性、Action / MJAI round-tripを追加実測 |
 | 2026-08-13 | RiichiEnv 0.4.8 | OS、PowerShell、PyYAML、IPythonの正確な環境情報と、CPython 3.14 Windows x86-64 wheelのSHA-256が公式メタデータと一致することを追加実測 |
 | 2026-08-13 | RiichiEnv 0.4.8 | single / east / halfの終了、完全`mjai_log`とseat別eventの境界、RiichiLabとの共通Agent範囲を追加記録 |
+| 2026-08-14 | RiichiEnv 0.4.8 | Observation公開属性と`to_dict()`の差、seat別event delta、Discard物理牌identity、通常・槓時のwall、鳴かれたdiscard、リーチ状態遷移をIssue #11向けに追加実測 |
