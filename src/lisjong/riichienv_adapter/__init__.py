@@ -32,6 +32,7 @@ from lisjong.riichienv_adapter.seat_conversion import seat_from_player_index
 from lisjong.riichienv_adapter.tile_conversion import (
     tile_from_mjai,
     tile_from_physical_id,
+    tile_to_mjai,
 )
 
 __all__ = [
@@ -54,4 +55,5 @@ __all__ = [
     "seat_from_player_index",
     "tile_from_mjai",
     "tile_from_physical_id",
+    "tile_to_mjai",
 ]
