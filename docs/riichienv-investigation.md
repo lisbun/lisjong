@@ -740,7 +740,7 @@ step=560 pid=2
 
 `hand`に含まれない値が`drawn_tile`として返っている。物理牌ID 107はkakan eventの`"pai": "9s"`（seat 0が加槓した牌）と一致し、seat 2自身がツモった牌ではない。本書「`[AI-REVIEW]`対応の追加実測」節で確認済みの、槍槓のron対象を`Observation.last_discard`（kakan行為者を指す）で解決できるという実装事実と合わせると、RiichiEnv 0.4.8は槍槓のron判定機構を`drawn_tile`側でも同様に「kakan牌をこの応答seatの一時的な対象牌」として転用しているとみられる。ただし、この転用の実装根拠をソースコードでは確認していない。
 
-この局面では、事前に`{"type": "kakan", "actor": 0, ...}` eventが当該seatの`new_events()`へ直近で届いていることが、通常の「ツモっていないのに`drawn_tile`が手牌外を指す」ケースと区別する手がかりになる。Adapter実装では、直近に適用したeventがkakanであったことを内部で保持し（`SeatMaterializedState.pending_chankan_actor`）、その条件を満たす場合に限って`OwnHandState.drawn_tile`を`None`へ正規化する。この手がかりなしに「`drawn_tile`がhandにない」というだけで槍槓と断定すると、未確認の別局面や実装不整合を誤って槍槓として握りつぶす恐れがあるため、Adapter側はfail closedする。
+この局面では、事前に`{"type": "kakan", "actor": 0, "pai": "9s", ...}` eventが当該seatの`new_events()`へ直近で届いていることが、通常の「ツモっていないのに`drawn_tile`が手牌外を指す」ケースと区別する手がかりになる。Adapter実装では、直近に適用したeventがkakanであった場合にそのactorと加槓牌のsemantic valueを内部で保持し（`SeatMaterializedState.pending_chankan_actor` / `pending_chankan_tile`）、この直前kakanが存在し、かつ`drawn_tile`の牌種がその加槓牌と一致する場合に限って`OwnHandState.drawn_tile`を`None`へ正規化する。kakan発生の有無だけ、あるいは牌種の一致確認なしに「`drawn_tile`がhandにない」というだけで槍槓と断定すると、未確認の別局面や実装不整合を誤って槍槓として握りつぶす恐れがあるため、Adapter側はfail closedする。
 
 #### 3. 大規模検証
 

@@ -170,6 +170,15 @@ def build_policy_input(
                 "event was observed immediately before this decision to "
                 "explain it as a chankan ron response opportunity"
             )
+        if tile_from_physical_id(raw_drawn_tile) != tracker.pending_chankan_tile:
+            # actorの一致だけでなく、drawn_tileのsemantic valueが直前kakanの
+            # 加槓牌と一致することまで確認する。牌種が異なる場合は槍槓として
+            # 説明できないため、未確認値をNoneへ丸めずfail closedする。
+            raise AdapterSyncError(
+                "drawn_tile is not part of this seat's hand, and its tile "
+                "value does not match the tile added by the immediately "
+                "preceding kakan"
+            )
         # RiichiEnv 0.4.8実測(docs/riichienv-investigation.mdの
         # 「Issue #28実装時の追加実測」2.を参照): 槍槓(chankan)のron応答機会
         # では、応答するseatのdrawn_tileがそのseatの手牌にない、kakanで

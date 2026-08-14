@@ -139,10 +139,28 @@ class SnapshotProjectionTest(unittest.TestCase):
                 {"type": "kakan", "actor": 1, "pai": "1p", "consumed": []},
             ],
             hand=[0, 4, 8],
-            drawn_tile=44,
+            # physical id 36は"1p"であり、直前kakanのpai("1p")と一致する。
+            drawn_tile=36,
         )
         policy_input = build_policy_input(tracker, observation)
         self.assertIsNone(policy_input.own_hand.drawn_tile)
+
+    def test_rejects_drawn_tile_not_matching_the_preceding_kakan_tile(self) -> None:
+        # actorだけでなく、drawn_tileのsemantic valueが直前kakanの加槓牌と
+        # 一致することまで確認する。牌種が異なる場合はfail closedする。
+        tracker = SeatMaterializedState(Seat.SEAT_0)
+        observation = _initial_observation(
+            events=[
+                _START_KYOKU,
+                {"type": "tsumo", "actor": 0, "pai": "1m"},
+                {"type": "kakan", "actor": 1, "pai": "1p", "consumed": []},
+            ],
+            hand=[0, 4, 8],
+            # physical id 44は"3p"であり、直前kakanのpai("1p")と一致しない。
+            drawn_tile=44,
+        )
+        with self.assertRaises(AdapterSyncError):
+            build_policy_input(tracker, observation)
 
     def test_builds_melds_directly_from_observation_melds(self) -> None:
         tracker = SeatMaterializedState(Seat.SEAT_1)

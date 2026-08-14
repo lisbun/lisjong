@@ -32,6 +32,7 @@ from typing import NamedTuple
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
+from lisjong.policy_contract.tile import Tile
 from lisjong.policy_contract.wind import Wind
 from lisjong.riichienv_adapter.errors import AdapterSyncError
 from lisjong.riichienv_adapter.tile_conversion import tile_from_mjai
@@ -89,6 +90,7 @@ class SeatMaterializedState:
         self._dora_indicators: list = []
         self._tsumo_count = 0
         self._pending_chankan_actor: Seat | None = None
+        self._pending_chankan_tile: Tile | None = None
         self._last_applied_observation: object | None = None
 
     @property
@@ -119,9 +121,22 @@ class SeatMaterializedState:
         実装事実(`docs/riichienv-investigation.md`の「槍槓(chankan)のtarget
         解決」)どおり、kakan成立直後に届くchankan ron応答機会のObservationを
         識別するためだけに使う値であり、それ以外のcontextでkakan発生を推測する
-        用途には使わない。
+        用途には使わない。`pending_chankan_tile`と対で使う。
         """
         return self._pending_chankan_actor
+
+    @property
+    def pending_chankan_tile(self) -> Tile | None:
+        """直近に適用したeventがkakanだった場合、そのkakanで加えられた牌。
+
+        `pending_chankan_actor`と同じ寿命(kakan以外のeventが1件でも
+        適用されると`None`へ戻る)を持つ。`drawn_tile`が自席handにない値を
+        「槍槓中の相手の加槓牌」と判断する際、actorの一致だけでなく、この
+        牌のsemantic valueが`drawn_tile`と一致することまで確認するために
+        使う(`docs/riichienv-investigation.md`の「Issue #28実装時の追加
+        実測」2.を参照)。
+        """
+        return self._pending_chankan_tile
 
     def apply_observation(self, observation: object) -> None:
         """このseatの新しいObservationが持つ`new_events()`を1回だけ適用する。
@@ -147,17 +162,20 @@ class SeatMaterializedState:
         event_type = event.get("type")
         try:
             self._dispatch_event(event_type, event)
+
+            # pending_chankan_actor / pending_chankan_tileは「直近に適用した
+            # eventがkakanか」だけを表すため、kakan以外のeventが1件でも
+            # 処理されたらここで必ずNoneへ戻す。
+            if event_type == "kakan":
+                self._pending_chankan_actor = Seat(int(event["actor"]))
+                self._pending_chankan_tile = tile_from_mjai(event["pai"])
+            else:
+                self._pending_chankan_actor = None
+                self._pending_chankan_tile = None
         except KeyError as exc:
             raise AdapterSyncError(
                 f"malformed {event_type!r} event: missing {exc}"
             ) from exc
-
-        # pending_chankan_actorは「直近に適用したeventがkakanか」だけを表す
-        # ため、kakan以外のeventが1件でも処理されたらここで必ずNoneへ戻す。
-        if event_type == "kakan":
-            self._pending_chankan_actor = Seat(int(event["actor"]))
-        else:
-            self._pending_chankan_actor = None
 
     def _dispatch_event(self, event_type: object, event: dict) -> None:
         if event_type == "start_kyoku":
@@ -218,6 +236,7 @@ class SeatMaterializedState:
         self._dora_indicators = [tile_from_mjai(event["dora_marker"])]
         self._tsumo_count = 0
         self._pending_chankan_actor = None
+        self._pending_chankan_tile = None
 
     def _apply_dahai(self, event: dict) -> None:
         actor = Seat(int(event["actor"]))

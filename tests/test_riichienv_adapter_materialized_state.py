@@ -9,6 +9,7 @@ from lisjong.riichienv_adapter.materialized_state import SeatMaterializedState
 
 MANZU_1 = Tile(TileType(TileCategory.MANZU, 1))
 MANZU_2 = Tile(TileType(TileCategory.MANZU, 2))
+PINZU_1 = Tile(TileType(TileCategory.PINZU, 1))
 PINZU_3 = Tile(TileType(TileCategory.PINZU, 3))
 
 
@@ -325,12 +326,13 @@ class NoOpEventTest(unittest.TestCase):
         self.assertEqual(tracker.tsumo_count, 0)
 
 
-class PendingChankanActorTest(unittest.TestCase):
+class PendingChankanStateTest(unittest.TestCase):
     def test_none_before_any_kakan(self) -> None:
         tracker = _tracker_after_start_kyoku()
         self.assertIsNone(tracker.pending_chankan_actor)
+        self.assertIsNone(tracker.pending_chankan_tile)
 
-    def test_set_to_kakan_actor_immediately_after_kakan_event(self) -> None:
+    def test_set_to_kakan_actor_and_tile_immediately_after_kakan_event(self) -> None:
         tracker = _tracker_after_start_kyoku()
         tracker.apply_observation(
             _FakeObservation(
@@ -338,6 +340,7 @@ class PendingChankanActorTest(unittest.TestCase):
             )
         )
         self.assertEqual(tracker.pending_chankan_actor, Seat.SEAT_2)
+        self.assertEqual(tracker.pending_chankan_tile, PINZU_1)
 
     def test_cleared_by_any_subsequent_event(self) -> None:
         tracker = _tracker_after_start_kyoku()
@@ -351,6 +354,7 @@ class PendingChankanActorTest(unittest.TestCase):
             )
         )
         self.assertIsNone(tracker.pending_chankan_actor)
+        self.assertIsNone(tracker.pending_chankan_tile)
 
     def test_cleared_by_start_kyoku(self) -> None:
         tracker = _tracker_after_start_kyoku()
@@ -375,6 +379,7 @@ class PendingChankanActorTest(unittest.TestCase):
             )
         )
         self.assertIsNone(tracker.pending_chankan_actor)
+        self.assertIsNone(tracker.pending_chankan_tile)
 
 
 class FailClosedTest(unittest.TestCase):
