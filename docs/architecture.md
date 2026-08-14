@@ -12,32 +12,48 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 推測・未確認事項、設計判断の区別は
 [RiichiEnv調査記録](riichienv-investigation.md)を正本とする。
 
-Policy契約、Policy入力スキーマ、内部Action表現、action identityの詳細と、
-Pythonの型名、method名、package構成は本書では確定せず、Issue #11で設計する。
+Policyの公開契約は[Policy契約](policy-contract.md)を正本とする。Policy入力の
+具体的なfield、内部Actionの具体的なschema、action identityの詳細と、Pythonの
+package構成は、引き続きIssue #11の後続項目で設計する。
 
 ## 責務境界
 
 ### Policy
 
-Policyは、環境に依存しないseat別の観測と合法手の集合を受け取り、選択した
-actionを返す判断ロジックである。
+Policyは、環境に依存しない1 seat・1 decision分の`DecisionContext`を受け取り、
+選択した`InternalAction`を1件返す判断ロジックである。論理的な公開契約は
+`Policy.choose_action(decision)`として表し、詳細は
+[Policy契約](policy-contract.md)を正本とする。
 
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
+- `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
+  `legal_actions`をまとめた、整合した不変スナップショットとする
+- `legal_actions`は1件以上で、後続で定義するaction identity上重複せず、
+  並び順に契約上の意味を持たない
+- pass / noneが合法な場合は明示的な候補とし、空集合を暗黙のpassとしない
 - 渡された合法手からだけactionを選択する
-- 同じPolicy入力と同じPolicy設定に対して、決定的な判断を行えるようにする
+- 複数playerをまとめた進行状態を管理せず、渡された1つのseatの判断を
+  独立して行う
+- Policyの出力へ影響する呼び出し間状態、隠れたPRNG状態、対局やtransportの
+  可変状態を所有しない
+- 同じ意味内容の`DecisionContext`、同じPolicy実装、model parameter・明示設定、
+  宣言済み実行条件に対して、意味的に同じactionを選択する
 - 非公開情報、完全な山、他家の手牌、環境内部だけが持つ完全状態を入力として
   要求しない
 - `RiichiEnv`の生成、`reset()`、`step()`、`done()`、対局loop、
   通信sessionを所有しない
-- 複数playerをまとめた進行状態を管理せず、渡された1つのseatの判断を独立して行う
 
-この決定性はPolicyと外部環境の責務を分離するための契約上の方針であり、
-RiichiEnv constructorや`reset(seed=...)`のseed挙動をPolicy契約へ持ち込まない。
-将来、Policy内部で乱数を使う方式を採用する場合の設定や状態の扱いは、本書では
-確定しない。
+Policyの返却値は、Local game runnerまたはRiichiLab Clientが利用する共通の
+Policy呼び出し境界で`DecisionContext.legal_actions`と照合する。action identity上
+ちょうど1件に一致しない場合は、未検証Actionを外部環境へ送信しない。Policy実装
+自身へこの検証を重複実装させない。
 
-Policy入力の型名、正確なfield、method signature、event履歴の採否、
-内部Actionの表現はIssue #11で確定する。
+この決定性は最終的なAction選択に対する論理的な再現性であり、内部数値計算の
+bit-exactな再現性を要求しない。RiichiEnv constructorや`reset(seed=...)`の
+seed挙動もPolicy契約へ持ち込まない。
+
+Policy入力の具体的なfield、event履歴の採否、内部Actionの具体的なschema、
+action identityの規則はIssue #11の後続項目で確定する。
 
 ### RiichiEnv Adapter
 
@@ -74,7 +90,8 @@ Local game runnerは、RiichiEnvを使用するローカル対局のライフサ
   seat別`Observation`へのmapを処理する
 - 各seatのObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
   Policy入力と合法な内部action候補へ変換する
-- Policy contractを通じて、seatごとに独立したPolicy判断を実行する
+- Policy contractを通じて、seatごとに独立したPolicy判断を実行し、共通の
+  Policy呼び出し境界で返却値を内部合法手候補へ照合する
 - Policyの選択結果をRiichiEnv Adapterへ戻し、同じseatの合法なRiichiEnv
   `Action`へ対応付けて再検証する
 - 複数playerへ同時にActionが要求された場合、各seatのObservationと合法手を
@@ -96,7 +113,8 @@ RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycle�
   observationをRiichiEnvの`Observation`として復元する
 - 復元したObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
   Policy入力と合法な内部action候補へ変換する
-- Policy contractを通じてPolicy判断を実行する
+- Policy contractを通じてPolicy判断を実行し、共通のPolicy呼び出し境界で
+  返却値を内部合法手候補へ照合する
 - Policyの選択結果をRiichiEnv Adapterへ戻し、合法なRiichiEnv `Action`へ
   対応付けて再検証する
 - `request_id`と`possible_actions`を管理し、選択結果をオンラインの合法手候補に
@@ -181,15 +199,18 @@ Policyへ渡さない。Issue #3で確認したseat別eventのmaskだけから
 本書の責務分離は、Issue #3の実測からlisjongへ引き継ぐ設計判断と、
 Issue #11ですでに前提とした方針である。
 
-次はIssue #11でこれから決定するため、本書では確定しない。
+Policy公開契約では、`Policy`、`choose_action`、`DecisionContext`、
+`InternalAction`を設計上の用語として一貫して使用する。具体的なPython宣言は
+実装時に契約を損なわない形で定義する。
 
-- Policy入力や判断contextの型名
-- Policy method名と正確なsignature
+次はIssue #11の後続項目で決定するため、本書では確定しない。
+
 - Policy入力の具体的な全field
-- 内部Actionの型名とAction種別ごとのschema
+- InternalActionのAction種別ごとの具体的なschema
 - action identityの正規化規則
 - 赤牌や`consumed`の具体的なidentity規則
 - event履歴をPolicy入力へ含めるかどうか
+- 設計用語を表す具体的なPython型の実装方式
 - Python package、module、classの構成
 
 RiichiEnvで未実測のAction種別、`Observation`の未確認field、実際の
@@ -205,7 +226,8 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- Issue #11で扱うPolicy契約、Policy入力、内部Action、action identityの詳細確定
+- Issue #11で扱うPolicy入力の具体field、内部Action schema、action identityの
+  詳細確定
 - Policy、Adapter、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
