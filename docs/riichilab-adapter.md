@@ -114,6 +114,18 @@ blocking findingとして報告された。本書の該当記述はその指摘�
   一部記述差があり、`actor` / `target`が候補側に一切現れないとまでは
   断言できない
 
+さらに続く第3回レビュー([comment-5298855018](https://github.com/lisbun/lisjong/issues/38#issuecomment-5298855018))
+で、`hora`について次のblocking findingが報告された(この事実も
+Claude Code自身が確認したものではない)。
+
+- 公式`request_action`例には、`possible_actions`の`hora` candidateとして
+  `{"type": "hora"}`というminimal形が掲載されている。一方、同じ公式
+  文書のAction別field表には`hora`へ追加fieldが記載されており、
+  公式文書内で例とfield表が食い違っている
+- 修正前の実装は`hora`を`dahai`と同様の「`pai`必須」type(下記表の
+  `_PAI_ONLY_TYPES`相当)として扱っていたため、この公式minimal例
+  そのものをmalformedとして拒否していた
+
 ## 設計判断: possible_actions送信前semantic validation
 
 `src/lisjong/riichilab_adapter/possible_action_validation.py`は、**これから
@@ -133,16 +145,20 @@ server candidate        --projection--> candidate semantic identity
 [再レビュー](https://github.com/lisbun/lisjong/issues/38#issuecomment-5298736327)
 のblocking finding)。InternalActionモデル自体はこの都合で変更していない。
 
-| Action type (mjai) | candidate semantic identity(照合に使うfield) | candidateへ要求しないBot response側field |
+| Action type (mjai) | candidate必須identity(照合に使うfield) | candidateに存在する場合だけ整合確認するfield |
 | --- | --- | --- |
-| `dahai` | tile(`pai`) | actor, tsumogiri |
+| `dahai` | tile(`pai`) | actor, tsumogiri(要求しない) |
 | `reach` | (type一致のみ) | actor |
 | `chi` / `pon` / `daiminkan` | called tile(`pai`), consumed tile multiset(`consumed`) | actor, target |
 | `ankan` | tile multiset(`consumed`、4枚) | actor |
 | `kakan` | added tile(`pai`), 元Ponのtile multiset(`consumed`、3枚) | actor |
-| `hora`(ron/tsumo共通) | winning tile(`pai`) | actor, target |
+| `hora`(ron/tsumo共通) | (type一致のみ) | pai(和了牌), actor, target |
 | `none` | (type一致のみ) | actor |
 | `ryukyoku` | (type一致のみ) | actor |
+
+`hora`だけは、公式`request_action`例が示す`{"type": "hora"}`という
+minimal candidateを拒否しないために、`pai`をcandidate必須identityに
+含めていない(下記「`hora`のminimal candidate対応」を参照)。
 
 - 比較はraw dict完全一致ではなく、上記のsemantic identityの一致で行う
 - list index、候補の列挙順には依存しない
@@ -189,7 +205,27 @@ payloadを返さずfail closedする。
 `pai`で一意に定まり、公式のminimal candidate例も`tsumogiri`を持たないため、
 仮にcandidate側へ付随していても識別材料にも矛盾判定材料にもしない。
 
-Bot response側(`mjai_response.py`)は、この節の変更による影響を受けない。
+### `hora`のminimal candidate対応(Issue #38 第3回レビュー)
+
+公式`request_action`例が示す`hora` candidateのminimal形
+`{"type": "hora"}`を拒否しないため、`hora`の必須identityは`type`のみと
+する。`pai`(和了牌)は、`actor` / `target`と同様に**candidate側に存在
+する場合だけ**送信予定responseと矛盾しないことを確認する
+(`_optional_tile_consistency_agrees`に相当する処理)。
+
+- `{"type": "hora"}` → 常にidentityが一致すれば受理する(`pai`での絞り込み
+  なし)
+- `{"type": "hora", "pai": "5m"}` → responseの`pai`と一致する場合だけ受理、
+  不一致なら非一致として扱う(結果として一致0件ならfail closed)
+- `{"type": "hora", "pai": "99z"}`のように`pai`が存在するのに牌として
+  parseできない場合は、無視して非一致にするのではなく、candidate
+  malformedとしてvalidation全体をfail closedする(`actor` / `target`の
+  型不正時のsilent非一致とは扱いが異なる。`pai`は和了牌を区別する唯一の
+  optional fieldであり、parse不能を無視すると意味的に別のhora候補を
+  誤って受理し得るため)
+
+`ron`と`tsumo`はどちらもmjai `hora`へ変換されるため、同じcandidate
+schemaを共有する。
 `actor` / `target` / `tsumogiri`は引き続きBot responseへ必要に応じて
 付与する(「設計判断: MJAI response構築における必要最小限のnormalization」を
 参照)。`possible_actions` validationとBot response serializationは別
@@ -217,10 +253,11 @@ identityから`tsumogiri`を除外した。selected側の`InternalAction.tsumogi
 - 公式`possible_actions`の具体例とAction別field表の記述差(`reach` /
   `hora`等でfield表の方が多い)については、実サーバーが実際にどこまでの
   fieldをcandidateへ付けるかが未確認である。現在の実装は「無ければ
-  identityだけで判定、あれば`actor` / `target`の矛盾だけ確認」という
-  両対応にしてあるが、実データでの確認は#39で行う。特に`target`を相対
-  seat等で表現するserver実装だった場合、現在の整合確認は誤ってfail
-  closed側へ倒れるため、#39で実測してから必要なら見直す
+  identityだけで判定、あれば矛盾だけ確認」という両対応にしてあるが
+  (`hora`は`pai`まで、その他は`actor` / `target`まで)、実データでの確認は
+  #39で行う。特に`target`を相対seat等で表現するserver実装だった場合、
+  現在の整合確認は誤ってfail closed側へ倒れるため、#39で実測してから
+  必要なら見直す
 - honor牌の文字列表記(`E`/`S`/`W`/`N`/`P`/`F`/`C`)は、既存`tile_conversion.py`が
   RiichiEnv 0.4.8のevent JSONに対して実測した表記であり、RiichiLab
   server側の`possible_actions`が同じ表記を使うことは未確認である

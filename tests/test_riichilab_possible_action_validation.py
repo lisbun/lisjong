@@ -323,6 +323,51 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
 
         validate_against_possible_actions(response, [{"type": "hora", "pai": "5m"}])
 
+    # --- horaのminimal candidate(Issue #38 第3回レビュー) -----------------
+    #
+    # RiichiLab公式Protocolの`request_action`例には、`possible_actions`の
+    # `hora` candidateとして`{"type": "hora"}`というminimal形が掲載されている
+    # 一方、同ページのAction別field表には`pai`等の追加fieldが記載されており、
+    # 公式文書内に記述差がある。`pai`をcandidate必須identityにすると、この
+    # 公式例そのものをmalformedとして拒否してしまうため、`hora`の必須
+    # identityは`type`のみとし、`pai`は存在する場合だけ整合確認する。
+
+    def test_accepts_the_official_minimal_hora_candidate_shape_for_ron(self) -> None:
+        """公式`request_action`例の`{"type": "hora"}`は、ron responseへも
+        `pai`を要求せず一致できること。"""
+        response = {"type": "hora", "actor": 0, "target": 1, "pai": "5m"}
+
+        validate_against_possible_actions(response, [{"type": "hora"}])
+
+    def test_accepts_the_official_minimal_hora_candidate_shape_for_tsumo(self) -> None:
+        """公式`request_action`例の`{"type": "hora"}`は、tsumo responseへも
+        `pai`を要求せず一致できること。"""
+        response = {"type": "hora", "actor": 2, "target": 2, "pai": "5m"}
+
+        validate_against_possible_actions(response, [{"type": "hora"}])
+
+    def test_hora_candidate_with_matching_optional_pai_matches(self) -> None:
+        response = {"type": "hora", "actor": 0, "target": 1, "pai": "5m"}
+
+        validate_against_possible_actions(response, [{"type": "hora", "pai": "5m"}])
+
+    def test_hora_candidate_with_mismatched_optional_pai_does_not_match(self) -> None:
+        response = {"type": "hora", "actor": 0, "target": 1, "pai": "5m"}
+
+        with self.assertRaises(PossibleActionsValidationError):
+            validate_against_possible_actions(response, [{"type": "hora", "pai": "4m"}])
+
+    def test_hora_candidate_with_malformed_optional_pai_fails_closed(self) -> None:
+        """candidateが`pai`を持つのに不正な牌表記の場合、非一致として
+        skipするのではなく、malformed candidateとしてvalidation全体を
+        fail closedすること。"""
+        response = {"type": "hora", "actor": 0, "target": 1, "pai": "5m"}
+
+        with self.assertRaises(PossibleActionsValidationError):
+            validate_against_possible_actions(
+                response, [{"type": "hora", "pai": "99z"}]
+            )
+
     def test_pass_matches_none_type(self) -> None:
         # `to_mjai()`はnone/ryukyokuでも意味を持たない`pai`を出力するが、
         # candidate identityには使わないため照合へ影響しない。

@@ -22,6 +22,14 @@ identityとして持つfield(`type` / `pai` / `consumed`)だけで構成し、
 存在する場合だけは、送信予定responseと矛盾しないことも確認する
 (`_optional_fields_agree`)。
 
+`hora`はさらに一歩進めて、公式Protocolの`request_action`例が
+`{"type": "hora"}`というminimal candidateを示す一方、Action別field表には
+`pai`等の追加fieldが記載されているという記述差がある(Issue #38 第3回
+レビュー)。そのため`hora`の必須identityは`type`のみとし、`pai`はcandidate
+側に存在する場合だけ送信予定responseと矛盾しないことを確認する
+(`_optional_tile_consistency_agrees`)。存在するのに不正な牌表記であれば、
+無視せずcandidate malformedとしてvalidation全体をfail closedする。
+
 - semantic match 0件 -> reject
 - semantic match 1件 -> accept
 - semantic match複数件 -> reject(ambiguity)
@@ -41,8 +49,9 @@ from lisjong.policy_contract.tile import Tile, tile_sort_key
 from lisjong.riichienv_adapter.tile_conversion import tile_from_mjai
 from lisjong.riichilab_adapter.errors import PossibleActionsValidationError
 
-# `pai`(識別に使う牌1枚)をidentityへ持つAction type。
-_PAI_ONLY_TYPES = frozenset({"dahai", "hora"})
+# `pai`(識別に使う牌1枚)をidentityへ持つAction type。`hora`はここに含めない
+# (下記`_OPTIONAL_TILE_CONSISTENCY_FIELDS`を参照)。
+_PAI_ONLY_TYPES = frozenset({"dahai"})
 
 # `consumed`(手牌等から消費する牌の組)の枚数。RiichiEnv 0.4.8の
 # `Action.to_mjai()`実測とIssue #38レビューで確認した公式candidate schemaに
@@ -59,7 +68,11 @@ _CONSUMED_COUNTS = {"chi": 2, "pon": 2, "daiminkan": 3, "ankan": 4, "kakan": 3}
 _PAI_AND_CONSUMED_TYPES = frozenset({"chi", "pon", "daiminkan", "kakan"})
 
 # 追加のsemantic fieldを持たず、typeだけでidentityが定まるAction type。
-_TYPE_ONLY_TYPES = frozenset({"reach", "none", "ryukyoku"})
+# `hora`もここに含める: 公式`request_action`例は`{"type": "hora"}`という
+# minimal candidateを示すため、`pai`をcandidate必須identityにしない
+# (Issue #38 第3回レビュー)。`pai`が実際に存在する場合の整合確認は
+# `_OPTIONAL_TILE_CONSISTENCY_FIELDS`で別途行う。
+_TYPE_ONLY_TYPES = frozenset({"reach", "none", "ryukyoku", "hora"})
 
 # candidate側に存在する場合だけ、送信予定responseと矛盾しないことを確認する
 # field。`tsumogiri`は含めない: 公式candidate例は`tsumogiri`を持たず、
@@ -67,6 +80,13 @@ _TYPE_ONLY_TYPES = frozenset({"reach", "none", "ryukyoku"})
 # identityでも矛盾判定材料でもない(Issue #38 review: candidateへ
 # `tsumogiri`を要求しない)。
 _OPTIONAL_CONSISTENCY_FIELDS = ("actor", "target")
+
+# Action typeごとに、candidate側で任意(optional)に持つtile fieldの名前。
+# fieldがcandidateに存在しなければminimal candidateとして許容し、存在すれば
+# 送信予定responseの同名fieldと矛盾しないことを確認する。存在するのに牌として
+# parseできない場合はcandidate malformedとして扱う(Issue #38 第3回
+# レビュー: `hora`のfield表とrequest例の記述差への対応)。
+_OPTIONAL_TILE_CONSISTENCY_FIELDS = {"hora": "pai"}
 
 # 単一のexcept節で複数typeを指定するとparenthesizeが必要になるが、ローカルの
 # ruff format実行環境で括弧が意図せず削除される既知の問題があるため(既存
@@ -187,6 +207,32 @@ def _optional_fields_agree(candidate: Mapping, response: Mapping) -> bool:
     return True
 
 
+def _optional_tile_field_agrees(
+    candidate: Mapping, response: Mapping, field: str
+) -> bool:
+    """candidateが任意で持つtile fieldが、送信予定responseと矛盾しないか確認する。
+
+    `field`がcandidateに存在しなければ、minimal candidate形として許容する
+    (`True`を返す)。存在する場合は牌としてparseし、`response`側の同名
+    fieldと一致するかどうかを返す。candidate側の値がmjai tile文字列として
+    parseできない場合は、無視せず`_IdentityProjectionError`を送出する
+    (呼び出し側でcandidate malformedとしてvalidation全体をfail closedする)。
+    """
+    if field not in candidate:
+        return True
+
+    candidate_tile = _tile_field(candidate, field)
+
+    try:
+        expected_tile = _tile_field(response, field)
+    except _IdentityProjectionError:
+        # responseがこのfieldを持たない、またはparseできない場合は判定材料が
+        # ないため、candidate側の値だけを理由に拒否しない。
+        return True
+
+    return candidate_tile == expected_tile
+
+
 def validate_against_possible_actions(
     response: Mapping, possible_actions: Sequence[object]
 ) -> None:
@@ -227,6 +273,20 @@ def validate_against_possible_actions(
 
         if candidate_identity != response_identity:
             continue
+
+        action_type = candidate_identity[0]
+        optional_tile_field = _OPTIONAL_TILE_CONSISTENCY_FIELDS.get(action_type)
+        if optional_tile_field is not None:
+            try:
+                if not _optional_tile_field_agrees(
+                    candidate, response, optional_tile_field
+                ):
+                    continue
+            except _IdentityProjectionError as error:
+                raise PossibleActionsValidationError(
+                    f"possible_actions[{index}] is not a well-formed candidate: {error}"
+                ) from error
+
         if not _optional_fields_agree(candidate, response):
             continue
         match_count += 1
