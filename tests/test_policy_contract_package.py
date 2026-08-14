@@ -15,7 +15,11 @@ class PolicyContractImportTest(unittest.TestCase):
             "TileType",
             "Wind",
             "MeldKind",
+            "PublicMeld",
             "RiichiState",
+            "Discard",
+            "DiscardAction",
+            "InternalAction",
         ):
             with self.subTest(name=name):
                 self.assertTrue(hasattr(module, name))

@@ -12,6 +12,8 @@ from lisjong.policy_contract.tile import (
     Tile,
     TileCategory,
     TileType,
+    _canonicalize_tile_multiset,
+    _require_uniform_tile_type,
     tile_sort_key,
 )
 
@@ -209,6 +211,54 @@ class TileSortKeyTest(unittest.TestCase):
         manzu_tile = Tile(TileType(TileCategory.MANZU, 1))
         honor_tile = Tile(TileType(TileCategory.HONOR, 1))
         self.assertLess(tile_sort_key(manzu_tile), tile_sort_key(honor_tile))
+
+
+class CanonicalizeTileMultisetTest(unittest.TestCase):
+    """InternalActionのconsumed_tiles/tilesとPublicMeld.tilesが共通利用する
+    canonicalization helperを直接検証する。
+    """
+
+    def test_normalizes_input_order_into_a_canonical_tuple(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        pinzu_5_red = Tile(TileType(TileCategory.PINZU, 5), is_red=True)
+        souzu_1 = Tile(TileType(TileCategory.SOUZU, 1))
+
+        first = _canonicalize_tile_multiset((souzu_1, pinzu_5_red, pinzu_5), 3, "tiles")
+        second = _canonicalize_tile_multiset(
+            (pinzu_5, souzu_1, pinzu_5_red), 3, "tiles"
+        )
+        self.assertEqual(first, second)
+
+    def test_preserves_duplicate_semantic_tiles(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        result = _canonicalize_tile_multiset((pinzu_5, pinzu_5, pinzu_5), 3, "tiles")
+        self.assertEqual(result.count(pinzu_5), 3)
+
+    def test_rejects_wrong_count(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        with self.assertRaises(ValueError):
+            _canonicalize_tile_multiset((pinzu_5, pinzu_5), 3, "tiles")
+
+    def test_rejects_non_tile_elements(self) -> None:
+        with self.assertRaises(TypeError):
+            _canonicalize_tile_multiset(("1m", "2m"), 2, "tiles")
+
+    def test_rejects_non_iterable(self) -> None:
+        with self.assertRaises(TypeError):
+            _canonicalize_tile_multiset(123, 1, "tiles")
+
+
+class RequireUniformTileTypeTest(unittest.TestCase):
+    def test_accepts_matching_base_tile_kind(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        pinzu_5_red = Tile(TileType(TileCategory.PINZU, 5), is_red=True)
+        _require_uniform_tile_type((pinzu_5, pinzu_5_red), pinzu_5, "tiles")
+
+    def test_rejects_different_base_tile_kind(self) -> None:
+        pinzu_5 = Tile(TileType(TileCategory.PINZU, 5))
+        pinzu_6 = Tile(TileType(TileCategory.PINZU, 6))
+        with self.assertRaises(ValueError):
+            _require_uniform_tile_type((pinzu_5, pinzu_6), pinzu_5, "tiles")
 
 
 if __name__ == "__main__":

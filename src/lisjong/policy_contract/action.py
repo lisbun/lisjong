@@ -23,7 +23,12 @@ game state mutation、hand / river / meld実体へのobject referenceは持た�
 from dataclasses import dataclass
 
 from lisjong.policy_contract.seat import Seat
-from lisjong.policy_contract.tile import Tile, TileCategory, tile_sort_key
+from lisjong.policy_contract.tile import (
+    Tile,
+    TileCategory,
+    _canonicalize_tile_multiset,
+    _require_uniform_tile_type,
+)
 
 
 def _require_seat(value: object, field_name: str) -> None:
@@ -47,38 +52,11 @@ def _require_distinct(actor: Seat, other: Seat, other_field_name: str) -> None:
 
 
 def _kamicha(seat: Seat) -> Seat:
-    """seatから見た上家（直前に打牌し、そのdiscardをchiできる相手）を返す。
+    """seatから見た上家(直前に打牌し、そのdiscardをchiできる相手)を返す。
 
     Seatの契約 (seat + 1) mod 4 = 下家 から、上家は (seat - 1) mod 4 になる。
     """
     return Seat((int(seat) - 1) % 4)
-
-
-def _canonicalize_tile_multiset(
-    tiles: object, expected_count: int, field_name: str
-) -> tuple[Tile, ...]:
-    """multiset fieldを、入力順序に依存しないcanonical tupleへ正規化する。
-
-    要素数と型だけを検証し、physical copy identityが存在しないlisjongの
-    Tileでは正常な重複（同一semantic Tileの複数枚）を拒否しない。
-    """
-    try:
-        values = tuple(tiles)
-    except TypeError:
-        raise TypeError(f"{field_name} must be an iterable of Tile") from None
-    if any(not isinstance(tile, Tile) for tile in values):
-        raise TypeError(f"{field_name} must contain only Tile instances")
-    if len(values) != expected_count:
-        raise ValueError(f"{field_name} must contain exactly {expected_count} tiles")
-
-    return tuple(sorted(values, key=tile_sort_key))
-
-
-def _require_uniform_tile_type(
-    tiles: tuple[Tile, ...], reference: Tile, field_name: str
-) -> None:
-    if any(tile.tile_type != reference.tile_type for tile in tiles):
-        raise ValueError(f"{field_name} must share the same base tile kind")
 
 
 @dataclass(frozen=True, slots=True)

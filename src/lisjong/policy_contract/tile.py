@@ -104,3 +104,37 @@ def tile_sort_key(tile: Tile) -> tuple[int, int, bool]:
         tile.tile_type.rank,
         tile.is_red,
     )
+
+
+def _canonicalize_tile_multiset(
+    tiles: object, expected_count: int, field_name: str
+) -> tuple[Tile, ...]:
+    """multiset fieldを、入力順序に依存しないcanonical tupleへ正規化する。
+
+    要素数と型だけを検証し、physical copy identityが存在しないlisjongの
+    Tileでは正常な重複（同一semantic Tileの複数枚）を拒否しない。
+    `InternalAction`のconsumed_tiles/tilesと、`PublicMeld.tiles`の双方が
+    使用する共通のcanonicalizationロジックである。
+    """
+    try:
+        values = tuple(tiles)
+    except TypeError:
+        raise TypeError(f"{field_name} must be an iterable of Tile") from None
+    if any(not isinstance(tile, Tile) for tile in values):
+        raise TypeError(f"{field_name} must contain only Tile instances")
+    if len(values) != expected_count:
+        raise ValueError(f"{field_name} must contain exactly {expected_count} tiles")
+
+    return tuple(sorted(values, key=tile_sort_key))
+
+
+def _require_uniform_tile_type(
+    tiles: tuple[Tile, ...], reference: Tile, field_name: str
+) -> None:
+    """tilesのすべてが、referenceと同じ基礎牌種（TileType）であることを検証する。
+
+    赤牌区分は無視し、`InternalAction`のPon/Daiminkan/Ankan/Kakanと、
+    `PublicMeld`の対応するkindが共通して使用する。
+    """
+    if any(tile.tile_type != reference.tile_type for tile in tiles):
+        raise ValueError(f"{field_name} must share the same base tile kind")

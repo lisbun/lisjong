@@ -21,7 +21,8 @@ from lisjong.policy_contract.action import (
     RonAction,
     TsumoAction,
 )
-from lisjong.policy_contract.meld import MeldKind
+from lisjong.policy_contract.discard import Discard
+from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import (
@@ -49,6 +50,7 @@ __all__ = [
     "AnkanAction",
     "ChiAction",
     "DaiminkanAction",
+    "Discard",
     "DiscardAction",
     "InternalAction",
     "KakanAction",
@@ -56,6 +58,7 @@ __all__ = [
     "MeldKind",
     "PassAction",
     "PonAction",
+    "PublicMeld",
     "RiichiAction",
     "RiichiState",
     "RonAction",
