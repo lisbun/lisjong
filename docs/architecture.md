@@ -17,7 +17,7 @@ Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具�
 内部Actionのvariant、field、意味契約は
 [内部Actionモデル](internal-action-model.md)、semantic identity、外部候補の集約、
 decision-local mappingは[Action identity](action-identity.md)を正本とする。
-Pythonのpackage構成は、引き続きIssue #11の後続項目で設計する。
+Pythonのpackage / module構成はIssue #20で設計する。
 
 ## 責務境界
 
@@ -243,7 +243,7 @@ semantic identity、multiset canonicalization、外部候補のsemantic aggregat
 decision-local mapping、deterministic representative、revalidationの原則は
 [Action identity](action-identity.md)で確定済みである。
 
-次はIssue #11の後続項目で決定するため、本書では確定しない。
+次はIssue #20または各componentの後続実装Issueで決定するため、本書では確定しない。
 
 - Pythonでの具体的なaction equality、hash、canonical key表現
 - 外部環境ごとのdeterministic representativeの具体的なtie-break key
