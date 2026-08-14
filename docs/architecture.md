@@ -15,7 +15,8 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具体的な許可fieldと
 意味契約は[Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
 内部Actionのvariant、field、意味契約は
-[内部Actionモデル](internal-action-model.md)を正本とする。action identityの詳細と
+[内部Actionモデル](internal-action-model.md)、semantic identity、外部候補の集約、
+decision-local mappingは[Action identity](action-identity.md)を正本とする。
 Pythonのpackage構成は、引き続きIssue #11の後続項目で設計する。
 
 ## 責務境界
@@ -30,7 +31,7 @@ Policyは、環境に依存しない1 seat・1 decision分の`DecisionContext`�
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
-- `legal_actions`は1件以上で、後続で定義するaction identity上重複せず、
+- `legal_actions`は1件以上で、semantic identity上重複せず、
   並び順に契約上の意味を持たない
 - pass / noneが合法な場合は明示的な候補とし、空集合を暗黙のpassとしない
 - 渡された合法手からだけactionを選択する
@@ -58,7 +59,7 @@ Policy入力の具体的な許可field、raw event履歴を初期入力へ含め
 不変性、canonicalizationは
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
 variantとfieldは[内部Actionモデル](internal-action-model.md)で確定する。
-action identityの規則はIssue #11の後続項目で確定する。
+action identityの規則は[Action identity](action-identity.md)で確定する。
 
 ### RiichiEnv Adapter
 
@@ -72,6 +73,8 @@ RiichiEnv Adapterは、seat別のRiichiEnv外部型とlisjong内部型の間を�
   同じseat・同じdecision時点まで同期する
 - Policyが選択した内部actionを、同じseatの
   `Observation.legal_actions()`に含まれるRiichiEnv `Action`へ対応付ける
+- 同じsemantic identityへ正規化される複数のphysical Actionを、意味差がないと
+  確認できる場合だけPolicy提示前に集約し、decision-local mappingで保持する
 - Action要求先のplayer IDとObservation内のplayer IDの整合性を確認する
 - seatごとの可視性を維持し、別seatの観測や合法手を混同しない
 - Policyの選択結果を外部環境へ返す前に、元の合法手に対して再検証する
@@ -90,8 +93,9 @@ Adapter自身はPolicy呼び出しを仲介しない。
 materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
 現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定する。状態更新と同期の
-機械的な検証方法とaction identityの規則は後続で確定する。内部Actionのvariantと
-fieldは[内部Actionモデル](internal-action-model.md)を参照する。
+機械的な検証方法は後続で確定する。内部Actionのvariantとfieldは
+[内部Actionモデル](internal-action-model.md)、semantic identityと外部候補との
+対応は[Action identity](action-identity.md)を参照する。
 
 ### Local game runner
 
@@ -153,7 +157,8 @@ seat-visibleな現在状態の正規化に限る。Policyの過去判断、AI内
 
 WebSocket、`request_id`、`possible_actions`、timeout、`action_ack`等の
 protocol情報はPolicyへ渡さない。受信・送信messageの詳細な変換方法と
-action identityはIssue #11および後続のRiichiLab Client実装Issueで確定する。
+RiichiLab固有の照合規則は後続のRiichiLab Client実装Issueで確定する。共通の
+semantic identity原則は[Action identity](action-identity.md)を参照する。
 
 ## 依存方向
 
@@ -234,11 +239,14 @@ bind方針、初期入力へ含めない情報は
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
 内部Actionのvariant、field、麻雀上の意味、Actionと結果stateの分離は
 [内部Actionモデル](internal-action-model.md)で確定済みである。
+semantic identity、multiset canonicalization、外部候補のsemantic aggregation、
+decision-local mapping、deterministic representative、revalidationの原則は
+[Action identity](action-identity.md)で確定済みである。
 
 次はIssue #11の後続項目で決定するため、本書では確定しない。
 
-- action identityの正規化規則
-- 赤牌や`consumed`の具体的なidentity規則
+- Pythonでの具体的なaction equality、hash、canonical key表現
+- 外部環境ごとのdeterministic representativeの具体的なtie-break key
 - 設計用語を表す具体的なPython型の実装方式
 - Python package、module、classの構成
 
@@ -255,7 +263,7 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- Issue #11で扱うaction identityの詳細確定
+- action identity、Adapter、Clientの具体的なPython実装
 - Policy、Adapter、Local game runner、RiichiLab Clientの本実装
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合

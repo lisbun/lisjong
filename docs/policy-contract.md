@@ -11,6 +11,8 @@ Policyの公開契約を定める。上位の責務と依存方向は
 [Policy入力の最小スキーマ](policy-input-schema.md)を正本とする。
 Policyが選択する`InternalAction`のvariant、field、意味契約は、
 [内部Actionモデル](internal-action-model.md)を正本とする。
+`InternalAction`のsemantic identity、外部候補の集約、decision-local mappingは
+[Action identity](action-identity.md)を正本とする。
 
 本書の非空な合法手集合等の条件はlisjongの設計判断である。特に、
 RiichiEnvの`legal_actions()`が常に1件以上を返すことを確認済みという意味では
@@ -70,7 +72,8 @@ Policy入力の具体的なschema、不変性、canonicalizationは
 Policyを正常に呼び出す時点で、`DecisionContext.legal_actions`は次を満たす。
 
 - 1件以上存在する
-- 後続で定義するaction identity上、候補同士が重複しない
+- [Action identity](action-identity.md)で定義するsemantic identity上、
+  候補同士が重複しない
 - 並び順に契約上の意味を持たない
 - list indexや順番をAction identityまたは優先順位として扱わない
 
@@ -94,8 +97,8 @@ Policyは`InternalAction`を1件返す。返却Actionは
 - 合法手候補の並び順
 
 `InternalAction`の具体的なvariantとfieldは
-[内部Actionモデル](internal-action-model.md)で定める。action identityの
-正規化規則はIssue #11の後続項目で定義する。
+[内部Actionモデル](internal-action-model.md)、action identityの正規化規則は
+[Action identity](action-identity.md)で定める。
 
 ## 合法性検証の責務
 
@@ -111,8 +114,10 @@ Policy呼び出し境界の検証はPolicy実装自身へ重複実装させな�
 およびRiichiLab ClientがPolicyを呼び出す際に利用する共通責務とするが、
 具体的なclass名、wrapper、module構成は本書で確定しない。
 
-RiichiLabの実際の`possible_actions`との詳細な照合規則には未実測事項があるため、
-今回の契約では確定しない。
+semantic identityと共通の照合原則は
+[Action identity](action-identity.md)で定める。RiichiLabの実際の
+`possible_actions`との具体的なtranslation、serialization、照合規則には
+未実測事項があるため、引き続き確定しない。
 
 ## Policyが所有してよい状態
 
@@ -201,8 +206,9 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
 
 次はIssue #11の後続項目または後続Issueで決定し、本書では確定しない。
 
-- action identityの具体的な正規化規則
-- 赤牌や`consumed`等のidentity詳細
+- Pythonでの具体的なaction equality、hash、canonical key表現
+- `Tile`の具体符号化
+- 外部候補のdeterministic representativeを選ぶ具体的なtie-break key
 - Python package、module、class構成
 - 具体的な例外class
 - timeout値、retry方法
@@ -215,3 +221,6 @@ Policy入力の具体的なfieldと、raw event履歴を初期入力へ含めな
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定済みである。
 `InternalAction`のvariant、field、麻雀上の意味、不変条件は、
 [内部Actionモデル](internal-action-model.md)で確定済みである。
+semantic identity、multiset canonicalization、外部候補のsemantic aggregation、
+decision-local mapping、representative選択の要件は
+[Action identity](action-identity.md)で確定済みである。
