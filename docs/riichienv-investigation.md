@@ -479,7 +479,7 @@ ranks:
 9. 再現性が必要な実験では、現時点ではconstructorの`RiichiEnv(seed=...)`を使用する。`reset(seed=...)`を再現性の根拠にはしない。
 10. RiichiEnvが不正player IDを必ず例外化することを前提にせず、Adapter側でAction要求playerと入力player IDの整合性を検証する。
 11. 複数playerへ同時に応答する場合も、各playerの`Observation`と合法手を混同せず、seatごとに変換・検証する。
-12. ローカルとRiichiLabでRiichiEnv-facing Agentの`Observation -> Action`境界を共通化できる。Agentの内側ではRiichiEnv固有型をlisjong内部型へ変換し、Policyへ直接持ち込まない。
+12. ローカルとRiichiLabでは、RiichiEnv AdapterとPolicy contractを共通利用できる。RiichiEnv固有型とlisjong内部型の変換はRiichiEnv Adapterへ閉じ込め、Policyへ直接持ち込まない。
 13. RiichiEnv利用時の対局終了は`round_wind`や`kyoku_idx`から推測せず、`env.done()`を正本とする。
 14. `env.mjai_log`は非公開情報を含み得る完全対局ログとしてPolicyから隔離し、Replay、調査、監査等のPolicy外用途に限定する。
 15. eventをPolicy入力に使う場合は、`env.mjai_log`ではなくseat別`Observation`の情報境界を維持する。WebSocket、`request_id`、`possible_actions`照合、timeout、`action_ack`、session終了処理はRiichiLab Clientへ閉じ込める。初期スコープでは切断後の途中再接続・復旧を試みず、安全に終了する。
