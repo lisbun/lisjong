@@ -7,6 +7,10 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 分離し、各seatが判断時点で観測可能な情報だけをPolicyへ渡すことを最優先の
 境界とする。
 
+lisjong ecosystem全体のrepository責務とrepository間依存方向は、
+[`lisjong-project` のArchitecture](https://github.com/lisbun/lisjong-project/blob/main/docs/architecture.md)を正本とする。
+本書は、その横断境界の内側にある `lisjong` 固有のPolicy、Adapter、integration architectureを正本として扱う。
+
 本書は、Issue #3のRiichiEnv 0.4.8に対する調査結果、Issue #11の設計、
 Issue #20で具体化した共通Policy契約型を受けて、初期段階の責務と依存方向を
 定める。Issue #3で確認した公式情報、実測、
