@@ -281,6 +281,43 @@ WebSocket、`request_id`、`possible_actions`、timeout、`action_ack`等の
 protocol情報はPolicyへ渡さない。共通のsemantic identity原則は
 [Action identity](action-identity.md)を参照する。
 
+### 牌姿評価
+
+牌姿評価は、lisjongの`Tile`から派生的な評価値を計算する環境非依存の層である。
+Issue #50時点の責務は向聴数計算だけであり、Policyの判断そのものは所有しない。
+
+- 入力はlisjongの内部型に限り、RiichiEnv、RiichiLab、mjai、WebSocketの型や
+  protocolへ依存しない
+- Policy実行、合法手判定、対局進行、打牌選択、受け入れ計算、打点評価を
+  責務に含めない
+- 同じ入力に対して決定的な結果を返し、呼び出し間で状態を持たない
+- 具体的な計算backendはpackage内のprivate moduleに隠し、公開契約だけを外へ出す
+
+#### `hand_evaluation` package (Issue #50)
+
+`src/lisjong/hand_evaluation/`は、上記責務のうち向聴数計算をIssue #50で実装した
+Python packageである。
+
+- 公開契約は`calculate_shanten(tiles)`だけであり、`Tile`のiterableを受け取って
+  向聴数を`int`で返す。和了形が`-1`、聴牌が`0`である
+- 入力は純手牌（concealed tiles）のみとし、副露・槓で確定済みのmeldの牌は
+  含めない。確定面子数は純手牌枚数から判断するため、`PublicMeld`や`MeldKind`を
+  向聴計算へ渡さない
+- `OwnHandState`自体は受け取らない。`drawn_tile`は`concealed_tiles`に含まれる
+  metadataなので、追加の1枚として数えない
+- 内部では赤5と通常5を同じ基礎牌種へ正規化した34牌種countをcanonical
+  representationとして使うが、これは公開APIにしない。`Tile`のred distinction
+  自体は変更しない
+- 不正な入力はfail closedとし、iterableでない入力と`Tile`以外の要素は
+  `TypeError`、あり得ない純手牌枚数と基礎牌種5枚以上は`ValueError`とする
+- `shanten.py`が公開契約・validation・正規化を、`_python_shanten.py`が34牌種
+  countだけを見るprivate backendを担当する。`ShantenBackend` Protocolやplugin
+  機構は導入せず、private module境界だけを維持する
+
+初版は正確性と可読性を優先したPython実装であり、lookup table、Rust、C++等の
+高速化は実利用後のbenchmarkで必要性が確認されてから検討する。backendを交換
+しても`calculate_shanten()`を利用する側の契約は変えない。
+
 ## 依存方向
 
 次の図では、矢印の始点が終点の公開契約または外部APIを利用する。
@@ -296,6 +333,8 @@ flowchart TD
     Client --> Contract
     Adapter --> Contract
     Impl["Policy implementation"] --> Contract
+    Impl --> HandEval["Hand evaluation"]
+    HandEval --> Contract
 ```
 
 Local game runnerとRiichiLab Clientは、それぞれローカル対局とオンライン対局の
@@ -309,6 +348,21 @@ Policy implementationはPolicy contractを実装する。
 Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
 mjai、WebSocketへ依存しない。外部環境の仕様変更はLocal game runner、
 RiichiEnv Adapter、またはRiichiLab Clientで吸収し、Policyへ直接伝播させない。
+
+Hand evaluationはPolicy contractのvalue型だけへ依存し、Policy implementationが
+Hand evaluationを利用する。依存方向は次のとおりで、逆流させない。
+
+```text
+policy_contract
+      ↑
+hand_evaluation
+      ↑
+policies
+```
+
+Hand evaluationはPolicyを呼び出さず、AdapterやRunner / Clientからも参照
+されない。RiichiEnv AdapterやRiichiLab Clientが牌姿評価へ依存する経路は
+作らない。
 
 ### 共通Policy契約package
 
