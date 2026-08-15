@@ -170,8 +170,8 @@ Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約
 RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
 `request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで
 実装し、validationを完走しています。RiichiLab ranked接続(`/ws/ranked`)の
-1半荘Clientも実装済みで、検証用botによるlive smoke test待ちです。学習・推論機能は
-まだ実装していません。
+1半荘Clientも実装し、検証用botによるlive smoke testを完走しています。学習・推論
+機能はまだ実装していません。
 
 ## License
 

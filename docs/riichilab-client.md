@@ -403,23 +403,51 @@ python -m lisjong.riichilab_client.validation
 
 ## live ranked smoke test
 
-2026-08-15、検証用botで実RiichiLab `/ws/ranked`を2回実行した。2回とも
-matchmakingから`end_game`受信までは到達したが、当初のClientがscoresを必須と
-したため`ProtocolError`で終了した。2回目のsecret-safe診断により、実serverの
-`end_game`は`{"type":"end_game"}`相当でscoresを含まないことを確認した。
-この実測を受け、scoresなし`end_game`を正常terminalとして扱うよう修正した。
+### 公式情報
 
-本実装環境へtokenは注入していない。修正後の最終live smoke testは、検証用bot
-だけを学習者環境から1半荘実行する。本命bot `lisjong`は使用せず、Policy versionは
-bot名を増やさずGit commit/tagで管理する。順位・score・ratingは観測してよいが
-成功条件にしない。
+公式文書ではranked接続のterminal eventを`end_game`としている。実装当初は
+同eventにfinal scoresが含まれる前提としていた。
+
+### 実測
+
+2026-08-15、検証用botで実RiichiLab `/ws/ranked`を実行した。最初の2回は
+matchmakingから`end_game`受信までは到達したが、Clientがscoresを必須としたため
+`ProtocolError`で終了した。2回目のsecret-safe診断により、実serverの
+`end_game`はtop-level keyが`type`だけの`{"type":"end_game"}`相当で、scoresを
+含まないことを確認した。
+
+この実測を反映した修正後、同日の3回目のlive smoke testで1半荘を完走した。
+
+```text
+RiichiLab ranked game completed
+seat: 3
+requests: 85
+responses: 85
+end_game: yes
+scores: unavailable
+```
+
+Clientが観測する`rejected` / `unparseable`、protocol error、chombo相当のfatal
+error、unexpected disconnectは発生せず、`end_game`後に再queue・次gameへ進まず
+processが終了した。これによりIssue #42のlive ranked smoke test成功条件を満たした。
+
+### 設計判断
+
+ranked Clientは有効な`end_game`受信そのものを正常終了条件とし、scoreの取得を
+成功条件にしない。scoresがない場合は`None`として保持し、値を捏造しない。serverが
+validな4整数scoresを通知した場合だけtupleとして保持・表示し、scores fieldが存在
+するが不正な場合はfail closedを維持する。
+
+本実装環境へtokenは注入していない。live smoke testには検証用botだけを使用し、
+本命bot `lisjong`は使用していない。Policy versionはbot名を増やさずGit commit/tagで
+管理する。順位・score・ratingは観測してよいが成功条件にしない。
 
 ```powershell
 $env:BOT_TOKEN = "<検証用RiichiLab bot token>"
 python -m lisjong.riichilab_client.ranked
 ```
 
-成功時は次を確認する。
+再実行時は次を確認する。
 
 ```text
 RiichiLab ranked game completed
@@ -433,5 +461,4 @@ scores: unavailable
 serverがvalidな4整数scoresを通知した場合だけ、`scores:`にはその4値を表示する。
 加えて、`rejected` / `unparseable`、protocol error、chombo、unexpected
 disconnectがなく、`end_game`後に再queue・次gameへ進まずprocessが終了することを
-確認する。修正後の最終実測まではIssue #42のlive完走条件は未達としてPRを
-mergeしない。
+確認する。
