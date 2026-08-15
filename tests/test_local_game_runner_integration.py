@@ -1,7 +1,7 @@
 import unittest
 
 from lisjong.local_game_runner import LocalGameRunner
-from lisjong.policies import MinimalPolicy, ShantenPolicy
+from lisjong.policies import MinimalPolicy, ShantenPolicy, UkeirePolicy
 from lisjong.policy_contract import DecisionContext, InternalAction, Seat
 
 
@@ -111,6 +111,38 @@ class LocalGameRunnerShantenPolicyIntegrationTest(unittest.TestCase):
         seed = 12345
         runner = LocalGameRunner(
             {seat: ShantenPolicy() for seat in Seat},
+            seed=seed,
+            game_mode="4p-red-half",
+            max_steps=10_000,
+        )
+
+        result = runner.run()
+
+        self.assertTrue(runner._env.done())
+        self.assertEqual(result.seed, seed)
+        self.assertEqual(result.game_mode, "4p-red-half")
+        self.assertGreater(result.steps, 1)
+        self.assertGreater(result.decisions, result.steps)
+
+
+class LocalGameRunnerUkeirePolicyIntegrationTest(unittest.TestCase):
+    """Issue #52完了条件: `UkeirePolicy`でRiichiEnv固定seed対局を完走できる。
+
+    #51の`ShantenPolicy` integration testと同じ構造・同じ固定seed・同じ
+    game modeを再利用する。ここでもPolicyの強さやscore・順位は評価せず、
+    `UkeirePolicy` / Policy実行境界 / RiichiEnv Adapter / Local game runnerの
+    組み合わせが最後まで処理できることだけを確認する。受け入れ計算は
+    discard候補ごとに最大34基礎牌種の`calculate_shanten()`を伴うため、
+    この1局だけで既存のPolicy integration testより実行時間が長い。同じseedの
+    2局目を追加して再現性まで見ると実行時間が倍になるので、決定性は
+    `tests/test_ukeire_policy.py`のorder independence testで固定し、ここへは
+    重ねない。環境差でflakyになる厳密なwall-clock thresholdも入れない。
+    """
+
+    def test_fixed_seed_half_game_completes_with_ukeire_policy(self) -> None:
+        seed = 12345
+        runner = LocalGameRunner(
+            {seat: UkeirePolicy() for seat in Seat},
             seed=seed,
             game_mode="4p-red-half",
             max_steps=10_000,

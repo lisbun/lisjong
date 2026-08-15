@@ -189,19 +189,28 @@ mappingをregression test化している)。
 
 | profile | 用途 | credential環境変数 | Policy | runtime namespace |
 | --- | --- | --- | --- | --- |
-| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `ShantenPolicy` | `lisjong-dev` |
+| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `UkeirePolicy` | `lisjong-dev` |
 | `lisjong-baseline` | Policy性能比較の決定的な基準 | `LISJONG_BASELINE_BOT_TOKEN` | `MinimalPolicy` | `lisjong-baseline` |
 | `lisjong` | 本番運用(十分に検証済みのPolicyのみ) | `LISJONG_BOT_TOKEN` | `MinimalPolicy` | `lisjong` |
 
 Issue #44時点では3 profileとも`MinimalPolicy`(決定的、hidden mutable
 stateなし)を使用していた。Issue #51で`lisjong.hand_evaluation.calculate_shanten()`
 を利用した最初の戦略的Policy`ShantenPolicy`を導入し、`lisjong-dev`だけを
-`ShantenPolicy`へ切り替えた。`lisjong-baseline`は比較基準として固定する
-という完了条件のとおり`MinimalPolicy`のまま変更せず、`lisjong`も十分に
-検証済みのPolicyのみを使う方針のとおり`MinimalPolicy`のまま変更しない。
+`ShantenPolicy`へ切り替えた。Issue #52では、最小向聴の打牌候補を受け入れ枚数で
+比較する`UkeirePolicy`を追加し、`lisjong-dev`をさらに`UkeirePolicy`へ
+切り替えている。`lisjong-baseline`は比較基準として固定するという完了条件の
+とおり`MinimalPolicy`のまま変更せず、`lisjong`も十分に検証済みのPolicyのみを
+使う方針のとおり`MinimalPolicy`のまま変更しない。
 各`RuntimeProfile.policy_factory`は独立したcallableであるため、将来
 `lisjong-dev` / `lisjong-baseline` / `lisjong`を別Policyへ個別に差し替える
 ことができる。
+
+profileから外れた`ShantenPolicy`も、`MinimalPolicy`と同様に
+`lisjong.policies`の公開Policyとして保持する。`MinimalPolicy`(Policy境界と
+決定性のbaseline)、`ShantenPolicy`(打牌後向聴数だけを最小化)、
+`UkeirePolicy`(最小向聴候補を受け入れ枚数で比較)は、後続のPolicy比較で
+そのまま並べられる世代として併存させ、profile mappingの変更で過去世代を
+削除しない。
 
 ### credential解決とfail closed
 

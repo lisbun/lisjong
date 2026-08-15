@@ -10,7 +10,7 @@ import concurrent.futures
 import unittest
 from pathlib import Path
 
-from lisjong.policies import MinimalPolicy, ShantenPolicy
+from lisjong.policies import MinimalPolicy, UkeirePolicy
 from lisjong.riichilab_client.profile import (
     PROFILE_NAMES,
     MissingCredentialError,
@@ -40,7 +40,7 @@ class ProfileMappingTest(unittest.TestCase):
         self.assertEqual(profile.name, "lisjong-dev")
         self.assertEqual(profile.credential_env_var, "LISJONG_DEV_BOT_TOKEN")
         self.assertEqual(profile.runtime_namespace, "lisjong-dev")
-        self.assertIsInstance(profile.policy_factory(), ShantenPolicy)
+        self.assertIsInstance(profile.policy_factory(), UkeirePolicy)
 
     def test_lisjong_baseline_mapping(self) -> None:
         profile = resolve_profile("lisjong-baseline")
