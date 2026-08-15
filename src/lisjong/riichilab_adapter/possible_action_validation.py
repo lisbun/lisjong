@@ -31,8 +31,12 @@ identityとして持つfield(`type` / `pai` / `consumed`)だけで構成し、
 無視せずcandidate malformedとしてvalidation全体をfail closedする。
 
 - semantic match 0件 -> reject
-- semantic match 1件 -> accept
-- semantic match複数件 -> reject(ambiguity)
+- semantic match 1件以上 -> accept
+
+Issue #39の実RiichiLab `/ws/validate`で、同じsemantic Actionへ一致する
+candidateが2件提示されることを確認した。candidate list内の重複はAction
+identityや送信payloadの選択には使わず、合法性を確認できる一致が1件以上
+あれば受理する。
 
 `possible_actions`内に1件でもmalformed candidate、または未知のAction typeの
 candidateが含まれる場合、他のcandidateが一致するかどうかにかかわらず
@@ -236,7 +240,7 @@ def _optional_tile_field_agrees(
 def validate_against_possible_actions(
     response: Mapping, possible_actions: Sequence[object]
 ) -> None:
-    """送信予定`response`が`possible_actions`へ一意にsemantic matchすることを確認する。
+    """送信予定`response`が`possible_actions`へsemantic matchすることを確認する。
 
     `response`は`build_mjai_response()`が構築した、これからserverへ送ろうと
     しているBot-to-Server response相当のMJAI dictである。canonical
@@ -249,7 +253,10 @@ def validate_against_possible_actions(
     - `possible_actions`内にmalformed candidate、または未知Action typeの
       candidateが1件でも存在する
     - semantic match 0件
-    - semantic match複数件(ambiguous)
+
+    semantic matchは1件以上あれば受理する。Issue #39のlive validationで、
+    同じsemantic Actionに対応するwell-formed candidateが実serverから複数
+    提示されることを確認したためである。
 
     一致したcandidateの値そのものは戻り値として使わない(送信payloadは
     あくまでresolve済みcanonical Actionから構築済みのものを使う)。
@@ -294,9 +301,4 @@ def validate_against_possible_actions(
     if match_count == 0:
         raise PossibleActionsValidationError(
             "selected action matches no possible_actions candidate"
-        )
-    if match_count > 1:
-        raise PossibleActionsValidationError(
-            "selected action matches multiple possible_actions candidates; "
-            f"found {match_count} ambiguous matches"
         )

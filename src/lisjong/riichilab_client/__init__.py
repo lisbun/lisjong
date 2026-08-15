@@ -9,7 +9,13 @@ mapping・`possible_actions` semantic validationは#38
 
 `websockets`への依存はこのpackage内だけで使用し、`policy_contract` /
 `policies` / `riichienv_adapter`へは逆流させない。
+
+`ValidationResult`と`run_validation`はpackage rootの公開APIとして維持するが、
+`python -m lisjong.riichilab_client.validation`で対象moduleを事前importしない
+ようにlazy exportする。
 """
+
+from typing import TYPE_CHECKING
 
 from lisjong.riichilab_client.errors import (
     ProtocolError,
@@ -24,7 +30,25 @@ from lisjong.riichilab_client.transport import (
     connect_validation_transport,
     drive_validation_session,
 )
-from lisjong.riichilab_client.validation import ValidationResult, run_validation
+
+if TYPE_CHECKING:
+    from lisjong.riichilab_client.validation import ValidationResult, run_validation
+
+
+def __getattr__(name: str) -> object:
+    """`validation`の公開名を、package access時にだけimportする。"""
+    if name not in {"ValidationResult", "run_validation"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    from lisjong.riichilab_client.validation import ValidationResult, run_validation
+
+    exports = {
+        "ValidationResult": ValidationResult,
+        "run_validation": run_validation,
+    }
+    globals().update(exports)
+    return exports[name]
+
 
 __all__ = [
     "DEFAULT_VALIDATION_URL",

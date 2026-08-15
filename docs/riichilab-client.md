@@ -39,9 +39,9 @@ AI実行環境から`https://riichi.dev/docs/protocol`、
 
 したがって、本書が「公式情報」と記載する項目は、実際にはIssue本文・コメントが
 転記した時点の公式仕様であり、`riichi.dev`を直接参照して独自に確認したもの
-ではない。live validationを含む実測の再確認は、学習者環境で`BOT_TOKEN`と
-network egressが利用可能な状態で行うことが望ましい(下記「live validation」を
-参照)。
+ではない。その後、2026-08-15に学習者のWindows環境から実BOT_TOKENをruntime
+注入してlive validationを1回実施した。確認範囲と停止理由は下記
+「live validation」に記録する。
 
 ## 責務境界(実装確定)
 
@@ -60,6 +60,12 @@ network egressが利用可能な状態で行うことが望ましい(下記「li
 - `python -m lisjong.riichilab_client.validation`: 環境変数`BOT_TOKEN`から
   tokenを読み込むCLI entry point。secretはstdout/stderrへ出力しない
 
+`ValidationResult` / `run_validation`は
+`lisjong.riichilab_client.validation`から直接importできるほか、互換性のため
+`lisjong.riichilab_client` package rootからもlazy exportする。package import時に
+`validation` moduleをeager importしないため、上記`python -m`実行時にrunpyの
+二重import warningを発生させない。
+
 内部構造(`ValidationSession` / `Transport`等)は次の「package構成」を参照する。
 
 WebSocket接続、`request_id`のgame内lifecycle管理、`action_ack`対応付け、
@@ -72,7 +78,7 @@ serializationは`riichilab_adapter`(#38)を再利用し、この境界へ再実�
 
 ```text
 src/lisjong/riichilab_client/
-    __init__.py     公開API re-export
+    __init__.py     公開API lazy re-export
     errors.py       RiichiLabClientError / ProtocolError / TransportError /
                      UnexpectedDisconnectError
     session.py       ValidationSession(pure transport lifecycle state)
@@ -339,20 +345,37 @@ Issue #39最新コメントが提示した4層構成で実装した。
    MJAI responseまで届くこと、Policyへ`request_id`/`time`/`ack`/
    WebSocket固有情報が漏れないことを確認する。あわせて
    `run_validation()`をfake transportで駆動するend-to-end testで、
-   `ValidationResult`の内容とtoken非露出を確認する
+   `ValidationResult`の内容とtoken非露出を確認する。CLIをtoken未設定で
+   subprocess実行し、`python -m`でrunpy `RuntimeWarning`が発生しないことも
+   回帰testで固定する
 4. **manual live validation**: 下記「live validation」を参照
 
 ## live validation
 
-**未実施**。理由は次の2点である。
+**1回実施済み、修正後の再実行待ち**である。2026-08-15に学習者の
+Windows / Python 3.14環境から実BOT_TOKENをruntime注入し、実RiichiLab
+`/ws/validate`へ接続した。
 
-- 本実装を行ったAI実行環境には実`BOT_TOKEN`が注入されておらず、有効な
-  botとして接続できない
-- `riichi.dev`ドメインへのnetwork egressがproxy policyによりblockされて
-  おり(`curl`で`403`)、`wss://game.riichi.dev/ws/validate`への接続
-  そのものを試行できない
+確認できた範囲:
 
-学習者環境からlive validationを実行する場合、次のコマンドを使用する。
+- WebSocket connection成功
+- Authorization成功
+- `start_game.id`受信・seat bind成功
+- `request_action`受信成功
+- `Observation.deserialize_from_base64()`成功
+- #23 `build_decision()`、#34 `execute_policy()`、`MinimalPolicy`、
+  `mapping.resolve()`、MJAI response構築まで成功
+
+その後、server提示`possible_actions`にselected responseへ同じsemantic
+identityで一致するcandidateが2件存在し、旧#38 validationが
+`found 2 ambiguous matches`としてfail closedしたため、送信前に停止した。
+このlive実測により、duplicate candidateの有無は未確認事項ではなくなった。
+
+設計をsemantic match 0件ならreject、1件以上ならacceptへ修正した。全candidateの
+malformed / unknown Action type検証、candidate order / object identityを使わない
+方針、send-ready responseをserver candidateへ置換しない方針は維持している。
+
+修正後のlive validationを学習者環境から再実行する場合、次のコマンドを使用する。
 
 ```powershell
 $env:BOT_TOKEN = "<実RiichiLab bot token>"
@@ -365,7 +388,7 @@ raw Observationは表示しない)。失敗時は非zero exit codeを返し、
 `RiichiLabClientError`のtypeとmessageをstderrへ出力する(いずれも
 tokenを含まない)。
 
-live validation実行後、確認できた実際のBot-to-Server response schema、
-`end_game`/`validation_result`の受信順序、`action_ack`
-`rejected`/`unparseable`後のserver側継続有無等を本書へ反映することが
-望ましい。
+今回の実行はsend前に停止したため、Bot-to-Server responseのserver受理、
+`action_ack`、`end_game` / `validation_result`の実際の順序とclose挙動は
+引き続き未確認である。再live validation後に、次に確認できた範囲を本書へ
+反映する。

@@ -14,6 +14,9 @@ objectが一切漏れないこと、`possible_actions`が#38外部validation専�
 
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import unittest
 from contextlib import asynccontextmanager
 from dataclasses import fields
@@ -63,6 +66,31 @@ def _make_fake_connect(transport: _FakeTransport, captured_tokens: list):
         yield transport
 
     return _connect
+
+
+class ValidationModuleCliTest(unittest.TestCase):
+    def test_module_cli_does_not_emit_runpy_runtime_warning(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("BOT_TOKEN", None)
+
+        completed = subprocess.run(
+            [sys.executable, "-m", "lisjong.riichilab_client.validation"],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("BOT_TOKEN environment variable is not set", completed.stderr)
+        self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_package_root_keeps_lazy_validation_exports(self) -> None:
+        from lisjong import riichilab_client
+        from lisjong.riichilab_client.validation import ValidationResult
+
+        self.assertIs(riichilab_client.run_validation, run_validation)
+        self.assertIs(riichilab_client.ValidationResult, ValidationResult)
 
 
 class SeatAdapterMinimalPolicyIntegrationTest(unittest.TestCase):
