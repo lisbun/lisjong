@@ -184,6 +184,69 @@ class RankedTerminalTest(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     session.handle_event({"type": "end_game", "scores": scores})
 
+    def test_missing_scores_reports_only_event_shape(self) -> None:
+        session = self._started_session()
+        sentinel = "do-not-leak-this-value"
+        event = {
+            "type": "end_game",
+            "final_scores": {"nested": sentinel},
+            "metadata": sentinel,
+        }
+
+        with self.assertRaises(ProtocolError) as caught:
+            session.handle_event(event)
+
+        message = str(caught.exception)
+        self.assertIn(
+            "event_keys=['final_scores', 'metadata', 'type']",
+            message,
+        )
+        self.assertIn("scores_type=NoneType", message)
+        self.assertIn("scores_length=None", message)
+        self.assertNotIn(sentinel, message)
+
+    def test_non_list_scores_reports_type_without_values(self) -> None:
+        session = self._started_session()
+        sentinel = "do-not-leak-this-value"
+
+        with self.assertRaises(ProtocolError) as caught:
+            session.handle_event({"type": "end_game", "scores": {"nested": sentinel}})
+
+        message = str(caught.exception)
+        self.assertIn("event_keys=['scores', 'type']", message)
+        self.assertIn("scores_type=dict", message)
+        self.assertIn("scores_length=None", message)
+        self.assertNotIn(sentinel, message)
+
+    def test_list_scores_reports_length_without_values(self) -> None:
+        session = self._started_session()
+        sentinel = "do-not-leak-this-value"
+
+        with self.assertRaises(ProtocolError) as caught:
+            session.handle_event({"type": "end_game", "scores": [1, sentinel, 3]})
+
+        message = str(caught.exception)
+        self.assertIn("event_keys=['scores', 'type']", message)
+        self.assertIn("scores_type=list", message)
+        self.assertIn("scores_length=3", message)
+        self.assertNotIn(sentinel, message)
+
+    def test_invalid_score_element_reports_shape_without_values(self) -> None:
+        session = self._started_session()
+        sentinel = "do-not-leak-this-value"
+
+        with self.assertRaises(ProtocolError) as caught:
+            session.handle_event(
+                {"type": "end_game", "scores": [30000, 25000, 20000, sentinel]}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("ranked end_game scores must be integers", message)
+        self.assertIn("event_keys=['scores', 'type']", message)
+        self.assertIn("scores_type=list", message)
+        self.assertIn("scores_length=4", message)
+        self.assertNotIn(sentinel, message)
+
 
 class RankedFakeTransportTest(unittest.TestCase):
     def test_no_join_payload_and_exactly_one_game(self) -> None:

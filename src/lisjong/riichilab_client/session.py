@@ -93,6 +93,17 @@ def _validate_time_metadata(time_value: object) -> None:
             raise ProtocolError(f"request_action time.{field_name} must be numeric")
 
 
+def _describe_end_game_scores_shape(event: Mapping, scores: object) -> str:
+    """値を含めず、`end_game`のscores schema調査に必要なshapeだけを返す。"""
+    event_keys = sorted(event.keys())
+    scores_length = len(scores) if isinstance(scores, list) else None
+    return (
+        f"event_keys={event_keys!r}; "
+        f"scores_type={type(scores).__name__}; "
+        f"scores_length={scores_length!r}"
+    )
+
+
 class _GameSession:
     """validation/rankedが共有する1 game分のtransport lifecycle。"""
 
@@ -339,12 +350,17 @@ class RankedSession(_GameSession):
         if self._adapter is None:
             raise ProtocolError("end_game received before start_game")
         scores = event.get("scores")
+        scores_shape = _describe_end_game_scores_shape(event, scores)
         if not isinstance(scores, list) or len(scores) != 4:
-            raise ProtocolError("ranked end_game must contain four final scores")
+            raise ProtocolError(
+                "ranked end_game must contain four final scores; " + scores_shape
+            )
         if any(
             isinstance(score, bool) or not isinstance(score, int) for score in scores
         ):
-            raise ProtocolError("ranked end_game scores must be integers")
+            raise ProtocolError(
+                "ranked end_game scores must be integers; " + scores_shape
+            )
 
         self._scores = (scores[0], scores[1], scores[2], scores[3])
         super()._handle_end_game(event)
