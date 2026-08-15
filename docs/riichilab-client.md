@@ -1,8 +1,9 @@
 # RiichiLab WebSocket Client
 
-この文書は、[Issue #39](https://github.com/lisbun/lisjong/issues/39)で実装した
-`src/lisjong/riichilab_client/`の責務境界、RiichiLab公式protocolについて確認した
-事実、lisjongでの実測事実、未確認事項、設計判断を分離して記録する。
+この文書は、[Issue #39](https://github.com/lisbun/lisjong/issues/39)と
+[Issue #42](https://github.com/lisbun/lisjong/issues/42)で実装した
+`src/lisjong/riichilab_client/`の責務境界、RiichiLab公式protocolについて
+確認した事実、lisjongでの実測事実、未確認事項、設計判断を分離して記録する。
 
 Policy判断、Observation変換、Action mapping、`possible_actions` semantic
 validationの責務境界は[RiichiLab request_action Adapter](riichilab-adapter.md)
@@ -15,33 +16,34 @@ validationの責務境界は[RiichiLab request_action Adapter](riichilab-adapter
 | 区分 | 意味 |
 | --- | --- |
 | 公式情報 | RiichiLab公式文書、または公式文書を引用したIssue本文で確認した情報 |
-| 実測 | 実RiichiLab `/ws/validate`への接続で実際に確認した情報 |
+| 実測 | 実RiichiLabへの接続、または実RiichiEnvを使ったtestで確認した情報 |
 | 推測・未確認 | 公式情報と実測のどちらでも確認できていない事項 |
 | 設計判断 | 調査結果からlisjongの実装へ引き継ぐ判断 |
 
-## 公式文書へのアクセス制限(実装時点の記録)
+## 公式仕様の再確認(2026-08-15)
 
-Issue #38実装時点と同様、Issue #39実装時点(2026-08-14)でも、本実装を行った
-AI実行環境から`https://riichi.dev/docs/protocol`、
-`https://riichi.dev/docs/local-testing`、`https://riichi.dev/docs/validation`を
-含む`riichi.dev`ドメインへのnetwork egressがproxy policyによりblockされており
-(`curl`で`403`)、公式仕様の再取得ができなかった。またこの実行環境には実
-`BOT_TOKEN`も注入されておらず、実RiichiLab `/ws/validate`へのlive validationも
-実行できなかった。
+Issue #42実装前に、次のRiichiLab公式文書を直接再確認した。
 
-このため本実装は、次を情報源として進めた。
+- [MJAI Protocol](https://riichi.dev/docs/protocol): `/ws/ranked`と
+  `/ws/validate`はいずれもBearer `BOT_TOKEN`で接続する。serverがgame loopを
+  駆動し、botは`request_action`へのresponseだけを送る。`start_game.id`は
+  0..3、`request_id`はgame内で単調増加するinteger、binary frameと未知event /
+  fieldはignoreする。`end_game`はfinal `scores`を含み、受信後はdisconnectする
+- [Ranked Matches](https://riichi.dev/docs/ranked): active botで
+  `wss://game.riichi.dev/ws/ranked`へ接続するとmatchmaking queueへ入り、4 botで
+  full hanchanを行う。終了後にratingがfinal placementから更新され、serverが
+  `end_game`を送る
+- [Matchmaking](https://riichi.dev/docs/matchmaking): ranked endpointへの接続が
+  queue参加であり、botはmatchedまたはdisconnectまでqueueに残る。Client側の
+  join payload、polling、matchmaking algorithmは不要である
+- [Rating System](https://riichi.dev/docs/rating): ratingはOpenSkillで管理される。
+  Clientの`end_game` payloadでratingが通知されるという保証はないため、
+  `RankedGameResult`へratingを含めない
 
-- Issue #39本文、および[実装前の設計方針コメント](https://github.com/lisbun/lisjong/issues/39#issuecomment-5298990637)
-  が引用する公式仕様の要約
-- 本repositoryの既存文書(`docs/architecture.md`、`docs/riichilab-adapter.md`)
-- Issue #38が確定した`RiichiLabSeatAdapter`公開API(実装は再検証済み、
-  仕様は変更していない)
-
-したがって、本書が「公式情報」と記載する項目は、実際にはIssue本文・コメントが
-転記した時点の公式仕様であり、`riichi.dev`を直接参照して独自に確認したもの
-ではない。その後、2026-08-15に学習者のWindows環境から実BOT_TOKENをruntime
-注入してlive validationを1回実施した。確認範囲と停止理由は下記
-「live validation」に記録する。
+Issue #38/#39実装時は実装環境のnetwork制約により公式文書を直接取得できなかった
+が、その履歴は当時の制約として扱い、Issue #42では上記の最新公式文書を正本と
+して設計を再照合した。実`BOT_TOKEN`は本実装環境へ注入していないため、live
+ranked smoke testは学習者環境で行う。
 
 ## 責務境界(実装確定)
 
@@ -59,11 +61,18 @@ AI実行環境から`https://riichi.dev/docs/protocol`、
   secretは含まない
 - `python -m lisjong.riichilab_client.validation`: 環境変数`BOT_TOKEN`から
   tokenを読み込むCLI entry point。secretはstdout/stderrへ出力しない
+- `run_ranked_game(policy: Policy, token: str, *, url: str = DEFAULT_RANKED_URL) -> RankedGameResult`:
+  `wss://game.riichi.dev/ws/ranked`へ1回だけ接続し、queue待ちから1 full
+  hanchanの`end_game`まで処理して終了する
+- `RankedGameResult`: `end_game_received`、自seat、request/response件数、
+  `ack_history`、公式`end_game`で保証されるfinal `scores`を持つfrozen
+  dataclass。公式保証のないrank / placement / ratingは推測して含めない
+- `python -m lisjong.riichilab_client.ranked`: 検証用botのtokenを環境変数
+  `BOT_TOKEN`から読み込み、`MinimalPolicy`で1半荘だけ実行するCLI entry point
 
-`ValidationResult` / `run_validation`は
-`lisjong.riichilab_client.validation`から直接importできるほか、互換性のため
-`lisjong.riichilab_client` package rootからもlazy exportする。package import時に
-`validation` moduleをeager importしないため、上記`python -m`実行時にrunpyの
+validation/ranked双方のresult/runnerは各実行moduleから直接importできるほか、
+`lisjong.riichilab_client` package rootからlazy exportする。package import時に
+`validation` / `ranked` moduleをeager importせず、`python -m`実行時のrunpy
 二重import warningを発生させない。
 
 内部構造(`ValidationSession` / `Transport`等)は次の「package構成」を参照する。
@@ -81,25 +90,25 @@ src/lisjong/riichilab_client/
     __init__.py     公開API lazy re-export
     errors.py       RiichiLabClientError / ProtocolError / TransportError /
                      UnexpectedDisconnectError
-    session.py       ValidationSession(pure transport lifecycle state)
-    transport.py      Transport protocol、WebSocketTransport、
-                       connect_validation_transport()、
-                       drive_validation_session()
+    session.py       validation/ranked共通lifecycle、ValidationSession、
+                     RankedSession
+    transport.py     Transport protocol、WebSocketTransport、共通connect/driver、
+                     validation/ranked互換wrapper
     validation.py      run_validation()、ValidationResult、CLI entry point
+    ranked.py          run_ranked_game()、RankedGameResult、CLI entry point
 ```
 
-- `ValidationSession`(`session.py`)は、WebSocket接続・asyncioから完全に
-  独立したpure state machineである。parsed済みJSON event(mapping)を
-  `handle_event()`で受け取り、送信すべきpayloadがあればそのdictを返す。
-  fake/local transport testは、実接続なしにこのclassだけで
-  lifecycle全体を確認できる(下記「テスト方針」を参照)
+- 非公開`_GameSession`へseat bind、request_id lifecycle、`action_ack`
+  history、#38 Adapter呼び出し、`end_game` flagを1回だけ実装する。
+  `ValidationSession`はseat 0限定と`validation_result` terminal、
+  `RankedSession`はseat 0..3と`end_game` terminalだけを差分として持つ
 - `Transport` protocol(`transport.py`)は`recv()` / `send()` / `close()`
   だけを要求する最小限のasync interfaceであり、`WebSocketTransport`が
   `websockets` libraryの実接続をこのprotocolへ適合させる
-- `drive_validation_session()`が、`Transport`からの受信・JSON parse・
-  binary frame判定・`ValidationSession`への委譲・送信を1つのloopとして
-  実装する。`validation_result`を受信するまでloopし続け、受信後は
-  呼び出し側(`run_validation()`)が接続を閉じる
+- `connect_transport()` / `drive_session()`が接続・JSON parse・binary判定・
+  sessionへの委譲・response送信を共通実装する。既存validation wrapper APIは
+  維持し、ranked wrapperも同じ共通処理を利用する。接続直後にsendする処理は
+  なく、rankedでも`request_action`を受信した場合だけresponseを送る
 - `websockets`への依存はこのpackage内(`transport.py`)だけで使用し、
   `policy_contract` / `policies` / `riichienv_adapter`へは逆流させない
   (設計判断、Issue #39本文セクション38)
@@ -107,9 +116,8 @@ src/lisjong/riichilab_client/
 ## WebSocket library
 
 **設計判断**: 依存として`websockets==17.0.1`を採用した。実装開始時点
-(2026-08-14)でPyPIから取得可能な最新の安定版である。公式Local Testing文書
-(network egress blockのため本実装からは直接確認できていない)がこの
-libraryを例示していたIssue本文の記述を踏襲した。generic HTTP client、
+(2026-08-14)でPyPIから取得可能な最新の安定版である。RiichiLab公式
+Local Testing文書がこのlibraryを例示している。generic HTTP client、
 他のtransport frameworkは追加していない。
 
 `websockets.connect(url, additional_headers=headers)`は、17.x系のasyncio
@@ -121,22 +129,20 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 
 ## Token境界
 
-**設計判断**: `BOT_TOKEN`はruntime secretとして`run_validation(policy, token)`
-の明示引数から注入する。secret管理frameworkは導入していない。
+**設計判断**: `BOT_TOKEN`はruntime secretとして`run_validation()` /
+`run_ranked_game()`の明示引数から注入する。secret管理frameworkは導入していない。
 
 - `token`はAuthorization header(`Bearer <token>`)を設定する目的だけに
-  使用し、`Transport`実装・`ValidationSession`・`ValidationResult`の
-  いずれにも保持しない
-- CLI(`python -m lisjong.riichilab_client.validation`)は環境変数
-  `BOT_TOKEN`から読み込む。未設定時はsecretを含まないエラーメッセージを
-  stderrへ出力し、非zero exit codeを返す
+  使用し、`Transport`、各session、各resultのいずれにも保持しない
+- validation/ranked CLIは環境変数`BOT_TOKEN`から読み込む。未設定時はsecretを
+  含まないエラーメッセージをstderrへ出力し、非zero exit codeを返す
 - 例外メッセージ・ログ・test fixtureへtoken文字列を含めない設計とした
   (`test_riichilab_client_validation.py`の`SecretHandlingTest`相当の
   確認を`RunValidationEndToEndTest`内で行っている)
 
 ## `start_game` / seat bind
 
-**公式情報**(Issue #39初回レビューで確認): RiichiLab公式Protocolの
+**公式情報**: RiichiLab公式Protocolの
 `start_game` eventは、bot seat indexを`seat`ではなく**`id`** fieldで
 表す。公式例は次の形である。
 
@@ -144,13 +150,13 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 {"type": "start_game", "id": 0}
 ```
 
-**設計判断**: `start_game` eventの`id` fieldを`int`として読み取り、
-`Seat`へ変換して`RiichiLabSeatAdapter(self_seat=Seat.SEAT_0, policy=policy)`
-を1回だけ生成する。
+**設計判断**: `start_game.id`を`int`として読み取り`Seat`へ変換し、通知された
+self seatへ`RiichiLabSeatAdapter`を1 gameにつき1回だけbindする。
 
 - `id`が欠落・`bool`・`int`以外・`0`-`3`範囲外の場合はfail closed
   (`ProtocolError`)
 - validationでは`id == 0`を要求する。`0`以外はsilent補正せずfail closed
+- rankedでは`id == 0..3`をすべて正常として受理し、そのseatを結果へ記録する
 - `start_game`前に`request_action`を受信した場合はfail closed
 - duplicate `start_game`は安全側で扱う: 同一`id`を再度報告した場合は
   既存`RiichiLabSeatAdapter` runtimeをそのまま維持し、作り直さない。
@@ -184,16 +190,10 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 9. `SendReadyResponse.action`にrequest_idを付与したdictを、送信対象
    payloadとして返す
 
-**設計判断(未確認のBot-to-Server response schema)**: `SendReadyResponse`
-は`request_id`と`action`(MJAI action dict)を別々に保持するが(#38)、
-RiichiLab Bot-to-Server responseの実際のJSON schemaは本実装からは確認
-できていない。本実装は、`action`の各fieldをtop-levelへ展開したdictへ
-`request_id`を追加した形(`{**action, "request_id": request_id}`)を
-送信payloadとして採用した。これは「responseはcurrent request_idを
-echoする」という公式契約(Issue本文)を満たす最小の実装判断であり、
-実サーバーが別のwrapper形式(例: `{"type": "action", "request_id": ...,
-"action": {...}}`)を要求する場合は、live validationでの実測後に
-`session.py`の`_handle_request_action()`を更新する必要がある。
+**公式情報・実測**: Bot-to-Server responseはMJAI actionのtop-levelへcurrent
+`request_id`をechoする。Issue #39の実`/ws/validate`ではこの形で108 responsesを
+送信し、validationを完走した。Issue #42のranked pathも同じ#38 Adapterと共通
+session処理を再利用し、別schemaやwrapperを導入しない。
 
 ## time budget / timeout
 
@@ -255,8 +255,10 @@ lifecycle全体をfail closedする(=validation失敗として扱う)という
 
 ## `end_game` / `validation_result`
 
-**設計判断**(Issue #39最新コメントを採用): validation modeでは
-`end_game`受信時に即disconnectせず、`validation_result`を待つ。
+validationとrankedは、同じgame lifecycleを利用するがterminal条件が異なる。
+
+**validation設計判断**: `end_game`受信時に即disconnectせず、
+`validation_result`を待つ。
 
 ```text
 end_game受信
@@ -273,13 +275,15 @@ end_game受信
 - `reason`(なければ`message`)を任意のfailure reasonとして保持する。
   型が`str`でない場合はfail closed
 
-**推測・未確認**: `end_game`と`validation_result`の実際の受信順序、
-`validation_result`受信後にserverが自発的にconnectionを閉じるかどうかは、
-network egress blockにより実測できていない。本実装は
-`validation_result`受信後にClient側から`await connection.close()`する
-設計とした(`run_validation()`が`async with connect_validation_transport(...)`
-のcontext exitで行う)。live validationでの実測後、この節を更新する
-ことが望ましい。
+**ranked公式情報・設計判断**: `end_game`が1 full hanchanのterminal eventであり、
+受信後はdisconnectする。`validation_result`を待たず、次gameのeventも待たない。
+
+- `end_game.scores`は公式Protocolが保証する4 seatのfinal scoresとして、4個の
+  `int`(`bool`除外)を要求して`RankedGameResult`へ記録する
+- 公式schemaで保証されないrank / final placement / ratingは必須化・推測しない
+- rankedの`end_game`前にconnectionが切れた場合、server側ではdefault actionで
+  gameが継続しても、lisjongのsmoke testは`UnexpectedDisconnectError`で失敗する
+- `end_game`後はcontext exitでconnectionを閉じ、自動再queueしない
 
 ## binary frame
 
@@ -302,11 +306,11 @@ Issue #39本文セクション25が要求する項目を、本実装ではすべ
 送出する既存例外の伝播として実装した。
 
 - JSON parse failure、known lifecycle event malformed、
-  `request_action` before `start_game`、validation seat != 0、
+  `request_action` before `start_game`、validation seat != 0、ranked seat範囲外、
   duplicate/old/decreasing `request_id`、Adapter response request_id
   mismatch、`action_ack`のlifecycle不整合(unknown request_id、
   unknown status、`rejected`/`unparseable`)、`validation_result`の
-  malformed `passed` → `ProtocolError`
+  malformed `passed`、ranked `end_game`の欠落・不正scores → `ProtocolError`
 - JSON serialization failure、WebSocket send failure → `ProtocolError`
   または`TransportError`(送信前serializationは`ProtocolError`、
   送信そのものの失敗は`TransportError`)
@@ -322,12 +326,14 @@ Issue #39本文セクション25が要求する項目を、本実装ではすべ
 mid-game reconnectは実装していない。unexpected disconnectは
 `UnexpectedDisconnectError`として明示的な失敗を返し、自動retry loop、
 connection pool、旧`ValidationSession`/`RiichiLabSeatAdapter` stateの
-再利用は行わない。将来必要になった場合は、RiichiLabの仕様と必要性を
+再利用は行わない。rankedではqueue retry、auto requeue、`end_game`後の
+next game loopも行わず、1 connection / 1 hanchanで終了する。
+将来必要になった場合は、RiichiLabの仕様と必要性を
 確認し、別Issueで合意したうえで検討する。
 
 ## テスト方針(実装確定)
 
-Issue #39最新コメントが提示した4層構成で実装した。
+Issue #39の4層構成を維持し、Issue #42のranked差分を同じ境界で追加した。
 
 1. **pure lifecycle unit test** (`tests/test_riichilab_client_session.py`):
    `ValidationSession`を、`RiichiLabSeatAdapter`をfake stubへ差し替えた
@@ -348,47 +354,61 @@ Issue #39最新コメントが提示した4層構成で実装した。
    `ValidationResult`の内容とtoken非露出を確認する。CLIをtoken未設定で
    subprocess実行し、`python -m`でrunpy `RuntimeWarning`が発生しないことも
    回帰testで固定する
-4. **manual live validation**: 下記「live validation」を参照
+4. **ranked unit / fake transport / integration**
+   (`tests/test_riichilab_client_ranked.py`): seat 0..3、validation seat 0回帰、
+   `end_game` terminal、final scores、no join payload、exactly one game、
+   binary/unknown event、unexpected disconnect、#38 + `MinimalPolicy` integration、
+   secret-safe result、ranked CLIのRuntimeWarning非再発を確認する
+5. **manual live validation / ranked smoke test**: 下記を参照
 
 ## live validation
 
-**1回実施済み、修正後の再実行待ち**である。2026-08-15に学習者の
-Windows / Python 3.14環境から実BOT_TOKENをruntime注入し、実RiichiLab
-`/ws/validate`へ接続した。
+2026-08-15に学習者のWindows / Python 3.14環境から実BOT_TOKENをruntime
+注入し、duplicate semantic candidate対応後の実`/ws/validate`を再実行した。
 
-確認できた範囲:
+```text
+RiichiLab validation passed
+requests: 108
+responses: 108
+end_game: yes
+```
 
-- WebSocket connection成功
-- Authorization成功
-- `start_game.id`受信・seat bind成功
-- `request_action`受信成功
-- `Observation.deserialize_from_base64()`成功
-- #23 `build_decision()`、#34 `execute_policy()`、`MinimalPolicy`、
-  `mapping.resolve()`、MJAI response構築まで成功
+これにより、WebSocket connection / Authorization、`start_game.id`、108件の
+`request_action`、Observation deserialize、#23 `build_decision()`、#34
+`execute_policy()`、`MinimalPolicy`、mapping resolve、MJAI response送信、
+`end_game`、`validation_result.passed`まで実serverで完走済みとなった。
 
-その後、server提示`possible_actions`にselected responseへ同じsemantic
-identityで一致するcandidateが2件存在し、旧#38 validationが
-`found 2 ambiguous matches`としてfail closedしたため、送信前に停止した。
-このlive実測により、duplicate candidateの有無は未確認事項ではなくなった。
-
-設計をsemantic match 0件ならreject、1件以上ならacceptへ修正した。全candidateの
-malformed / unknown Action type検証、candidate order / object identityを使わない
-方針、send-ready responseをserver candidateへ置換しない方針は維持している。
-
-修正後のlive validationを学習者環境から再実行する場合、次のコマンドを使用する。
+再実行する場合は次のコマンドを使用する。
 
 ```powershell
 $env:BOT_TOKEN = "<実RiichiLab bot token>"
 python -m lisjong.riichilab_client.validation
 ```
 
-成功時は`RiichiLab validation passed`と、request/response件数、
-`end_game`受信有無を標準出力へ表示する(token、Authorization header、
-raw Observationは表示しない)。失敗時は非zero exit codeを返し、
-`RiichiLabClientError`のtypeとmessageをstderrへ出力する(いずれも
-tokenを含まない)。
+## live ranked smoke test
 
-今回の実行はsend前に停止したため、Bot-to-Server responseのserver受理、
-`action_ack`、`end_game` / `validation_result`の実際の順序とclose挙動は
-引き続き未確認である。再live validation後に、次に確認できた範囲を本書へ
-反映する。
+**Issue #42実装時点では未実施**である。本実装環境へtokenを注入せず、
+検証用botだけを学習者環境から1半荘実行する。本命bot `lisjong`は使用せず、
+Policy versionはbot名を増やさずGit commit/tagで管理する。順位・score・ratingは
+観測してよいが成功条件にしない。
+
+```powershell
+$env:BOT_TOKEN = "<検証用RiichiLab bot token>"
+python -m lisjong.riichilab_client.ranked
+```
+
+成功時は次を確認する。
+
+```text
+RiichiLab ranked game completed
+seat: 0..3
+requests: <受信件数>
+responses: <送信件数>
+end_game: yes
+scores: <4 seatのfinal scores>
+```
+
+加えて、`rejected` / `unparseable`、protocol error、chombo、unexpected
+disconnectがなく、`end_game`後に再queue・次gameへ進まずprocessが終了することを
+確認する。実測後に結果を本節へ追記し、それまではIssue #42のlive完走条件は未達と
+してPRをmergeしない。

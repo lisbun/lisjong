@@ -233,21 +233,20 @@ lifecycle管理、timeout schedulerは対象外であり、後続Issue #39が扱
 具体的なnormalization規則、`to_mjai()`実測結果、公式仕様との既知の未確認
 事項は[RiichiLab request_action Adapter](riichilab-adapter.md)を正本とする。
 
-#### `riichilab_client` package (Issue #39)
+#### `riichilab_client` package (Issues #39 / #42)
 
 `src/lisjong/riichilab_client/`は、RiichiLab Clientが担う責務のうち、
-「RiichiLab `/ws/validate`とのWebSocket transport lifecycle(接続、
+「RiichiLab `/ws/validate` / `/ws/ranked`とのWebSocket transport lifecycle(接続、
 `start_game` / `request_action` / `action_ack` / `validation_result` /
-`end_game`、`request_id`のgame内lifecycle管理)」をIssue #39で実装した
+`end_game`、`request_id`のgame内lifecycle管理)」をIssue #39 / #42で実装した
 Python packageである。Policy判断、Observation変換、Action mapping、
 `possible_actions` semantic validationは`riichilab_adapter`(#38)を
 consumerとして再利用し、この境界へ再実装しない。
 
-- `ValidationSession`(`session.py`)は、WebSocket接続そのものとは独立した
-  pure lifecycle stateとして、1 validation game分の`start_game` bind、
-  `request_id`のmonotonic検証、`action_ack` status history、
-  `end_game`/`validation_result`受信状態を所有する。実WebSocket接続なしに
-  parsed JSON eventのdictだけでlifecycle全体をtestできる
+- 非公開の共通game session(`session.py`)へ`start_game` bind、request_idの
+  monotonic検証、`action_ack` history、#38 Adapter呼び出しを1回だけ実装する。
+  `ValidationSession`はseat 0 + `validation_result` terminal、
+  `RankedSession`はseat 0..3 + `end_game` terminalだけを差分として持つ
 - `Transport` protocolと`WebSocketTransport`(`transport.py`)が、
   実際の`websockets` library接続を最小限のasync `recv`/`send`/`close`へ
   適合させる。`websockets`依存はこのpackage内だけで使用し、
@@ -259,16 +258,22 @@ consumerとして再利用し、この境界へ再実装しない。
   raw `request_action`全文等のsecretは`ValidationResult`へ含めない
 - `python -m lisjong.riichilab_client.validation`が、環境変数`BOT_TOKEN`
   からtokenを読み込むlive validation用のCLI entry pointを提供する
+- `run_ranked_game(policy, token)`(`ranked.py`)は、ranked endpointへの接続自体を
+  queue参加としてjoin payloadを送らず、1 connection / 1 hanchanだけ処理する。
+  `end_game`後はdisconnectし、自動requeue・next game・reconnectを行わない
+- `RankedGameResult`は自seat、request/response件数、ack history、公式
+  `end_game`で保証されるfinal scoresだけを保持し、rank / ratingは推測しない
 
 request_idのmonotonic contract(`+1`連番を仮定しない)、`action_ack`を
 「1 request = 1 ack」と仮定しないack status history設計、
 client-side deadline cancellationをMVPでは実装しない判断、binary frame
-ignore、`end_game`受信時に即disconnectせず`validation_result`を待つ設計は
+ignoreは両modeで共通である。validationの`end_game`後は
+`validation_result`を待ち、rankedの`end_game`後はdisconnectする。詳細は
 [RiichiLab WebSocket Client](riichilab-client.md)を正本とする。
 
 途中再接続を将来にわたって禁止するものではない。RiichiLabの仕様と必要性を
 確認し、別Issueで合意した場合に限り、初期スコープ外の機能として検討する。
-Issue #39時点ではmid-game reconnectを実装せず、unexpected disconnectは
+Issues #39 / #42時点ではmid-game reconnectを実装せず、unexpected disconnectは
 成功として扱わない。
 
 WebSocket、`request_id`、`possible_actions`、timeout、`action_ack`等の
@@ -401,8 +406,8 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 ## 現在の非目標
 
 - 具体Policyの戦略改善
-- RiichiLab ranked接続(`/ws/ranked`、matchmaking、rating、reconnect、
-  multi-connection)。Issue #39が実装したのは`/ws/validate`のみである
+- RiichiLab rankedの継続運用、rating改善、reconnect、auto requeue、
+  multi-connection
 - AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
 - 3人麻雀対応

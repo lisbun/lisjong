@@ -1,13 +1,15 @@
-"""RiichiLab validation game 1回分のtransport lifecycle state。
+"""RiichiLab game 1回分のtransport lifecycle state。
 
 `docs/riichilab-client.md`「責務境界」を実装する。実WebSocket接続とは
-独立した純粋なstate machineとして実装しており、fake/local test(parsed
-JSON eventのdict)だけでlifecycle全体を確認できる。実際のWebSocket
-送受信は`lisjong.riichilab_client.transport`が担当する。
+独立したpure stateとして実装しており、fake/local test(parsed JSON eventの
+dict)だけでlifecycle全体を確認できる。実際のWebSocket送受信は
+`lisjong.riichilab_client.transport`が担当する。
 
-`ValidationSession`は#38 `RiichiLabSeatAdapter`をconsumerとして1回だけ
-生成し、Policy判断・Observation変換・Action mapping・
-`possible_actions` semantic validationを再実装しない。
+validation/rankedで共通するseat bind、`request_id`、`action_ack`、
+`request_action`処理は`_GameSession`へ1回だけ実装する。公開sessionは、
+validationのseat/terminal条件とrankedのseat/terminal条件だけを追加する。
+Policy判断・Observation変換・Action mapping・`possible_actions` semantic
+validationは#38 `RiichiLabSeatAdapter`をconsumerとして再利用する。
 """
 
 from __future__ import annotations
@@ -27,29 +29,22 @@ _EVENT_TYPE_ACTION_ACK = "action_ack"
 _EVENT_TYPE_VALIDATION_RESULT = "validation_result"
 _EVENT_TYPE_END_GAME = "end_game"
 
-# 現在の公式protocolが定義するaction_ack status(Issue #39最新コメント)。
-# accepted以外はfatal/non-fatalを問わずack historyへ記録する。
 _KNOWN_ACK_STATUSES = frozenset(
     {"accepted", "rejected", "unparseable", "stale", "defaulted"}
 )
-# rejected/unparseableはchomboにつながり得る重大statusのため、観測した
-# 時点でfail closedする。stale/defaultedはnon-fatalとして記録するだけ。
 _FATAL_ACK_STATUSES = frozenset({"rejected", "unparseable"})
-
-# server提供time budgetのうち、型だけ検証するfield名(値そのものはClientの
-# deadline enforcementへ使わない。Issue #39最新コメント「client-side
-# deadline cancellationはMVPでは実装しない」)。
 _TIME_BUDGET_FIELDS = ("grace_ms", "bank_ms", "deadline_ms")
 
 
 class SessionStatus:
-    """呼び出し側が確認できる、validation lifecycleの現在状態のsnapshot。
+    """呼び出し側が確認できる、game lifecycleの現在状態のsnapshot。
 
-    tokenやraw Observation、raw request_action全文等のsecretを含み得る
+    token、raw Observation、raw `request_action`全文等のsecretを含み得る
     transport dataは保持しない。
     """
 
     __slots__ = (
+        "seat",
         "passed",
         "validation_result_received",
         "end_game_received",
@@ -57,11 +52,13 @@ class SessionStatus:
         "requests_received",
         "responses_sent",
         "ack_history",
+        "scores",
     )
 
     def __init__(
         self,
         *,
+        seat: Seat | None,
         passed: bool | None,
         validation_result_received: bool,
         end_game_received: bool,
@@ -69,7 +66,9 @@ class SessionStatus:
         requests_received: int,
         responses_sent: int,
         ack_history: Mapping[int, tuple[str, ...]],
+        scores: tuple[int, int, int, int] | None,
     ) -> None:
+        self.seat = seat
         self.passed = passed
         self.validation_result_received = validation_result_received
         self.end_game_received = end_game_received
@@ -77,14 +76,11 @@ class SessionStatus:
         self.requests_received = requests_received
         self.responses_sent = responses_sent
         self.ack_history = ack_history
+        self.scores = scores
 
 
 def _validate_time_metadata(time_value: object) -> None:
-    """`request_action.time`をtransport metadataとして最小限型検証する。
-
-    値そのものをdeadline enforcementへは使わない。存在しなくても許容する
-    (公式field表とIssue本文の記述差を、この境界では過剰に前提しない)。
-    """
+    """`request_action.time`をtransport metadataとして最小限型検証する。"""
     if time_value is None:
         return
     if not isinstance(time_value, Mapping):
@@ -97,16 +93,13 @@ def _validate_time_metadata(time_value: object) -> None:
             raise ProtocolError(f"request_action time.{field_name} must be numeric")
 
 
-class ValidationSession:
-    """1 validation game分のtransport lifecycle stateを所有する。
-
-    parsed済みJSON event(mapping)を受け取り、送信すべきpayloadがあれば
-    そのdictを返す。WebSocket API自体・非同期I/Oからは独立している。
-    """
+class _GameSession:
+    """validation/rankedが共有する1 game分のtransport lifecycle。"""
 
     __slots__ = (
         "_policy",
         "_adapter",
+        "_seat",
         "_accepted_request_ids",
         "_last_accepted_request_id",
         "_sent_request_ids",
@@ -114,14 +107,13 @@ class ValidationSession:
         "_requests_received",
         "_responses_sent",
         "_end_game_received",
-        "_validation_result_received",
-        "_passed",
-        "_failure_reason",
+        "_scores",
     )
 
     def __init__(self, policy: Policy) -> None:
         self._policy = policy
         self._adapter: RiichiLabSeatAdapter | None = None
+        self._seat: Seat | None = None
         self._accepted_request_ids: set[int] = set()
         self._last_accepted_request_id: int | None = None
         self._sent_request_ids: set[int] = set()
@@ -129,41 +121,42 @@ class ValidationSession:
         self._requests_received = 0
         self._responses_sent = 0
         self._end_game_received = False
-        self._validation_result_received = False
-        self._passed: bool | None = None
-        self._failure_reason: str | None = None
+        self._scores: tuple[int, int, int, int] | None = None
 
     @property
-    def validation_result_received(self) -> bool:
-        return self._validation_result_received
+    def is_complete(self) -> bool:
+        raise NotImplementedError
+
+    @property
+    def terminal_event_name(self) -> str:
+        raise NotImplementedError
+
+    def _validation_fields(self) -> tuple[bool | None, bool, str | None]:
+        return None, False, None
 
     def status(self) -> SessionStatus:
+        passed, validation_result_received, failure_reason = self._validation_fields()
         return SessionStatus(
-            passed=self._passed,
-            validation_result_received=self._validation_result_received,
+            seat=self._seat,
+            passed=passed,
+            validation_result_received=validation_result_received,
             end_game_received=self._end_game_received,
-            failure_reason=self._failure_reason,
+            failure_reason=failure_reason,
             requests_received=self._requests_received,
             responses_sent=self._responses_sent,
             ack_history={
                 request_id: tuple(statuses)
                 for request_id, statuses in self._ack_history.items()
             },
+            scores=self._scores,
         )
 
     def handle_event(self, event: Mapping) -> dict | None:
-        """1件のparsed済みJSON eventをdispatchする。
-
-        送信すべきpayloadがある場合だけdictを返す(`request_action`の
-        処理結果)。それ以外は`None`を返す。未知event type(`type`欠落を
-        含む)はforward compatibilityのためignoreする。既知eventの必須
-        fieldが欠落・型不正な場合はfail closedする(`ProtocolError`)。
-        """
+        """1件のparsed済みJSON eventをdispatchする。"""
         if not isinstance(event, Mapping):
             raise ProtocolError("event must be a JSON object")
 
         event_type = event.get("type")
-
         if event_type == _EVENT_TYPE_START_GAME:
             self._handle_start_game(event)
             return None
@@ -176,20 +169,14 @@ class ValidationSession:
             self._handle_validation_result(event)
             return None
         if event_type == _EVENT_TYPE_END_GAME:
-            # validation modeではend_game受信だけでは切断せず、
-            # validation_resultを待つ(Issue #39最新コメント)。
-            self._end_game_received = True
+            self._handle_end_game(event)
             return None
-
-        # standard informational MJAI eventを含む未知event typeは、Policy
-        # stateの正本が#38のdeserialize済みObservationであるため、
-        # Client側でPolicy stateへ二重適用せずignoreする。
         return None
 
+    def _accept_bound_seat(self, seat: Seat) -> None:
+        """mode固有のseat制約を検証する。rankedは0..3をすべて受理する。"""
+
     def _handle_start_game(self, event: Mapping) -> None:
-        # 公式RiichiLab Protocolでは、bot seat indexは`seat`ではなく`id`
-        # fieldである(`{"type": "start_game", "id": 0}`、Issue #39初回
-        # review blocking finding)。`seat`をfallbackとして併用しない。
         seat_value = event.get("id")
         if isinstance(seat_value, bool) or not isinstance(seat_value, int):
             raise ProtocolError("start_game is missing a valid integer id")
@@ -198,24 +185,16 @@ class ValidationSession:
         seat = Seat(seat_value)
 
         if self._adapter is not None:
-            # duplicate start_gameは安全側で扱う: 同一seatなら既存Adapter
-            # runtimeをそのまま維持し、作り直さない。seatが食い違う場合は
-            # silent補正せずfail closedする。
-            if seat != self._adapter.self_seat:
+            if seat != self._seat:
                 raise ProtocolError(
                     "duplicate start_game reported a different seat than the "
                     "already-bound adapter"
                 )
             return
 
-        if seat != _VALIDATION_SEAT:
-            raise ProtocolError(
-                f"validation requires seat {int(_VALIDATION_SEAT)}, got {seat_value!r}"
-            )
-
-        self._adapter = RiichiLabSeatAdapter(
-            self_seat=_VALIDATION_SEAT, policy=self._policy
-        )
+        self._accept_bound_seat(seat)
+        self._seat = seat
+        self._adapter = RiichiLabSeatAdapter(self_seat=seat, policy=self._policy)
 
     def _handle_request_action(self, event: Mapping) -> dict:
         if self._adapter is None:
@@ -224,7 +203,6 @@ class ValidationSession:
         request_id = event.get("request_id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
             raise ProtocolError("request_action is missing a valid integer request_id")
-
         if request_id in self._accepted_request_ids:
             raise ProtocolError(f"duplicate request_id: {request_id!r}")
         if (
@@ -237,22 +215,16 @@ class ValidationSession:
             )
 
         _validate_time_metadata(event.get("time"))
-
         self._accepted_request_ids.add(request_id)
         self._last_accepted_request_id = request_id
         self._requests_received += 1
 
-        # possible_actions validation、Observation deserialize、Policy
-        # 呼び出し、Action mappingはすべて#38が所有する。ここでは
-        # consumerとして呼び出すだけで再実装しない。
+        # Policy判断・Action mapping・送信前validationは#38へ委譲する。
         response = self._adapter.process_request_action(event)
-
         if response.request_id != request_id:
             raise ProtocolError(
                 "adapter response request_id does not match the current request"
             )
-        # send直前にも、current requestへのbindを再確認する(cross-request
-        # payload再利用の禁止、Issue #39本文セクション15)。
         if request_id != self._last_accepted_request_id:
             raise ProtocolError("response is no longer bound to the current request")
         if request_id in self._sent_request_ids:
@@ -260,7 +232,6 @@ class ValidationSession:
 
         self._sent_request_ids.add(request_id)
         self._responses_sent += 1
-
         outgoing = dict(response.action)
         outgoing["request_id"] = response.request_id
         return outgoing
@@ -269,28 +240,73 @@ class ValidationSession:
         request_id = event.get("request_id")
         if isinstance(request_id, bool) or not isinstance(request_id, int):
             raise ProtocolError("action_ack is missing a valid integer request_id")
-
         status = event.get("status")
         if not isinstance(status, str) or status not in _KNOWN_ACK_STATUSES:
             raise ProtocolError(
                 f"action_ack has an unknown or invalid status: {status!r}"
             )
-
         if request_id not in self._accepted_request_ids:
             raise ProtocolError(
                 f"action_ack references an unknown or future request_id: {request_id!r}"
             )
 
         self._ack_history.setdefault(request_id, []).append(status)
-
         if status in _FATAL_ACK_STATUSES:
             raise ProtocolError(f"action_ack reported a fatal status: {status!r}")
+
+    def _handle_validation_result(self, event: Mapping) -> None:
+        # rankedではmode外eventとしてforward-compatibleにignoreする。
+        return None
+
+    def _handle_end_game(self, event: Mapping) -> None:
+        self._end_game_received = True
+
+
+class ValidationSession(_GameSession):
+    """1 validation game分のtransport lifecycle stateを所有する。"""
+
+    __slots__ = (
+        "_validation_result_received",
+        "_passed",
+        "_failure_reason",
+    )
+
+    def __init__(self, policy: Policy) -> None:
+        super().__init__(policy)
+        self._validation_result_received = False
+        self._passed: bool | None = None
+        self._failure_reason: str | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self._validation_result_received
+
+    @property
+    def terminal_event_name(self) -> str:
+        return _EVENT_TYPE_VALIDATION_RESULT
+
+    @property
+    def validation_result_received(self) -> bool:
+        """Issue #39から維持するvalidation専用completion flag。"""
+        return self._validation_result_received
+
+    def _validation_fields(self) -> tuple[bool | None, bool, str | None]:
+        return (
+            self._passed,
+            self._validation_result_received,
+            self._failure_reason,
+        )
+
+    def _accept_bound_seat(self, seat: Seat) -> None:
+        if seat != _VALIDATION_SEAT:
+            raise ProtocolError(
+                f"validation requires seat {int(_VALIDATION_SEAT)}, got {int(seat)!r}"
+            )
 
     def _handle_validation_result(self, event: Mapping) -> None:
         passed = event.get("passed")
         if not isinstance(passed, bool):
             raise ProtocolError("validation_result is missing a valid boolean passed")
-
         reason = event.get("reason")
         if reason is None:
             reason = event.get("message")
@@ -302,4 +318,36 @@ class ValidationSession:
         self._failure_reason = reason
 
 
-__all__ = ["SessionStatus", "ValidationSession"]
+class RankedSession(_GameSession):
+    """1 ranked hanchan分のtransport lifecycle stateを所有する。
+
+    `start_game.id`の0..3をすべて受理し、`end_game`をterminal eventとする。
+    自動requeue・次game・reconnectはこのsessionの責務に含めない。
+    """
+
+    __slots__ = ()
+
+    @property
+    def is_complete(self) -> bool:
+        return self._end_game_received
+
+    @property
+    def terminal_event_name(self) -> str:
+        return _EVENT_TYPE_END_GAME
+
+    def _handle_end_game(self, event: Mapping) -> None:
+        if self._adapter is None:
+            raise ProtocolError("end_game received before start_game")
+        scores = event.get("scores")
+        if not isinstance(scores, list) or len(scores) != 4:
+            raise ProtocolError("ranked end_game must contain four final scores")
+        if any(
+            isinstance(score, bool) or not isinstance(score, int) for score in scores
+        ):
+            raise ProtocolError("ranked end_game scores must be integers")
+
+        self._scores = (scores[0], scores[1], scores[2], scores[3])
+        super()._handle_end_game(event)
+
+
+__all__ = ["RankedSession", "SessionStatus", "ValidationSession"]

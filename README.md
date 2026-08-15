@@ -121,6 +121,24 @@ python -m lisjong.riichilab_client.validation
 
 `BOT_TOKEN`はrepositoryへcommitせず、環境変数から実行時に注入してください。
 
+## RiichiLab ranked smoke test
+
+`run_ranked_game(policy, token)`は、activeな検証用botでRiichiLab
+`/ws/ranked`へ1回だけ接続し、matchmaking queueから1 full hanchanの
+`end_game`まで処理して`RankedGameResult`を返します。接続自体がqueue参加であり、
+join payloadは送信しません。`end_game`後の自動再queue・次game・reconnectも
+行いません。
+
+```powershell
+$env:BOT_TOKEN = "<検証用RiichiLab bot token>"
+python -m lisjong.riichilab_client.ranked
+```
+
+本命bot `lisjong`ではなくdev/smoke用の検証botを使用し、原則1半荘だけ実行します。
+順位・score・ratingは成功条件ではありません。tokenはstdout/stderr、結果、test、
+docs、Issue / PRへ保存しません。詳しい責務境界とlive確認項目は
+[RiichiLab WebSocket Client](docs/riichilab-client.md)を参照してください。
+
 ## ロードマップ
 
 1. Python package、test、CI、文書の初期整備
@@ -151,7 +169,8 @@ hashなどを確認し、repository本体とは分離して管理します。
 Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
 RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
 `request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで
-実装しています。学習・推論機能とRiichiLab ranked接続(`/ws/ranked`)は
+実装し、validationを完走しています。RiichiLab ranked接続(`/ws/ranked`)の
+1半荘Clientも実装済みで、検証用botによるlive smoke test待ちです。学習・推論機能は
 まだ実装していません。
 
 ## License
