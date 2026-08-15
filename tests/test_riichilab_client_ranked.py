@@ -376,9 +376,10 @@ class RunRankedGameTest(unittest.TestCase):
 
 
 class RankedModuleCliTest(unittest.TestCase):
-    def test_module_cli_does_not_emit_runtime_warning(self) -> None:
+    def test_module_cli_without_profile_fails_closed_without_runtime_warning(
+        self,
+    ) -> None:
         environment = os.environ.copy()
-        environment.pop("BOT_TOKEN", None)
         completed = subprocess.run(
             [sys.executable, "-m", "lisjong.riichilab_client.ranked"],
             capture_output=True,
@@ -388,7 +389,48 @@ class RankedModuleCliTest(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("BOT_TOKEN environment variable is not set", completed.stderr)
+        self.assertIn("--profile", completed.stderr)
+        self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_module_cli_rejects_unknown_profile(self) -> None:
+        environment = os.environ.copy()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.ranked",
+                "--profile",
+                "lisjong-production",
+            ],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("invalid choice", completed.stderr)
+        self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_module_cli_missing_profile_credential_fails_closed(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("LISJONG_DEV_BOT_TOKEN", None)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.ranked",
+                "--profile",
+                "lisjong-dev",
+            ],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("LISJONG_DEV_BOT_TOKEN", completed.stderr)
         self.assertNotIn("RuntimeWarning", completed.stderr)
 
     def test_cli_reports_unavailable_scores_as_success(self) -> None:
@@ -403,16 +445,20 @@ class RankedModuleCliTest(unittest.TestCase):
         output = StringIO()
 
         with (
-            patch.dict(os.environ, {"BOT_TOKEN": "fake-token"}),
+            patch.dict(os.environ, {"LISJONG_BOT_TOKEN": "fake-token"}),
             patch(
                 "lisjong.riichilab_client.ranked.run_ranked_game",
                 return_value=result,
             ),
             redirect_stdout(output),
         ):
-            return_code = _run_cli()
+            return_code = _run_cli(["--profile", "lisjong"])
 
         self.assertEqual(return_code, 0)
+        self.assertIn("profile: lisjong", output.getvalue())
+        self.assertIn("policy: MinimalPolicy", output.getvalue())
+        self.assertIn("mode: ranked", output.getvalue())
+        self.assertIn("trace: off", output.getvalue())
         self.assertIn("RiichiLab ranked game completed", output.getvalue())
         self.assertIn("end_game: yes", output.getvalue())
         self.assertIn("scores: unavailable", output.getvalue())
@@ -425,7 +471,7 @@ class RankedModuleCliTest(unittest.TestCase):
         self.assertIs(riichilab_client.run_ranked_game, run_ranked_game)
         self.assertIs(riichilab_client.RankedGameResult, RankedGameResult)
 
-    def test_cli_reads_trace_path_from_its_own_env_var_independent_of_bot_token(
+    def test_cli_reads_trace_path_from_its_own_env_var_independent_of_credential(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -447,7 +493,10 @@ class RankedModuleCliTest(unittest.TestCase):
             with (
                 patch.dict(
                     os.environ,
-                    {"BOT_TOKEN": "fake-token", "RIICHILAB_TRACE_PATH": trace_path},
+                    {
+                        "LISJONG_DEV_BOT_TOKEN": "fake-token",
+                        "RIICHILAB_TRACE_PATH": trace_path,
+                    },
                 ),
                 patch(
                     "lisjong.riichilab_client.ranked.run_ranked_game",
@@ -455,10 +504,103 @@ class RankedModuleCliTest(unittest.TestCase):
                 ),
                 redirect_stdout(StringIO()),
             ):
-                return_code = _run_cli()
+                return_code = _run_cli(["--profile", "lisjong-dev"])
 
             self.assertEqual(return_code, 0)
             self.assertEqual(captured_kwargs.get("trace_path"), trace_path)
+
+    def test_cli_uses_profile_policy_factory(self) -> None:
+        result = RankedGameResult(
+            end_game_received=True,
+            seat=Seat.SEAT_1,
+            requests_received=1,
+            responses_sent=1,
+            ack_history={},
+            scores=None,
+        )
+        captured_policies: list = []
+
+        async def _fake_run_ranked_game(policy, token, **kwargs):
+            captured_policies.append(policy)
+            return result
+
+        with (
+            patch.dict(os.environ, {"LISJONG_BASELINE_BOT_TOKEN": "fake-token"}),
+            patch(
+                "lisjong.riichilab_client.ranked.run_ranked_game",
+                _fake_run_ranked_game,
+            ),
+            redirect_stdout(StringIO()),
+        ):
+            return_code = _run_cli(["--profile", "lisjong-baseline"])
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(len(captured_policies), 1)
+        self.assertIsInstance(captured_policies[0], MinimalPolicy)
+
+
+class MultiProcessProfileIndependenceTest(unittest.TestCase):
+    """別processから`lisjong-dev` / `lisjong-baseline`を同時起動しても
+    credential sourceが混線しないことを、実subprocessで確認する
+    (Issue #44セクション9)。ネットワーク接続前のcredential解決だけで
+    fail closedするため、live RiichiLab接続は不要。
+    """
+
+    def test_dev_and_baseline_processes_do_not_cross_talk(self) -> None:
+        dev_secret = "dev-secret-should-not-leak"
+        baseline_secret = "baseline-secret-should-not-leak"
+
+        dev_env = os.environ.copy()
+        dev_env.pop("LISJONG_DEV_BOT_TOKEN", None)
+        dev_env["LISJONG_BASELINE_BOT_TOKEN"] = baseline_secret
+
+        baseline_env = os.environ.copy()
+        baseline_env.pop("LISJONG_BASELINE_BOT_TOKEN", None)
+        baseline_env["LISJONG_DEV_BOT_TOKEN"] = dev_secret
+
+        dev_process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.ranked",
+                "--profile",
+                "lisjong-dev",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dev_env,
+            text=True,
+        )
+        baseline_process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.ranked",
+                "--profile",
+                "lisjong-baseline",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=baseline_env,
+            text=True,
+        )
+
+        dev_stdout, dev_stderr = dev_process.communicate(timeout=30)
+        baseline_stdout, baseline_stderr = baseline_process.communicate(timeout=30)
+
+        self.assertEqual(dev_process.returncode, 2)
+        self.assertEqual(baseline_process.returncode, 2)
+
+        self.assertIn("LISJONG_DEV_BOT_TOKEN", dev_stderr)
+        self.assertIn("LISJONG_BASELINE_BOT_TOKEN", baseline_stderr)
+
+        # 各processは自分専用のcredential環境変数名しか参照・報告しない。
+        self.assertNotIn("LISJONG_BASELINE_BOT_TOKEN", dev_stderr)
+        self.assertNotIn("LISJONG_DEV_BOT_TOKEN", baseline_stderr)
+
+        # 他profile用に設定したdummy secretの値がどちらのoutputにも漏れない。
+        self.assertNotIn(baseline_secret, dev_stdout + dev_stderr)
+        self.assertNotIn(dev_secret, baseline_stdout + baseline_stderr)
 
 
 class RunRankedGameTraceOptInTest(unittest.TestCase):

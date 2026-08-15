@@ -5,9 +5,9 @@
 `request_id` / `action_ack`のtransport lifecycle管理、#38
 `RiichiLabSeatAdapter`の呼び出しは、この関数が内部で組み立てる。
 
-`python -m lisjong.riichilab_client.validation`として、環境変数
-`BOT_TOKEN`からtokenを読み込むCLI entry pointも提供する
-(live validationをユーザー環境から実行するため)。
+`python -m lisjong.riichilab_client.validation --profile <name>`として、
+Issue #44のprofile層(`lisjong.riichilab_client.profile` / `cli`)が解決した
+credential・Policy・trace pathを注入するCLI entry pointも提供する。
 """
 
 from __future__ import annotations
@@ -15,12 +15,19 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract.policy import Policy
+from lisjong.riichilab_client.cli import build_arg_parser, resolve_trace_path
 from lisjong.riichilab_client.errors import RiichiLabClientError
+from lisjong.riichilab_client.profile import (
+    ProfileError,
+    build_runtime_summary,
+    format_runtime_summary,
+    resolve_credential,
+    resolve_profile,
+)
 from lisjong.riichilab_client.session import ValidationSession
 from lisjong.riichilab_client.trace import JsonlProtocolTraceWriter
 from lisjong.riichilab_client.transport import (
@@ -28,8 +35,6 @@ from lisjong.riichilab_client.transport import (
     connect_validation_transport,
     drive_validation_session,
 )
-
-_TRACE_PATH_ENV_VAR = "RIICHILAB_TRACE_PATH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,27 +104,39 @@ async def run_validation(
     )
 
 
-def _run_cli() -> int:
-    """`python -m lisjong.riichilab_client.validation`のentry point。
+def _run_cli(argv: Sequence[str] | None = None) -> int:
+    """`python -m lisjong.riichilab_client.validation --profile <name>`のentry point。
 
-    `BOT_TOKEN`環境変数からtokenを読み込む。secretはstdout/stderrへ
-    出力しない。protocol trace(Issue #45)は`BOT_TOKEN`とは独立した
-    `RIICHILAB_TRACE_PATH`環境変数で明示的にopt-inした場合だけ有効化する。
+    Issue #44のprofile層を通じて、bot identity・credential環境変数・Policy・
+    runtime namespaceを一方向に解決する。`--profile`未指定・未知profile・
+    対応credential未設定は、いずれもfail closed(non-zero exit、secretを
+    含まないメッセージ)として扱い、他profileへ暗黙fallbackしない。secretは
+    stdout/stderrへ出力しない。
+
+    protocol trace(Issue #45)は既定OFFのopt-inのまま維持する。
+    `--trace-path`(明示指定) > 既存`RIICHILAB_TRACE_PATH`環境変数
+    (後方互換) > `--trace`(profile既定path) > 無効、の優先順位で解決する。
     """
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        print(
-            "BOT_TOKEN environment variable is not set. "
-            "Set BOT_TOKEN to your RiichiLab bot token and re-run.",
-            file=sys.stderr,
-        )
+    parser = build_arg_parser(prog="python -m lisjong.riichilab_client.validation")
+    args = parser.parse_args(argv)
+
+    try:
+        profile = resolve_profile(args.profile)
+        token = resolve_credential(profile)
+    except ProfileError as error:
+        print(str(error), file=sys.stderr)
         return 2
 
-    trace_path = os.environ.get(_TRACE_PATH_ENV_VAR) or None
+    trace_path = resolve_trace_path(
+        profile, trace_flag=args.trace, trace_path_arg=args.trace_path
+    )
+    summary = build_runtime_summary(profile, mode="validation", trace_path=trace_path)
+    print(format_runtime_summary(summary))
 
-    policy = MinimalPolicy()
     try:
-        result = asyncio.run(run_validation(policy, token, trace_path=trace_path))
+        result = asyncio.run(
+            run_validation(profile.policy_factory(), token, trace_path=trace_path)
+        )
     except RiichiLabClientError as error:
         print(
             f"RiichiLab validation failed: {type(error).__name__}: {error}",

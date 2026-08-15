@@ -19,8 +19,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, redirect_stdout
 from dataclasses import fields
+from io import StringIO
 from unittest.mock import patch
 
 from _riichilab_client_test_helpers import resolve_for_env, server_style_request_action
@@ -30,7 +31,11 @@ from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_client.errors import UnexpectedDisconnectError
 from lisjong.riichilab_client.transport import TransportClosed
-from lisjong.riichilab_client.validation import run_validation
+from lisjong.riichilab_client.validation import (
+    ValidationResult,
+    _run_cli,
+    run_validation,
+)
 
 
 class _FakeTransport:
@@ -70,9 +75,10 @@ def _make_fake_connect(transport: _FakeTransport, captured_tokens: list):
 
 
 class ValidationModuleCliTest(unittest.TestCase):
-    def test_module_cli_does_not_emit_runpy_runtime_warning(self) -> None:
+    def test_module_cli_without_profile_fails_closed_without_runtime_warning(
+        self,
+    ) -> None:
         environment = os.environ.copy()
-        environment.pop("BOT_TOKEN", None)
 
         completed = subprocess.run(
             [sys.executable, "-m", "lisjong.riichilab_client.validation"],
@@ -83,7 +89,49 @@ class ValidationModuleCliTest(unittest.TestCase):
         )
 
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("BOT_TOKEN environment variable is not set", completed.stderr)
+        self.assertIn("--profile", completed.stderr)
+        self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_module_cli_rejects_unknown_profile(self) -> None:
+        environment = os.environ.copy()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.validation",
+                "--profile",
+                "lisjong-production",
+            ],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("invalid choice", completed.stderr)
+        self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_module_cli_missing_profile_credential_fails_closed(self) -> None:
+        environment = os.environ.copy()
+        environment.pop("LISJONG_BASELINE_BOT_TOKEN", None)
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "lisjong.riichilab_client.validation",
+                "--profile",
+                "lisjong-baseline",
+            ],
+            capture_output=True,
+            check=False,
+            env=environment,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("LISJONG_BASELINE_BOT_TOKEN", completed.stderr)
         self.assertNotIn("RuntimeWarning", completed.stderr)
 
     def test_package_root_keeps_lazy_validation_exports(self) -> None:
@@ -92,6 +140,49 @@ class ValidationModuleCliTest(unittest.TestCase):
 
         self.assertIs(riichilab_client.run_validation, run_validation)
         self.assertIs(riichilab_client.ValidationResult, ValidationResult)
+
+
+class ValidationModuleCliRuntimeTest(unittest.TestCase):
+    """`_run_cli()`のprofile解決・runtime summary表示・secret非露出を、
+    実transportなしに確認する(Issue #44、rankedと同じ整合性を維持する)。
+    """
+
+    def test_cli_prints_secret_free_summary_and_uses_profile_policy(self) -> None:
+        result = ValidationResult(
+            passed=True,
+            validation_result_received=True,
+            end_game_received=True,
+            failure_reason=None,
+            requests_received=1,
+            responses_sent=1,
+            ack_history={},
+        )
+        captured_policies: list = []
+
+        async def _fake_run_validation(policy, token, **kwargs):
+            captured_policies.append(policy)
+            return result
+
+        output = StringIO()
+        with (
+            patch.dict(os.environ, {"LISJONG_DEV_BOT_TOKEN": "fake-token"}),
+            patch(
+                "lisjong.riichilab_client.validation.run_validation",
+                _fake_run_validation,
+            ),
+            redirect_stdout(output),
+        ):
+            return_code = _run_cli(["--profile", "lisjong-dev"])
+
+        self.assertEqual(return_code, 0)
+        self.assertEqual(len(captured_policies), 1)
+        self.assertIsInstance(captured_policies[0], MinimalPolicy)
+        self.assertIn("profile: lisjong-dev", output.getvalue())
+        self.assertIn("policy: MinimalPolicy", output.getvalue())
+        self.assertIn("mode: validation", output.getvalue())
+        self.assertIn("trace: off", output.getvalue())
+        self.assertIn("RiichiLab validation passed", output.getvalue())
+        self.assertNotIn("fake-token", output.getvalue())
 
 
 class SeatAdapterMinimalPolicyIntegrationTest(unittest.TestCase):

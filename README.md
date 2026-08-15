@@ -102,6 +102,26 @@ print(result.scores, result.ranks)
 Policy判断数が含まれます。`max_steps`はhang防止用の安全上限であり、対局終了前に
 到達した場合は正常結果を返さず`StepLimitExceededError`で失敗します。
 
+## RiichiLab bot実行profile
+
+RiichiLab botのCLI起動は、bot identity・credential・使用Policy・runtime
+outputを一方向に解決する**profile**を明示的に選択して行います
+(Issue #44)。少なくとも次の3 profileを提供します。
+
+| profile | 用途 | credential環境変数 | Policy |
+| --- | --- | --- | --- |
+| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `MinimalPolicy` |
+| `lisjong-baseline` | Policy性能比較の決定的な基準 | `LISJONG_BASELINE_BOT_TOKEN` | `MinimalPolicy` |
+| `lisjong` | 本番運用(十分に検証済みのPolicyのみ) | `LISJONG_BOT_TOKEN` | `MinimalPolicy` |
+
+各profileは自分専用のcredential環境変数だけを参照し、他profileの
+credentialやPolicyへ暗黙fallbackしません。`--profile`未指定・未知
+profile・対応credential未設定は、いずれも非zero exit codeとsecretを
+含まないメッセージでfail closedします。profile設計の詳細
+(責務境界、fail closed、runtime output/trace保存先、multi-process
+independence)は[RiichiLab WebSocket Client](docs/riichilab-client.md)の
+「profile(Issue #44)」を参照してください。
+
 ## RiichiLab validation
 
 `run_validation(policy, token)`は、RiichiLab `/ws/validate`へBearer token付き
@@ -112,14 +132,14 @@ WebSocket接続し、1 validation gameを完走して`ValidationResult`(`passed`
 だけをこのpackageが担当します。責務境界と設計判断の詳細は
 [RiichiLab WebSocket Client](docs/riichilab-client.md)を参照してください。
 
-実`BOT_TOKEN`を使ったlive validationは、次のコマンドで学習者環境から実行します。
+profile経由のlive validationは、次のコマンドで学習者環境から実行します。
 
 ```powershell
-$env:BOT_TOKEN = "<実RiichiLab bot token>"
-python -m lisjong.riichilab_client.validation
+$env:LISJONG_DEV_BOT_TOKEN = "<dev検証用RiichiLab bot token>"
+python -m lisjong.riichilab_client.validation --profile lisjong-dev
 ```
 
-`BOT_TOKEN`はrepositoryへcommitせず、環境変数から実行時に注入してください。
+credential環境変数はrepositoryへcommitせず、実行時に注入してください。
 
 ## RiichiLab ranked smoke test
 
@@ -130,14 +150,40 @@ join payloadは送信しません。`end_game`後の自動再queue・次game・r
 行いません。
 
 ```powershell
-$env:BOT_TOKEN = "<検証用RiichiLab bot token>"
-python -m lisjong.riichilab_client.ranked
+$env:LISJONG_DEV_BOT_TOKEN = "<検証用RiichiLab bot token>"
+python -m lisjong.riichilab_client.ranked --profile lisjong-dev
 ```
 
-本命bot `lisjong`ではなくdev/smoke用の検証botを使用し、原則1半荘だけ実行します。
-順位・score・ratingは成功条件ではありません。tokenはstdout/stderr、結果、test、
-docs、Issue / PRへ保存しません。詳しい責務境界とlive確認項目は
+本命bot `lisjong`ではなく`lisjong-dev` / `lisjong-baseline`profileの
+検証botを使用し、原則1半荘だけ実行します。順位・score・ratingは成功条件では
+ありません。tokenはstdout/stderr、結果、test、docs、Issue / PRへ保存しません。
+詳しい責務境界とlive確認項目は
 [RiichiLab WebSocket Client](docs/riichilab-client.md)を参照してください。
+
+`lisjong-dev`と`lisjong-baseline`は別processから同時起動でき、credential
+source・Policy selection・runtime namespace・trace/output pathが混線しない
+ことをtestで確認しています(`tests/test_riichilab_client_ranked.py`の
+`MultiProcessProfileIndependenceTest`)。ただし、RiichiLab側で同一user所有の
+別bot同士が同一ranked matchへ選ばれるかどうかは、lisjong側のprofile分離とは
+独立した外部サービスの挙動であり、現時点では調査・保証していません。
+
+## RiichiLab protocol trace / runtime output
+
+RiichiLab validation/ranked sessionの送受信protocol eventは、opt-inで
+secret-safeなJSON Lines(JSONL)として保存できます(Issue #45)。既定は
+無効(trace file非生成)です。
+
+- 明示`trace_path`(低レベルAPI)、または`RIICHILAB_TRACE_PATH`環境変数
+  (CLI、後方互換)を指定した場合だけ、指定pathへtraceを保存します
+- profile CLIでは`--trace`を指定すると、OSユーザーローカル領域配下
+  (Windowsは`%LOCALAPPDATA%\lisjong\...`等、repository配下は使いません)の
+  profile別runtime namespace(`.../traces/<profile>/...`)へ、
+  timestamp + UUID4で衝突しないfilenameを自動生成します
+- BOT token、Authorization header、環境変数の値はtrace・runtime summary・
+  filename/directory名のいずれにも含めません
+
+詳細は[RiichiLab WebSocket Client](docs/riichilab-client.md)の
+「protocol trace(Issue #45)」「profile(Issue #44)」を参照してください。
 
 ## ロードマップ
 
@@ -170,8 +216,11 @@ Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約
 RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
 `request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで
 実装し、validationを完走しています。RiichiLab ranked接続(`/ws/ranked`)の
-1半荘Clientも実装し、検証用botによるlive smoke testを完走しています。学習・推論
-機能はまだ実装していません。
+1半荘Clientも実装し、検証用botによるlive smoke testを完走しています。
+`lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profileを導入し、
+credential・Policy・runtime output(protocol trace含む)をprofile単位で
+分離、別processからの同時起動にも対応しています。学習・推論機能はまだ
+実装していません。
 
 ## License
 

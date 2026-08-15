@@ -1,17 +1,31 @@
-"""RiichiLab `/ws/ranked`で1半荘だけ実行する公開APIとCLI。"""
+"""RiichiLab `/ws/ranked`で1半荘だけ実行する公開APIとCLI。
+
+`run_ranked_game(policy, token, ...)`はPolicyとcredentialを明示的に受け取る
+実行境界として維持する。CLI(`_run_cli()`)は`--profile`でIssue #44の
+`lisjong-dev` / `lisjong-baseline` / `lisjong` profileを選択し、
+`lisjong.riichilab_client.profile` / `cli`が解決したPolicy・credential・
+trace pathをこの境界へ明示的に渡すだけのcomposition layerである。
+"""
 
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract.policy import Policy
 from lisjong.policy_contract.seat import Seat
+from lisjong.riichilab_client.cli import build_arg_parser, resolve_trace_path
 from lisjong.riichilab_client.errors import ProtocolError, RiichiLabClientError
+from lisjong.riichilab_client.profile import (
+    ProfileError,
+    build_runtime_summary,
+    format_runtime_summary,
+    resolve_credential,
+    resolve_profile,
+)
 from lisjong.riichilab_client.session import RankedSession
 from lisjong.riichilab_client.trace import JsonlProtocolTraceWriter
 from lisjong.riichilab_client.transport import (
@@ -19,8 +33,6 @@ from lisjong.riichilab_client.transport import (
     connect_ranked_transport,
     drive_ranked_session,
 )
-
-_TRACE_PATH_ENV_VAR = "RIICHILAB_TRACE_PATH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,26 +98,37 @@ async def run_ranked_game(
     )
 
 
-def _run_cli() -> int:
-    """`python -m lisjong.riichilab_client.ranked`のentry point。
+def _run_cli(argv: Sequence[str] | None = None) -> int:
+    """`python -m lisjong.riichilab_client.ranked --profile <name>`のentry point。
 
-    protocol trace(Issue #45)は`BOT_TOKEN`とは独立した
-    `RIICHILAB_TRACE_PATH`環境変数で明示的にopt-inした場合だけ有効化する。
+    Issue #44のprofile層を通じて、bot identity・credential環境変数・Policy・
+    runtime namespaceを一方向に解決する。`--profile`未指定・未知profile・
+    対応credential未設定は、いずれもfail closed(non-zero exit、secretを
+    含まないメッセージ)として扱い、他profileへ暗黙fallbackしない。
+
+    protocol trace(Issue #45)は既定OFFのopt-inのまま維持する。
+    `--trace-path`(明示指定) > 既存`RIICHILAB_TRACE_PATH`環境変数
+    (後方互換) > `--trace`(profile既定path) > 無効、の優先順位で解決する。
     """
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        print(
-            "BOT_TOKEN environment variable is not set. "
-            "Set BOT_TOKEN to your RiichiLab bot token and re-run.",
-            file=sys.stderr,
-        )
+    parser = build_arg_parser(prog="python -m lisjong.riichilab_client.ranked")
+    args = parser.parse_args(argv)
+
+    try:
+        profile = resolve_profile(args.profile)
+        token = resolve_credential(profile)
+    except ProfileError as error:
+        print(str(error), file=sys.stderr)
         return 2
 
-    trace_path = os.environ.get(_TRACE_PATH_ENV_VAR) or None
+    trace_path = resolve_trace_path(
+        profile, trace_flag=args.trace, trace_path_arg=args.trace_path
+    )
+    summary = build_runtime_summary(profile, mode="ranked", trace_path=trace_path)
+    print(format_runtime_summary(summary))
 
     try:
         result = asyncio.run(
-            run_ranked_game(MinimalPolicy(), token, trace_path=trace_path)
+            run_ranked_game(profile.policy_factory(), token, trace_path=trace_path)
         )
     except RiichiLabClientError as error:
         print(
