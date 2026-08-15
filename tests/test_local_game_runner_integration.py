@@ -1,7 +1,7 @@
 import unittest
 
 from lisjong.local_game_runner import LocalGameRunner
-from lisjong.policies import MinimalPolicy
+from lisjong.policies import MinimalPolicy, ShantenPolicy
 from lisjong.policy_contract import DecisionContext, InternalAction, Seat
 
 
@@ -96,6 +96,33 @@ class LocalGameRunnerIntegrationTest(unittest.TestCase):
             for decision in recorded
         }
         self.assertGreater(len(kyoku), 1)
+
+
+class LocalGameRunnerShantenPolicyIntegrationTest(unittest.TestCase):
+    """Issue #51完了条件: `ShantenPolicy`でRiichiEnv固定seed対局を完走できる。
+
+    ここではPolicyの強さや得点は評価しない。`ShantenPolicy` /
+    Policy実行境界 / RiichiEnv Adapter / Local game runnerの一連の
+    integrationが、既存のLocal game runner testと同じ構造・同じ固定seedで
+    正常完走することだけを確認する。
+    """
+
+    def test_fixed_seed_half_game_completes_with_shanten_policy(self) -> None:
+        seed = 12345
+        runner = LocalGameRunner(
+            {seat: ShantenPolicy() for seat in Seat},
+            seed=seed,
+            game_mode="4p-red-half",
+            max_steps=10_000,
+        )
+
+        result = runner.run()
+
+        self.assertTrue(runner._env.done())
+        self.assertEqual(result.seed, seed)
+        self.assertEqual(result.game_mode, "4p-red-half")
+        self.assertGreater(result.steps, 1)
+        self.assertGreater(result.decisions, result.steps)
 
 
 if __name__ == "__main__":

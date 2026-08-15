@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lisjong.policies import MinimalPolicy
+from lisjong.policies import MinimalPolicy, ShantenPolicy
 from lisjong.policy_contract.policy import Policy
 
 
@@ -69,11 +69,15 @@ def _minimal_policy_factory() -> Policy:
     return MinimalPolicy()
 
 
+def _shanten_policy_factory() -> Policy:
+    return ShantenPolicy()
+
+
 _PROFILE_DEFINITIONS: tuple[RuntimeProfile, ...] = (
     RuntimeProfile(
         name="lisjong-dev",
         credential_env_var="LISJONG_DEV_BOT_TOKEN",
-        policy_factory=_minimal_policy_factory,
+        policy_factory=_shanten_policy_factory,
         runtime_namespace="lisjong-dev",
     ),
     RuntimeProfile(
