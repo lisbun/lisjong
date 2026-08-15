@@ -384,14 +384,46 @@ class ValidateAgainstPossibleActionsTest(unittest.TestCase):
         with self.assertRaises(PossibleActionsValidationError):
             validate_against_possible_actions({"type": "none", "actor": 0}, [])
 
-    def test_rejects_ambiguous_multiple_matches(self) -> None:
-        # 重複candidateの扱いはIssue #38の判断どおり変更しない: 同一
-        # semantic Actionへ複数candidateが一致する場合は安全側でfail
-        # closedする(#39のlive接続で実データの重複有無を確認する)。
-        candidates = [{"type": "none"}, {"type": "none"}]
+    def test_accepts_duplicate_matches_observed_in_issue_39_live_validation(
+        self,
+    ) -> None:
+        # Issue #39の実 `/ws/validate` で、同一semantic Actionに対応する
+        # duplicate possible_actions candidateが実際に2件提示された。
+        candidates = [
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai", "pai": "1m"},
+        ]
+
+        validate_against_possible_actions(_dahai_response("1m"), candidates)
+
+    def test_accepts_duplicate_matches_with_unrelated_valid_candidate(self) -> None:
+        candidates = [
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai", "pai": "2m"},
+        ]
+
+        validate_against_possible_actions(_dahai_response("1m"), candidates)
+
+    def test_duplicate_matches_do_not_hide_malformed_candidate(self) -> None:
+        candidates = [
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai"},
+        ]
 
         with self.assertRaises(PossibleActionsValidationError):
-            validate_against_possible_actions({"type": "none", "actor": 0}, candidates)
+            validate_against_possible_actions(_dahai_response("1m"), candidates)
+
+    def test_duplicate_matches_do_not_hide_unknown_action_type(self) -> None:
+        candidates = [
+            {"type": "dahai", "pai": "1m"},
+            {"type": "dahai", "pai": "1m"},
+            {"type": "future_action"},
+        ]
+
+        with self.assertRaises(PossibleActionsValidationError):
+            validate_against_possible_actions(_dahai_response("1m"), candidates)
 
     def test_does_not_fall_back_to_first_or_last_or_arbitrary_candidate(self) -> None:
         # 送信予定Actionにまったく対応しない候補群であっても、既知typeが

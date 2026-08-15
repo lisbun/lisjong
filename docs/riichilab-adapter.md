@@ -16,7 +16,7 @@ WebSocket・token・`request_id` lifecycle・timeout schedulerを対象外とす
 | 区分 | 意味 |
 | --- | --- |
 | 公式情報 | RiichiLab公式文書、または公式文書を引用したIssue本文で確認した情報 |
-| 実測 | 実RiichiEnv 0.4.8で実際に確認した情報 |
+| 実測 | 実RiichiEnv 0.4.8、または実RiichiLab `/ws/validate`で確認した情報 |
 | 推測・未確認 | 公式情報と実測のどちらでも確認できていない事項 |
 | 設計判断 | 調査結果からlisjongの実装へ引き継ぐ判断 |
 
@@ -169,8 +169,28 @@ minimal candidateを拒否しないために、`pai`をcandidate必須identity�
 - multiset field(`consumed`)は牌のcanonical順序でソートしてから比較し、
   入力側の順序差を無視する。枚数は`chi`/`pon` 2枚、`daiminkan`/`kakan`
   3枚、`ankan` 4枚を要求する
-- semantic identity上、match件数が0件または複数件の場合はfail closed
-  (`PossibleActionsValidationError`)とする
+- semantic identity上、match件数が0件ならfail closed
+  (`PossibleActionsValidationError`)、1件以上ならacceptする
+
+### Issue #39 live実測: duplicate candidate
+
+**公式情報**: RiichiLab Protocolは、botがserver提示`possible_actions`の
+いずれかに対応する合法responseを返すことを要求する。一方、candidate list内で
+semantic matchが一意になることまでは要求していない。
+
+**lisjong live実測**: Issue #39で、Windows / Python 3.14 / 実BOT_TOKENの
+環境から実RiichiLab `/ws/validate`へ接続した。WebSocket connection、
+Authorization、`start_game.id`、`request_action`受信、Observation deserialize、
+Policy実行までは成功したが、selected responseへ同じsemantic identityで一致する
+candidateが2件存在した。旧実装はこれを`found 2 ambiguous matches`として拒否し、
+送信前validationで停止した。
+
+**lisjong設計判断**: live実測に合わせ、semantic match 0件はreject、1件以上は
+acceptする。`possible_actions`全candidateをprojectする処理は維持し、malformed
+またはunknown Action typeが1件でもあればvalidation全体をfail closedする。
+candidate order、candidate object identity、list indexはAction identityに使わず、
+send-ready responseをserver candidateへ置換しない。送信payloadの正本は引き続き
+Policyからresolveしたcanonical Actionを変換したresponseである。
 
 ### malformed / unknown candidateはfail closed
 
@@ -240,23 +260,15 @@ schemaを共有する。
 identityから`tsumogiri`を除外した。selected側の`InternalAction.tsumogiri`
 は、引き続きBot response serialization(`mjai_response.py`)でのみ使用する。
 
-### 未確認事項・既知の前提(#39で要確認)
+### 残る未確認事項・既知の前提
 
-- `possible_actions`が、同一semantic Actionに対応する複数の重複candidate
-  (例: 手牌中の同じ牌が2枚あり、どちらを打牌しても同じ結果になる場合の
-  candidateが2件listされる等)を含むかどうかは、今回のレビューでも未確認の
-  ままである。現在の実装は複数件一致を無条件にambiguousとしてfail closed
-  するため、仮に実サーバーが重複candidateを送る設計であった場合、正当な
-  打牌が誤って拒否される可能性がある。この点はIssue #38の判断(「複数一致は
-  安全側でfail closed」)を優先し、#39の実サーバー接続で実際の
-  `possible_actions`の重複有無を確認したうえで、必要なら再検討する。
 - 公式`possible_actions`の具体例とAction別field表の記述差(`reach` /
   `hora`等でfield表の方が多い)については、実サーバーが実際にどこまでの
   fieldをcandidateへ付けるかが未確認である。現在の実装は「無ければ
   identityだけで判定、あれば矛盾だけ確認」という両対応にしてあるが
   (`hora`は`pai`まで、その他は`actor` / `target`まで)、実データでの確認は
-  #39で行う。特に`target`を相対seat等で表現するserver実装だった場合、
-  現在の整合確認は誤ってfail closed側へ倒れるため、#39で実測してから
+  後続live validationで行う。特に`target`を相対seat等で表現するserver実装
+  だった場合、現在の整合確認は誤ってfail closed側へ倒れるため、実測してから
   必要なら見直す
 - honor牌の文字列表記(`E`/`S`/`W`/`N`/`P`/`F`/`C`)は、既存`tile_conversion.py`が
   RiichiEnv 0.4.8のevent JSONに対して実測した表記であり、RiichiLab
@@ -305,3 +317,17 @@ lifecycle管理、timeout schedulerはこのpackageの責務ではなく、#39�
 
 `docs/architecture.md`の「RiichiLab Client」節が定める情報境界
 (Policyへ渡してよいのは`DecisionContext`だけ)は、このpackageでも維持する。
+
+## Issue #39実装後の補足
+
+WebSocket接続、`start_game` / `action_ack` / `validation_result` /
+`end_game`、`request_id`のgame内lifecycle管理はIssue #39で
+`src/lisjong/riichilab_client/`として実装済みである。詳細は
+[RiichiLab WebSocket Client](riichilab-client.md)を参照する。
+
+Issue #39実装時点でも、本書冒頭に記載した`riichi.dev`ドメインへの
+network egress blockは、実装を行ったAI実行環境では解消していない
+(2026-08-14確認)。一方、2026-08-15に学習者のWindows環境からlive
+validationを実行し、`possible_actions`のduplicate semantic candidateが
+実serverから提示され得ることは確認済みとなった。`actor`/`target`の実際の
+表現、honor牌表記の実サーバー一致等は引き続き未確認である。
