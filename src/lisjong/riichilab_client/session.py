@@ -349,20 +349,22 @@ class RankedSession(_GameSession):
     def _handle_end_game(self, event: Mapping) -> None:
         if self._adapter is None:
             raise ProtocolError("end_game received before start_game")
-        scores = event.get("scores")
-        scores_shape = _describe_end_game_scores_shape(event, scores)
-        if not isinstance(scores, list) or len(scores) != 4:
-            raise ProtocolError(
-                "ranked end_game must contain four final scores; " + scores_shape
-            )
-        if any(
-            isinstance(score, bool) or not isinstance(score, int) for score in scores
-        ):
-            raise ProtocolError(
-                "ranked end_game scores must be integers; " + scores_shape
-            )
+        if "scores" in event:
+            scores = event["scores"]
+            scores_shape = _describe_end_game_scores_shape(event, scores)
+            if not isinstance(scores, list) or len(scores) != 4:
+                raise ProtocolError(
+                    "ranked end_game scores must be a four-item list; " + scores_shape
+                )
+            if any(
+                isinstance(score, bool) or not isinstance(score, int)
+                for score in scores
+            ):
+                raise ProtocolError(
+                    "ranked end_game scores must be integers; " + scores_shape
+                )
 
-        self._scores = (scores[0], scores[1], scores[2], scores[3])
+            self._scores = (scores[0], scores[1], scores[2], scores[3])
         super()._handle_end_game(event)
 
 

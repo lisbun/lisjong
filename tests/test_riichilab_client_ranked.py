@@ -6,8 +6,9 @@ import os
 import subprocess
 import sys
 import unittest
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, redirect_stdout
 from dataclasses import fields
+from io import StringIO
 from unittest.mock import patch
 
 from _riichilab_client_test_helpers import server_style_request_action
@@ -17,7 +18,7 @@ from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_adapter.adapter import SendReadyResponse
 from lisjong.riichilab_client.errors import ProtocolError, UnexpectedDisconnectError
-from lisjong.riichilab_client.ranked import run_ranked_game
+from lisjong.riichilab_client.ranked import RankedGameResult, _run_cli, run_ranked_game
 from lisjong.riichilab_client.session import RankedSession, ValidationSession
 from lisjong.riichilab_client.transport import (
     TransportClosed,
@@ -166,6 +167,14 @@ class RankedTerminalTest(unittest.TestCase):
         self.assertTrue(session.status().end_game_received)
         self.assertEqual(session.status().scores, tuple(_FINAL_SCORES))
 
+    def test_observed_ranked_end_game_without_scores_is_terminal(self) -> None:
+        session = self._started_session()
+        session.handle_event({"type": "end_game"})
+
+        self.assertTrue(session.is_complete)
+        self.assertTrue(session.status().end_game_received)
+        self.assertIsNone(session.status().scores)
+
     def test_validation_end_game_is_not_terminal(self) -> None:
         session = ValidationSession(MinimalPolicy())
         session.handle_event({"type": "end_game", "scores": _FINAL_SCORES})
@@ -184,7 +193,7 @@ class RankedTerminalTest(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     session.handle_event({"type": "end_game", "scores": scores})
 
-    def test_missing_scores_reports_only_event_shape(self) -> None:
+    def test_missing_scores_accepts_unknown_fields_without_reading_values(self) -> None:
         session = self._started_session()
         sentinel = "do-not-leak-this-value"
         event = {
@@ -193,17 +202,10 @@ class RankedTerminalTest(unittest.TestCase):
             "metadata": sentinel,
         }
 
-        with self.assertRaises(ProtocolError) as caught:
-            session.handle_event(event)
+        session.handle_event(event)
 
-        message = str(caught.exception)
-        self.assertIn(
-            "event_keys=['final_scores', 'metadata', 'type']",
-            message,
-        )
-        self.assertIn("scores_type=NoneType", message)
-        self.assertIn("scores_length=None", message)
-        self.assertNotIn(sentinel, message)
+        self.assertTrue(session.is_complete)
+        self.assertIsNone(session.status().scores)
 
     def test_non_list_scores_reports_type_without_values(self) -> None:
         session = self._started_session()
@@ -258,7 +260,7 @@ class RankedFakeTransportTest(unittest.TestCase):
                 _event_text(
                     {"type": "action_ack", "request_id": 10, "status": "accepted"}
                 ),
-                _event_text({"type": "end_game", "scores": _FINAL_SCORES}),
+                _event_text({"type": "end_game"}),
                 _event_text({"type": "start_game", "id": 1}),
             ]
         )
@@ -279,7 +281,7 @@ class RankedFakeTransportTest(unittest.TestCase):
                 b"binary",
                 _event_text({"type": "future_queue_event"}),
                 _event_text({"type": "start_game", "id": 0}),
-                _event_text({"type": "end_game", "scores": _FINAL_SCORES}),
+                _event_text({"type": "end_game"}),
             ]
         )
         with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
@@ -327,7 +329,7 @@ class RankedMinimalPolicyIntegrationTest(unittest.TestCase):
 
 
 class RunRankedGameTest(unittest.TestCase):
-    def test_completes_one_hanchan_with_secret_safe_result(self) -> None:
+    def test_completes_observed_hanchan_without_scores(self) -> None:
         env = RiichiEnv(seed=7, game_mode="4p-red-east")
         observations = env.reset()
         player_id, observation = next(iter(observations.items()))
@@ -339,7 +341,7 @@ class RunRankedGameTest(unittest.TestCase):
                 _event_text(
                     {"type": "action_ack", "request_id": 5, "status": "accepted"}
                 ),
-                _event_text({"type": "end_game", "scores": _FINAL_SCORES}),
+                _event_text({"type": "end_game"}),
             ]
         )
         captured_connections: list[tuple[str, str]] = []
@@ -359,7 +361,7 @@ class RunRankedGameTest(unittest.TestCase):
         self.assertEqual(result.requests_received, 1)
         self.assertEqual(result.responses_sent, 1)
         self.assertEqual(result.ack_history[5], ("accepted",))
-        self.assertEqual(result.scores, tuple(_FINAL_SCORES))
+        self.assertIsNone(result.scores)
         self.assertEqual(
             captured_connections,
             [("wss://example.invalid/ranked", "fake-token")],
@@ -387,6 +389,33 @@ class RankedModuleCliTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertIn("BOT_TOKEN environment variable is not set", completed.stderr)
         self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_cli_reports_unavailable_scores_as_success(self) -> None:
+        result = RankedGameResult(
+            end_game_received=True,
+            seat=Seat.SEAT_2,
+            requests_received=10,
+            responses_sent=10,
+            ack_history={},
+            scores=None,
+        )
+        output = StringIO()
+
+        with (
+            patch.dict(os.environ, {"BOT_TOKEN": "fake-token"}),
+            patch(
+                "lisjong.riichilab_client.ranked.run_ranked_game",
+                return_value=result,
+            ),
+            redirect_stdout(output),
+        ):
+            return_code = _run_cli()
+
+        self.assertEqual(return_code, 0)
+        self.assertIn("RiichiLab ranked game completed", output.getvalue())
+        self.assertIn("end_game: yes", output.getvalue())
+        self.assertIn("scores: unavailable", output.getvalue())
+        self.assertNotIn("fake-token", output.getvalue())
 
     def test_package_root_lazy_exports_ranked_api(self) -> None:
         from lisjong import riichilab_client

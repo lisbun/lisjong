@@ -24,8 +24,9 @@ from lisjong.riichilab_client.transport import (
 class RankedGameResult:
     """1 ranked hanchanのsecret-safeな完走結果。
 
-    公式`end_game` schemaで保証されるfinal scoresだけを保持し、順位やratingは
-    推測しない。token、Authorization header、raw Observationは含めない。
+    実serverの`end_game`にscoresがない場合は`None`を保持する。scoresが通知
+    された場合だけ4 seatの値を保持し、順位やratingは推測しない。token、
+    Authorization header、raw Observationは含めない。
     """
 
     end_game_received: bool
@@ -33,7 +34,7 @@ class RankedGameResult:
     requests_received: int
     responses_sent: int
     ack_history: Mapping[int, tuple[str, ...]]
-    scores: tuple[int, int, int, int]
+    scores: tuple[int, int, int, int] | None
 
 
 async def run_ranked_game(
@@ -55,8 +56,8 @@ async def run_ranked_game(
         await drive_ranked_session(session, transport)
 
     status = session.status()
-    if status.seat is None or status.scores is None:
-        raise ProtocolError("ranked game completed without seat or final scores")
+    if status.seat is None:
+        raise ProtocolError("ranked game completed without a bound seat")
 
     return RankedGameResult(
         end_game_received=status.end_game_received,
@@ -93,7 +94,10 @@ def _run_cli() -> int:
     print(f"requests: {result.requests_received}")
     print(f"responses: {result.responses_sent}")
     print(f"end_game: {'yes' if result.end_game_received else 'no'}")
-    print("scores: " + ", ".join(str(score) for score in result.scores))
+    if result.scores is None:
+        print("scores: unavailable")
+    else:
+        print("scores: " + ", ".join(str(score) for score in result.scores))
     return 0
 
 

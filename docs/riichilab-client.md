@@ -28,7 +28,8 @@ Issue #42実装前に、次のRiichiLab公式文書を直接再確認した。
   `/ws/validate`はいずれもBearer `BOT_TOKEN`で接続する。serverがgame loopを
   駆動し、botは`request_action`へのresponseだけを送る。`start_game.id`は
   0..3、`request_id`はgame内で単調増加するinteger、binary frameと未知event /
-  fieldはignoreする。`end_game`はfinal `scores`を含み、受信後はdisconnectする
+  fieldはignoreする。文書上の`end_game`例はfinal `scores`を含み、受信後は
+  disconnectすると記載されている
 - [Ranked Matches](https://riichi.dev/docs/ranked): active botで
   `wss://game.riichi.dev/ws/ranked`へ接続するとmatchmaking queueへ入り、4 botで
   full hanchanを行う。終了後にratingがfinal placementから更新され、serverが
@@ -65,8 +66,9 @@ ranked smoke testは学習者環境で行う。
   `wss://game.riichi.dev/ws/ranked`へ1回だけ接続し、queue待ちから1 full
   hanchanの`end_game`まで処理して終了する
 - `RankedGameResult`: `end_game_received`、自seat、request/response件数、
-  `ack_history`、公式`end_game`で保証されるfinal `scores`を持つfrozen
-  dataclass。公式保証のないrank / placement / ratingは推測して含めない
+  `ack_history`、optionalなfinal `scores`を持つfrozen dataclass。実serverの
+  `end_game`にscoresがない場合は`None`とし、rank / placement / ratingや
+  score値を推測・補完しない
 - `python -m lisjong.riichilab_client.ranked`: 検証用botのtokenを環境変数
   `BOT_TOKEN`から読み込み、`MinimalPolicy`で1半荘だけ実行するCLI entry point
 
@@ -275,12 +277,25 @@ end_game受信
 - `reason`(なければ`message`)を任意のfailure reasonとして保持する。
   型が`str`でない場合はfail closed
 
-**ranked公式情報・設計判断**: `end_game`が1 full hanchanのterminal eventであり、
-受信後はdisconnectする。`validation_result`を待たず、次gameのeventも待たない。
+**ranked公式情報**: Protocol文書では`end_game`が1 full hanchanのterminal
+eventであり、4 seatのfinal `scores`を含む例が掲載され、受信後はdisconnectする
+と記載されている。
 
-- `end_game.scores`は公式Protocolが保証する4 seatのfinal scoresとして、4個の
-  `int`(`bool`除外)を要求して`RankedGameResult`へ記録する
-- 公式schemaで保証されないrank / final placement / ratingは必須化・推測しない
+**ranked実測(2026-08-15)**: 検証用botで実RiichiLab `/ws/ranked`を2回実行した。
+1回目はscores必須validationで失敗し、secret-safeなshape診断を追加して再実行した
+結果、受信したranked `end_game`のtop-level keyは`type`だけで、`scores` fieldは
+存在しなかった(`event_keys=['type']; scores_type=NoneType; scores_length=None`)。
+公式文書の例と実ranked serverのeventには、この点で差がある。
+
+**ranked設計判断**: `start_game`後の有効な`end_game`受信そのものを正常終了条件
+とし、scoresを必須条件にしない。`validation_result`や次gameのeventは待たない。
+
+- scoresが存在しない場合、`SessionStatus.scores` / `RankedGameResult.scores`は
+  `None`とする。0や別fieldからの推測値で補完しない
+- scoresが存在する場合は、4個の`int`(`bool`除外)だけをtupleとして保持する。
+  fieldが存在するのに型・要素数が不正な場合は、値をdumpせずkey一覧・型・
+  list長だけを示してfail closedする
+- rank / final placement / ratingは必須化・推測しない
 - rankedの`end_game`前にconnectionが切れた場合、server側ではdefault actionで
   gameが継続しても、lisjongのsmoke testは`UnexpectedDisconnectError`で失敗する
 - `end_game`後はcontext exitでconnectionを閉じ、自動再queueしない
@@ -310,7 +325,7 @@ Issue #39本文セクション25が要求する項目を、本実装ではすべ
   duplicate/old/decreasing `request_id`、Adapter response request_id
   mismatch、`action_ack`のlifecycle不整合(unknown request_id、
   unknown status、`rejected`/`unparseable`)、`validation_result`の
-  malformed `passed`、ranked `end_game`の欠落・不正scores → `ProtocolError`
+  malformed `passed`、ranked `end_game`に存在する不正scores → `ProtocolError`
 - JSON serialization failure、WebSocket send failure → `ProtocolError`
   または`TransportError`(送信前serializationは`ProtocolError`、
   送信そのものの失敗は`TransportError`)
@@ -356,7 +371,8 @@ Issue #39の4層構成を維持し、Issue #42のranked差分を同じ境界で�
    回帰testで固定する
 4. **ranked unit / fake transport / integration**
    (`tests/test_riichilab_client_ranked.py`): seat 0..3、validation seat 0回帰、
-   `end_game` terminal、final scores、no join payload、exactly one game、
+   scoresなし`end_game` terminal、optionalなvalid scores、不正scores、
+   no join payload、exactly one game、
    binary/unknown event、unexpected disconnect、#38 + `MinimalPolicy` integration、
    secret-safe result、ranked CLIのRuntimeWarning非再発を確認する
 5. **manual live validation / ranked smoke test**: 下記を参照
@@ -387,10 +403,16 @@ python -m lisjong.riichilab_client.validation
 
 ## live ranked smoke test
 
-**Issue #42実装時点では未実施**である。本実装環境へtokenを注入せず、
-検証用botだけを学習者環境から1半荘実行する。本命bot `lisjong`は使用せず、
-Policy versionはbot名を増やさずGit commit/tagで管理する。順位・score・ratingは
-観測してよいが成功条件にしない。
+2026-08-15、検証用botで実RiichiLab `/ws/ranked`を2回実行した。2回とも
+matchmakingから`end_game`受信までは到達したが、当初のClientがscoresを必須と
+したため`ProtocolError`で終了した。2回目のsecret-safe診断により、実serverの
+`end_game`は`{"type":"end_game"}`相当でscoresを含まないことを確認した。
+この実測を受け、scoresなし`end_game`を正常terminalとして扱うよう修正した。
+
+本実装環境へtokenは注入していない。修正後の最終live smoke testは、検証用bot
+だけを学習者環境から1半荘実行する。本命bot `lisjong`は使用せず、Policy versionは
+bot名を増やさずGit commit/tagで管理する。順位・score・ratingは観測してよいが
+成功条件にしない。
 
 ```powershell
 $env:BOT_TOKEN = "<検証用RiichiLab bot token>"
@@ -405,10 +427,11 @@ seat: 0..3
 requests: <受信件数>
 responses: <送信件数>
 end_game: yes
-scores: <4 seatのfinal scores>
+scores: unavailable
 ```
 
+serverがvalidな4整数scoresを通知した場合だけ、`scores:`にはその4値を表示する。
 加えて、`rejected` / `unparseable`、protocol error、chombo、unexpected
 disconnectがなく、`end_game`後に再queue・次gameへ進まずprocessが終了することを
-確認する。実測後に結果を本節へ追記し、それまではIssue #42のlive完走条件は未達と
-してPRをmergeしない。
+確認する。修正後の最終実測まではIssue #42のlive完走条件は未達としてPRを
+mergeしない。

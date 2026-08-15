@@ -261,8 +261,9 @@ consumerとして再利用し、この境界へ再実装しない。
 - `run_ranked_game(policy, token)`(`ranked.py`)は、ranked endpointへの接続自体を
   queue参加としてjoin payloadを送らず、1 connection / 1 hanchanだけ処理する。
   `end_game`後はdisconnectし、自動requeue・next game・reconnectを行わない
-- `RankedGameResult`は自seat、request/response件数、ack history、公式
-  `end_game`で保証されるfinal scoresだけを保持し、rank / ratingは推測しない
+- `RankedGameResult`は自seat、request/response件数、ack history、optionalな
+  final scoresを保持する。実ranked serverの`end_game`にscoresがない場合は
+  `None`とし、rank / ratingやscore値を推測・補完しない
 
 request_idのmonotonic contract(`+1`連番を仮定しない)、`action_ack`を
 「1 request = 1 ack」と仮定しないack status history設計、
