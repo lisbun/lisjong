@@ -17,6 +17,10 @@ lisjongは、日本式立直麻雀AIを自作し、ローカル対局からオ�
 ことです。ロードマップと完了条件は
 [親Issue](https://github.com/lisbun/lisjong/issues/1)で管理します。
 
+lisjong ecosystem全体のrepository責務、repository間依存方向、長期ロードマップは
+[`lisjong-project`](https://github.com/lisbun/lisjong-project) を正本とします。
+本repositoryでは `lisjong` 内部のPolicy、AI戦略、Adapter、integrationのarchitectureと実装を管理します。
+
 ## 位置づけ
 
 | 対象 | 役割 |
