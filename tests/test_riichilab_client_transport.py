@@ -10,6 +10,8 @@ transport層の責務(frame種別判定、JSON parse、send/recv failureの
 
 import asyncio
 import json
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -17,10 +19,12 @@ from lisjong.policies import MinimalPolicy
 from lisjong.riichilab_adapter.adapter import SendReadyResponse
 from lisjong.riichilab_client.errors import (
     ProtocolError,
+    RiichiLabClientError,
     TransportError,
     UnexpectedDisconnectError,
 )
 from lisjong.riichilab_client.session import ValidationSession
+from lisjong.riichilab_client.trace import JsonlProtocolTraceWriter, ProtocolTraceError
 from lisjong.riichilab_client.transport import TransportClosed, drive_validation_session
 
 _PATCH_TARGET = "lisjong.riichilab_client.session.RiichiLabSeatAdapter"
@@ -220,6 +224,255 @@ class SecretHandlingTest(unittest.TestCase):
         transport = FakeTransport([])
         self.assertFalse(hasattr(transport, "token"))
         self.assertFalse(hasattr(transport, "authorization"))
+
+
+def _read_jsonl(path: str) -> list[dict]:
+    with open(path, encoding="utf-8") as trace_file:
+        return [json.loads(line) for line in trace_file if line.strip()]
+
+
+class _RecordingFakeTraceWriter:
+    """`drive_session()`が呼ぶ`record()`だけを記録するtest double。
+
+    実fileを持たず、呼び出し順序・引数だけを確認する。tokenや
+    Authorization headerを受け取れないことを、そのconstructor
+    signatureが`path`しか持たない`JsonlProtocolTraceWriter`と
+    同じ形であることで示す。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object, dict]] = []
+
+    def record(self, direction: str, event_type: object, payload) -> None:
+        self.calls.append((direction, event_type, dict(payload)))
+
+
+class _FailingTraceWriter:
+    """trace書き込み失敗をsilentに無視しないことを確認するためのtest double。"""
+
+    def record(self, direction: str, event_type: object, payload) -> None:
+        raise ProtocolTraceError("simulated trace write failure")
+
+
+class ProtocolTraceIntegrationTest(unittest.TestCase):
+    """`drive_session()`のprotocol trace(Issue #45)を確認する。
+
+    trace引数は`None`が既定であり、既存test(このfile内の他test class)は
+    すべて`trace`を渡さずに動作することで、tracing OFF時の既存挙動が
+    変わらないことを既に固定している。ここではtracing ONの場合の
+    record内容・順序・failure伝播だけを確認する。
+    """
+
+    def test_recv_event_is_traced_before_session_handles_it(self) -> None:
+        # start_game.idが不正でProtocolErrorになる直前でも、recv traceは
+        # 既に記録されている(Issue #45セクション3の要求)。
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [_event_text({"type": "start_game", "id": "not-an-int"})]
+        )
+        trace = _RecordingFakeTraceWriter()
+
+        with self.assertRaises(ProtocolError):
+            _run(drive_validation_session(session, transport, trace=trace))
+
+        self.assertEqual(len(trace.calls), 1)
+        direction, event_type, payload = trace.calls[0]
+        self.assertEqual(direction, "recv")
+        self.assertEqual(event_type, "start_game")
+        self.assertEqual(payload, {"type": "start_game", "id": "not-an-int"})
+
+    def test_unknown_event_is_traced_and_forward_compatible_flow_continues(
+        self,
+    ) -> None:
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [
+                _event_text({"type": "some_future_event", "payload": [1, 2, 3]}),
+                _event_text({"type": "validation_result", "passed": True}),
+            ]
+        )
+        trace = _RecordingFakeTraceWriter()
+
+        _run(drive_validation_session(session, transport, trace=trace))
+
+        self.assertTrue(session.status().validation_result_received)
+        traced_event_types = [event_type for _, event_type, _ in trace.calls]
+        self.assertIn("some_future_event", traced_event_types)
+        self.assertIn("validation_result", traced_event_types)
+
+    def test_recv_send_order_is_preserved_in_trace(self) -> None:
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [
+                _event_text({"type": "start_game", "id": 0}),
+                _event_text(
+                    {
+                        "type": "request_action",
+                        "request_id": 1,
+                        "possible_actions": [],
+                        "observation": "unused",
+                    }
+                ),
+                _event_text({"type": "validation_result", "passed": True}),
+            ]
+        )
+        trace = _RecordingFakeTraceWriter()
+
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
+            _run(drive_validation_session(session, transport, trace=trace))
+
+        directions = [direction for direction, _, _ in trace.calls]
+        event_types = [event_type for _, event_type, _ in trace.calls]
+        self.assertEqual(directions, ["recv", "recv", "send", "recv"])
+        self.assertEqual(
+            event_types,
+            ["start_game", "request_action", "dahai", "validation_result"],
+        )
+
+    def test_binary_frame_is_not_traced(self) -> None:
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [
+                b"\x00\x01binary-noise",
+                _event_text({"type": "validation_result", "passed": True}),
+            ]
+        )
+        trace = _RecordingFakeTraceWriter()
+
+        _run(drive_validation_session(session, transport, trace=trace))
+
+        self.assertEqual(len(trace.calls), 1)
+        self.assertEqual(trace.calls[0][1], "validation_result")
+
+    def test_serialization_failure_is_not_traced_as_sent(self) -> None:
+        class _UnserializableAdapter(_FakeAdapter):
+            def process_request_action(self, raw_request_action):
+                return SendReadyResponse(
+                    request_id=raw_request_action["request_id"],
+                    action={"type": "dahai", "actor": 0, "bad": object()},
+                )
+
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [
+                _event_text({"type": "start_game", "id": 0}),
+                _event_text(
+                    {
+                        "type": "request_action",
+                        "request_id": 1,
+                        "possible_actions": [],
+                        "observation": "unused",
+                    }
+                ),
+            ]
+        )
+        trace = _RecordingFakeTraceWriter()
+
+        with patch(
+            _PATCH_TARGET, lambda self_seat, policy: _UnserializableAdapter(self_seat)
+        ):
+            with self.assertRaises(ProtocolError):
+                _run(drive_validation_session(session, transport, trace=trace))
+
+        self.assertEqual(transport.sent, [])
+        self.assertNotIn("send", [direction for direction, _, _ in trace.calls])
+
+    def test_send_is_traced_even_if_the_actual_transport_send_fails(self) -> None:
+        # trace recordは「送信を試みた」ことを表し、「相手へ届いた」ことを
+        # 保証しない(docs/riichilab-client.md「protocol trace」参照)。
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport(
+            [
+                _event_text({"type": "start_game", "id": 0}),
+                _event_text(
+                    {
+                        "type": "request_action",
+                        "request_id": 1,
+                        "possible_actions": [],
+                        "observation": "unused",
+                    }
+                ),
+            ]
+        )
+        transport._send_should_fail = True
+        trace = _RecordingFakeTraceWriter()
+
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
+            with self.assertRaises(TransportError):
+                _run(drive_validation_session(session, transport, trace=trace))
+
+        self.assertIn("send", [direction for direction, _, _ in trace.calls])
+
+    def test_trace_writer_failure_is_not_silently_ignored(self) -> None:
+        session = ValidationSession(MinimalPolicy())
+        transport = FakeTransport([_event_text({"type": "start_game", "id": 0})])
+        with self.assertRaises(RiichiLabClientError):
+            _run(
+                drive_validation_session(
+                    session, transport, trace=_FailingTraceWriter()
+                )
+            )
+
+    def test_recv_and_send_records_read_back_from_real_jsonl_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "trace.jsonl")
+            trace = JsonlProtocolTraceWriter(path)
+            session = ValidationSession(MinimalPolicy())
+            transport = FakeTransport(
+                [
+                    _event_text({"type": "start_game", "id": 0}),
+                    _event_text(
+                        {
+                            "type": "request_action",
+                            "request_id": 1,
+                            "possible_actions": [],
+                            "observation": "unused",
+                        }
+                    ),
+                    _event_text({"type": "validation_result", "passed": True}),
+                ]
+            )
+
+            try:
+                with patch(_PATCH_TARGET, _fake_adapter_factory):
+                    _run(drive_validation_session(session, transport, trace=trace))
+            finally:
+                trace.close()
+
+            records = _read_jsonl(path)
+            self.assertEqual(len(records), 4)
+            for record in records:
+                self.assertIn("timestamp", record)
+                self.assertIn("direction", record)
+                self.assertIn("event_type", record)
+                self.assertIn("payload", record)
+            self.assertEqual(
+                [record["direction"] for record in records],
+                ["recv", "recv", "send", "recv"],
+            )
+
+    def test_no_token_or_authorization_key_ever_reaches_the_trace_writer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "trace.jsonl")
+            trace = JsonlProtocolTraceWriter(path)
+            session = ValidationSession(MinimalPolicy())
+            transport = FakeTransport(
+                [
+                    _event_text({"type": "start_game", "id": 0}),
+                    _event_text({"type": "validation_result", "passed": True}),
+                ]
+            )
+
+            try:
+                _run(drive_validation_session(session, transport, trace=trace))
+            finally:
+                trace.close()
+
+            with open(path, encoding="utf-8") as trace_file:
+                raw_text = trace_file.read()
+            self.assertNotIn("token", raw_text.lower())
+            self.assertNotIn("authorization", raw_text.lower())
+            self.assertNotIn("bearer", raw_text.lower())
 
 
 if __name__ == "__main__":

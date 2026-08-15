@@ -27,6 +27,10 @@ from lisjong.riichilab_client.session import (
     SessionStatus,
     ValidationSession,
 )
+from lisjong.riichilab_client.trace import (
+    JsonlProtocolTraceWriter,
+    ProtocolTraceError,
+)
 from lisjong.riichilab_client.transport import (
     DEFAULT_RANKED_URL,
     DEFAULT_VALIDATION_URL,
@@ -70,7 +74,9 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "DEFAULT_RANKED_URL",
     "DEFAULT_VALIDATION_URL",
+    "JsonlProtocolTraceWriter",
     "ProtocolError",
+    "ProtocolTraceError",
     "RankedGameResult",
     "RankedSession",
     "RiichiLabClientError",

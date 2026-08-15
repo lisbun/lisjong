@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import asynccontextmanager
 from dataclasses import fields
@@ -263,6 +264,66 @@ class MultiRequestFullGameFakeServerTest(unittest.TestCase):
         status = session.status()
         self.assertEqual(status.requests_received, self_requests_processed)
         self.assertEqual(status.responses_sent, self_requests_processed)
+
+
+class RunValidationTraceOptInTest(unittest.TestCase):
+    """`run_validation(..., trace_path=...)`のopt-in protocol trace(Issue #45)。"""
+
+    def _run(self, *, trace_path):
+        env = RiichiEnv(seed=7, game_mode="4p-red-east")
+        observations = env.reset()
+        seat0_player_id = next(
+            player_id for player_id in observations if Seat(player_id) == Seat.SEAT_0
+        )
+        observation = observations[seat0_player_id]
+        request_1 = server_style_request_action(observation, request_id=1)
+        incoming = [
+            _event_text({"type": "start_game", "id": 0}),
+            _event_text(request_1),
+            _event_text({"type": "action_ack", "request_id": 1, "status": "accepted"}),
+            _event_text({"type": "end_game"}),
+            _event_text({"type": "validation_result", "passed": True}),
+        ]
+        transport = _FakeTransport(incoming)
+        captured_tokens: list[str] = []
+
+        async def _run_inner():
+            with patch(
+                "lisjong.riichilab_client.validation.connect_validation_transport",
+                _make_fake_connect(transport, captured_tokens),
+            ):
+                return await run_validation(
+                    MinimalPolicy(), "fake-token", trace_path=trace_path
+                )
+
+        return asyncio.run(_run_inner())
+
+    def test_tracing_off_by_default_creates_no_trace_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = os.path.join(tmp_dir, "trace.jsonl")
+            result = self._run(trace_path=None)
+            self.assertTrue(result.passed)
+            self.assertFalse(os.path.exists(trace_path))
+
+    def test_trace_path_opt_in_writes_jsonl_records_without_the_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = os.path.join(tmp_dir, "trace.jsonl")
+            result = self._run(trace_path=trace_path)
+            self.assertTrue(result.passed)
+
+            with open(trace_path, encoding="utf-8") as trace_file:
+                lines = [line for line in trace_file if line.strip()]
+
+            self.assertGreater(len(lines), 0)
+            records = [json.loads(line) for line in lines]
+            for record in records:
+                self.assertIn("timestamp", record)
+                self.assertIn("direction", record)
+                self.assertIn("event_type", record)
+                self.assertIn("payload", record)
+            raw_text = "".join(lines)
+            self.assertNotIn("fake-token", raw_text)
+            self.assertNotIn("Authorization", raw_text)
 
 
 if __name__ == "__main__":
