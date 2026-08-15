@@ -60,8 +60,6 @@ ranked smoke testは学習者環境で行う。
   `ack_history`(`request_id`ごとの`action_ack` statusの履歴)を持つ
   frozen dataclass。tokenやraw Observation、raw `request_action`全文等の
   secretは含まない
-- `python -m lisjong.riichilab_client.validation`: 環境変数`BOT_TOKEN`から
-  tokenを読み込むCLI entry point。secretはstdout/stderrへ出力しない
 - `run_ranked_game(policy: Policy, token: str, *, url: str = DEFAULT_RANKED_URL) -> RankedGameResult`:
   `wss://game.riichi.dev/ws/ranked`へ1回だけ接続し、queue待ちから1 full
   hanchanの`end_game`まで処理して終了する
@@ -69,8 +67,13 @@ ranked smoke testは学習者環境で行う。
   `ack_history`、optionalなfinal `scores`を持つfrozen dataclass。実serverの
   `end_game`にscoresがない場合は`None`とし、rank / placement / ratingや
   score値を推測・補完しない
-- `python -m lisjong.riichilab_client.ranked`: 検証用botのtokenを環境変数
-  `BOT_TOKEN`から読み込み、`MinimalPolicy`で1半荘だけ実行するCLI entry point
+
+`run_validation()` / `run_ranked_game()`は、Policyとcredentialを明示的に
+受け取る実行境界として維持する(Issue #44)。`python -m
+lisjong.riichilab_client.validation --profile <name>` / `ranked --profile
+<name>`は、Issue #44の`lisjong.riichilab_client.profile` / `cli`が解決した
+Policy・credential・trace pathをこの境界へ注入するだけのCLI entry point
+である。profileの詳細は下記「profile(Issue #44)」を参照する。
 
 validation/ranked双方のresult/runnerは各実行moduleから直接importできるほか、
 `lisjong.riichilab_client` package rootからlazy exportする。package import時に
@@ -98,6 +101,10 @@ src/lisjong/riichilab_client/
                      ProtocolTraceError
     transport.py     Transport protocol、WebSocketTransport、共通connect/driver、
                      validation/ranked互換wrapper
+    profile.py        bot実行profile(Issue #44)。RuntimeProfile、
+                     resolve_profile()、resolve_credential()、runtime_root()、
+                     default_trace_path()、runtime summary
+    cli.py             profile CLI共通の引数解析・trace path解決
     validation.py      run_validation()、ValidationResult、CLI entry point
     ranked.py          run_ranked_game()、RankedGameResult、CLI entry point
 ```
@@ -133,16 +140,186 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 
 ## Token境界
 
-**設計判断**: `BOT_TOKEN`はruntime secretとして`run_validation()` /
+**設計判断**: tokenはruntime secretとして`run_validation()` /
 `run_ranked_game()`の明示引数から注入する。secret管理frameworkは導入していない。
 
 - `token`はAuthorization header(`Bearer <token>`)を設定する目的だけに
   使用し、`Transport`、各session、各resultのいずれにも保持しない
-- validation/ranked CLIは環境変数`BOT_TOKEN`から読み込む。未設定時はsecretを
-  含まないエラーメッセージをstderrへ出力し、非zero exit codeを返す
+- validation/ranked CLIは、Issue #44の`--profile`が選択したprofile専用の
+  環境変数(下記「profile(Issue #44)」を参照)から読み込む。未設定時は
+  secretを含まないエラーメッセージをstderrへ出力し、非zero exit codeを返す
 - 例外メッセージ・ログ・test fixtureへtoken文字列を含めない設計とした
   (`test_riichilab_client_validation.py`の`SecretHandlingTest`相当の
   確認を`RunValidationEndToEndTest`内で行っている)
+
+## profile(Issue #44)
+
+**設計判断**: [Issue #44](https://github.com/lisbun/lisjong/issues/44)で、
+`src/lisjong/riichilab_client/profile.py` / `cli.py`にRiichiLab bot実行
+profileのcomposition/configuration layerを実装した。目的は、bot identity・
+credential source・使用Policy・runtime namespace・runtime output policyを
+明示的なprofileとして分離し、誤ったcredentialやPolicyでbotを誤起動しにくい
+構造にすることである。
+
+### 責務境界
+
+profileは次を一方向に解決するだけの、`run_validation()` /
+`run_ranked_game()`より上位のlayerである。
+
+```text
+profile -> bot identity -> credential環境変数名 -> Policy -> runtime
+namespace -> trace/runtime output policy
+```
+
+- `profile.py`はPolicy契約(`DecisionContext`)、`RiichiLabSeatAdapter`、
+  `ValidationSession` / `RankedSession`、`Transport`のいずれにも依存しない。
+  `run_validation(policy, token, ...)` / `run_ranked_game(policy, token,
+  ...)`という既存の低レベル公開APIはIssue #44でも変更せず、profileは
+  これらへ渡す`policy`(`RuntimeProfile.policy_factory()`)と`token`
+  (`resolve_credential()`)を組み立てるだけである
+- `cli.py`は`--profile` / `--trace` / `--trace-path`のCLI引数解析と、
+  Issue #45 `RIICHILAB_TRACE_PATH`との優先順位解決だけを担当する薄いlayer
+  であり、Session/Transport/Adapter/Policyへ責務を持ち込まない
+
+### 3 profile
+
+少なくとも次の3 profileを`PROFILE_NAMES`として固定する
+(`tests/test_riichilab_client_profile.py`の`ProfileMappingTest`で
+mappingをregression test化している)。
+
+| profile | 用途 | credential環境変数 | Policy | runtime namespace |
+| --- | --- | --- | --- | --- |
+| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `MinimalPolicy` | `lisjong-dev` |
+| `lisjong-baseline` | Policy性能比較の決定的な基準 | `LISJONG_BASELINE_BOT_TOKEN` | `MinimalPolicy` | `lisjong-baseline` |
+| `lisjong` | 本番運用(十分に検証済みのPolicyのみ) | `LISJONG_BOT_TOKEN` | `MinimalPolicy` | `lisjong` |
+
+3 profileとも現時点では`MinimalPolicy`(決定的、hidden mutable stateなし)
+を使用する。Issue #44はPolicyの強さそのものを改善する対象ではなく、profileを
+区別するためだけの不要なPolicy classも追加しない。`lisjong-baseline`には
+比較基準として固定可能な決定的Policyを割り当てるという完了条件を、既存の
+`MinimalPolicy`で満たす。各`RuntimeProfile.policy_factory`は独立した
+callableであるため、将来`lisjong-dev` / `lisjong-baseline` / `lisjong`を
+別Policyへ個別に差し替えることができる。
+
+### credential解決とfail closed
+
+`resolve_credential(profile, env=os.environ)`は、`profile.credential_env_var`
+**だけ**を参照する。
+
+- 他profileの環境変数を探索・流用しない(production → dev/baseline、
+  逆方向のいずれも実装しない、`ResolveCredentialTest`で固定)
+- 対応する環境変数が未設定・空文字列の場合は`MissingCredentialError`で
+  fail closedする。例外メッセージには環境変数の**名前**だけを含め、値は
+  含めない
+- `resolve_profile(name)`は、`name`が`None`・空文字列・未知profileの
+  いずれの場合も`UnknownProfileError`でfail closedする。profile未指定を
+  production等へ暗黙fallbackさせない
+- token値・token fingerprintはprofile identityとして使用しない
+  (`RuntimeProfile`はcredential**環境変数名**だけを保持し、値は保持しない)
+
+### CLI
+
+```powershell
+$env:LISJONG_DEV_BOT_TOKEN = "<dev検証用bot token>"
+python -m lisjong.riichilab_client.ranked --profile lisjong-dev
+
+$env:LISJONG_BASELINE_BOT_TOKEN = "<baseline検証用bot token>"
+python -m lisjong.riichilab_client.ranked --profile lisjong-baseline
+
+$env:LISJONG_BOT_TOKEN = "<本番bot token>"
+python -m lisjong.riichilab_client.ranked --profile lisjong
+```
+
+`validation`も同じ`--profile`引数を持つ(`python -m
+lisjong.riichilab_client.validation --profile <name>`)。
+
+- `--profile`は必須引数である。未指定はargparseの標準fail-closed挙動
+  (non-zero exit、usageをstderrへ出力)に委ね、production等へ暗黙
+  fallbackしない
+- `--profile`は`choices=PROFILE_NAMES`で制限し、未知profileも
+  `resolve_profile()`と同様に明確に拒否する
+- 旧CLI(profile概念導入前)が読んでいた単一の`BOT_TOKEN`環境変数は、
+  Issue #44で3profile専用の環境変数へ置き換えた(破壊的変更。fail-closed
+  原則を優先し、`BOT_TOKEN`への後方互換fallbackは実装していない)
+
+### runtime output / trace保存先
+
+profile経由の既定trace保存先は、repository配下ではなくOSユーザーローカル
+領域を使用する(`profile.runtime_root()`、標準libraryだけで実装、新規
+dependencyは追加していない)。
+
+| OS | root |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\lisjong`(未設定時は`~\AppData\Local\lisjong`) |
+| macOS | `~/Library/Application Support/lisjong` |
+| Linux等 | `$XDG_DATA_HOME/lisjong`(未設定時は`~/.local/share/lisjong`) |
+
+`default_trace_path(profile)`は、`<root>/traces/<runtime_namespace>/
+<timestamp>-<uuid4>.jsonl`の形でpathを作る。timestamp(UTC, マイクロ秒まで)
+とUUID4を組み合わせることで、同一profileを複数回・複数processで実行しても
+既定trace fileが同じfileへ意図せず混在しない
+(`DefaultTracePathTest.test_concurrent_calls_do_not_collide`で
+複数threadからの同時呼び出しでも衝突しないことを確認している)。filename/
+directory名にはtimestampとUUID4しか使わず、credential値・断片は一切
+含めない。
+
+trace pathの解決優先順位は次のとおりである(`cli.resolve_trace_path()`)。
+
+1. `--trace-path <path>`による明示指定
+2. 既存`RIICHILAB_TRACE_PATH`環境変数(Issue #45、後方互換として維持)
+3. `--trace`指定時のprofile既定path(上記`default_trace_path()`)
+4. どれも指定がなければtrace無効(`trace_path=None`)
+
+**trace既定値の判断**: Issue #45の設計原則(tracingは既定OFFのopt-in)を
+profile層でも維持し、`lisjong-dev`を含むどのprofileも既定ではtraceを
+生成しない。`lisjong-dev`だけ既定ONにする案も検討したが、同じCLI呼び出しが
+profileによって暗黙に異なる副作用(trace file生成)を持つことは「明示的な
+opt-in」という#45の契約と整合しないと判断した。dev用途でtraceを使う場合は
+`--trace`(profile既定path)または`--trace-path`/`RIICHILAB_TRACE_PATH`
+(明示path)で毎回明示する。この判断は`RuntimeSummaryTest` /
+`ResolveTracePathTest`のtrace既定OFF確認で固定している。
+
+### 起動時のsecret-free runtime summary
+
+profile CLIは、実行を開始する前に`build_runtime_summary()` /
+`format_runtime_summary()`が組み立てるsummaryを表示する。
+
+```text
+profile: lisjong-baseline
+policy: MinimalPolicy
+mode: ranked
+trace: off
+```
+
+`trace`が有効な場合は`trace path: <path>`をあわせて表示する。summaryは
+profile名、Policy識別子、mode、trace ON/OFF、trace有効時のpathだけを
+表示し、BOT token・Authorization header・token fingerprint・credential
+環境変数の値は一切含めない。credential環境変数の**名前**も、利便性より
+情報露出の最小化を優先し表示しない。
+
+### multi-process independence
+
+別processから`lisjong-dev`と`lisjong-baseline`を同時起動しても、
+credential source・Policy selection・runtime namespace・trace/output path
+が混線しないことを、次の2種類のtestで確認している。
+
+- `tests/test_riichilab_client_profile.py`: profile解決・credential解決・
+  `default_trace_path()`が共有mutable stateを持たない純粋関数であることを
+  確認する(`MultiProfileIndependenceTest`、`DefaultTracePathTest`の
+  concurrent呼び出しtestを含む)
+- `tests/test_riichilab_client_ranked.py`の
+  `MultiProcessProfileIndependenceTest`: 実OS processを2つ同時起動し
+  (`subprocess.Popen`)、`lisjong-dev`向けprocessが`LISJONG_DEV_BOT_TOKEN`
+  だけを、`lisjong-baseline`向けprocessが`LISJONG_BASELINE_BOT_TOKEN`
+  だけを参照すること、互いのcredential環境変数名や値がもう一方の
+  stdout/stderrへ漏れないことを確認する。credential解決はnetwork接続前に
+  fail closedするため、live RiichiLab接続やprocess supervisorは不要である
+
+process supervisor、4 bot一括起動orchestrator、reconnect、auto requeueは
+Issue #44の非スコープであり実装していない。RiichiLab側で同一user所有の
+別bot同士が同一ranked matchへ選ばれるかどうかは、lisjong側のprofile分離
+とは独立した外部サービスの挙動であり、本Issueでは調査・保証しない
+(必要であれば別Issueで扱う)。
 
 ## protocol trace(Issue #45)
 
@@ -181,9 +358,12 @@ tracingは既定で無効である。
 - `trace_path=None`(既定)では trace fileはまったく作られず、既存の
   `ValidationResult` / `RankedGameResult` / CLI出力の挙動は変わらない
 - validation/ranked CLI(`python -m lisjong.riichilab_client.validation` /
-  `ranked`)は、`BOT_TOKEN`とは独立した環境変数`RIICHILAB_TRACE_PATH`が
-  設定されている場合だけ、そのpathを`trace_path`として使用する。
-  `BOT_TOKEN`を設定してもtracingは有効化されない
+  `ranked`)は、profile credential(Issue #44、下記「profile(Issue #44)」を
+  参照)とは独立した環境変数`RIICHILAB_TRACE_PATH`が設定されている場合だけ、
+  そのpathを`trace_path`として使用する。credential環境変数を設定しても
+  tracingは有効化されない。Issue #44導入後は、`--trace` CLI引数による
+  profile既定pathでのopt-inも利用できる(優先順位は「profile(Issue #44)」
+  の「runtime output / trace保存先」を参照)
 
 ### JSONL schema
 
@@ -282,13 +462,16 @@ result = await run_ranked_game(policy, token, trace_path="traces/ranked.jsonl")
 ```
 
 ```powershell
-$env:BOT_TOKEN = "<bot token>"
+$env:LISJONG_DEV_BOT_TOKEN = "<dev検証用bot token>"
 $env:RIICHILAB_TRACE_PATH = "traces/ranked.jsonl"
-python -m lisjong.riichilab_client.ranked
+python -m lisjong.riichilab_client.ranked --profile lisjong-dev
 ```
 
 `RIICHILAB_TRACE_PATH`を設定しない場合、CLIは従来どおりtrace fileを
-作らない。
+作らない。Issue #44導入後は、`RIICHILAB_TRACE_PATH`を設定せずとも
+`--trace`だけでprofile既定path(OSユーザーローカル領域)へtraceを
+保存できる(`python -m lisjong.riichilab_client.ranked --profile
+lisjong-dev --trace`)。
 
 ## `start_game` / seat bind
 
@@ -538,20 +721,34 @@ Issue #39の4層構成を維持し、Issue #42のranked差分を同じ境界で�
    binary/unknown event、unexpected disconnect、#38 + `MinimalPolicy` integration、
    secret-safe result、ranked CLIのRuntimeWarning非再発を確認する。
    `RunRankedGameTraceOptInTest`が`run_ranked_game()`側の同じopt-in
-   trace挙動を、`RankedModuleCliTest`が`RIICHILAB_TRACE_PATH`環境変数
-   から`trace_path`が独立して渡されることを確認し、validation/ranked
-   双方が共通`drive_session()`のtrace実装を利用することを固定する
+   trace挙動を、`RankedModuleCliTest`が`--profile`必須・未知profile拒否・
+   credential未設定fail closed・`RIICHILAB_TRACE_PATH`環境変数から
+   `trace_path`が独立して渡されることを確認し、validation/ranked双方が
+   共通`drive_session()`のtrace実装を利用することを固定する。
+   `MultiProcessProfileIndependenceTest`が、Issue #44セクション9の
+   multi-process independence(下記「profile(Issue #44)」を参照)を
+   実subprocessで確認する
 5. **`JsonlProtocolTraceWriter`のunit test**
    (`tests/test_riichilab_client_trace.py`): 実WebSocket/RiichiLabなしに、
    JSONL record生成、timezone-aware ISO 8601 timestamp、複数recordの
    1行1JSON読み戻し、親directory自動作成、open/write失敗時に
    `ProtocolTraceError`をsilentに無視せず送出することを確認する
-6. **manual live validation / ranked smoke test**: 下記を参照
+6. **profile / CLI layerのunit test**
+   (`tests/test_riichilab_client_profile.py`、
+   `tests/test_riichilab_client_cli.py`): 3 profileのmapping固定、
+   profile未指定・未知profile・credential未設定のfail closed、他profile
+   credentialへのfallbackがないこと、`runtime_root()`のOS別解決、
+   `default_trace_path()`の複数run/複数thread同時呼び出しでの非衝突、
+   secret-freeなruntime summary、`--profile` / `--trace` /
+   `--trace-path`の引数解析とtrace path優先順位を実WebSocket/RiichiLab
+   なしに確認する
+7. **manual live validation / ranked smoke test**: 下記を参照
 
 ## live validation
 
 2026-08-15に学習者のWindows / Python 3.14環境から実BOT_TOKENをruntime
-注入し、duplicate semantic candidate対応後の実`/ws/validate`を再実行した。
+注入し、duplicate semantic candidate対応後の実`/ws/validate`を再実行した
+(Issue #44導入前の`BOT_TOKEN`単一環境変数によるCLIで実行した記録)。
 
 ```text
 RiichiLab validation passed
@@ -565,11 +762,11 @@ end_game: yes
 `execute_policy()`、`MinimalPolicy`、mapping resolve、MJAI response送信、
 `end_game`、`validation_result.passed`まで実serverで完走済みとなった。
 
-再実行する場合は次のコマンドを使用する。
+再実行する場合は、Issue #44導入後のprofile CLIで次のコマンドを使用する。
 
 ```powershell
-$env:BOT_TOKEN = "<実RiichiLab bot token>"
-python -m lisjong.riichilab_client.validation
+$env:LISJONG_DEV_BOT_TOKEN = "<dev検証用bot token>"
+python -m lisjong.riichilab_client.validation --profile lisjong-dev
 ```
 
 ## live ranked smoke test
@@ -613,9 +810,14 @@ validな4整数scoresを通知した場合だけtupleとして保持・表示し
 本命bot `lisjong`は使用していない。Policy versionはbot名を増やさずGit commit/tagで
 管理する。順位・score・ratingは観測してよいが成功条件にしない。
 
+この実測はIssue #44導入前の`BOT_TOKEN`単一環境変数によるCLIで実行した記録
+である。再実行する場合は、Issue #44導入後のprofile CLIで次のコマンドを
+使用する(検証用botには`lisjong-dev`または`lisjong-baseline`を使用し、
+本命bot `lisjong`は使用しない)。
+
 ```powershell
-$env:BOT_TOKEN = "<検証用RiichiLab bot token>"
-python -m lisjong.riichilab_client.ranked
+$env:LISJONG_DEV_BOT_TOKEN = "<検証用RiichiLab bot token>"
+python -m lisjong.riichilab_client.ranked --profile lisjong-dev
 ```
 
 再実行時は次を確認する。
