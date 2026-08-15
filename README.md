@@ -114,7 +114,7 @@ outputを一方向に解決する**profile**を明示的に選択して行いま
 
 | profile | 用途 | credential環境変数 | Policy |
 | --- | --- | --- | --- |
-| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `ShantenPolicy` |
+| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `UkeirePolicy` |
 | `lisjong-baseline` | Policy性能比較の決定的な基準 | `LISJONG_BASELINE_BOT_TOKEN` | `MinimalPolicy` |
 | `lisjong` | 本番運用(十分に検証済みのPolicyのみ) | `LISJONG_BOT_TOKEN` | `MinimalPolicy` |
 
