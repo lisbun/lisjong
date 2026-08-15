@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import asynccontextmanager, redirect_stdout
 from dataclasses import fields
@@ -423,6 +424,104 @@ class RankedModuleCliTest(unittest.TestCase):
 
         self.assertIs(riichilab_client.run_ranked_game, run_ranked_game)
         self.assertIs(riichilab_client.RankedGameResult, RankedGameResult)
+
+    def test_cli_reads_trace_path_from_its_own_env_var_independent_of_bot_token(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = os.path.join(tmp_dir, "trace.jsonl")
+            result = RankedGameResult(
+                end_game_received=True,
+                seat=Seat.SEAT_0,
+                requests_received=1,
+                responses_sent=1,
+                ack_history={},
+                scores=None,
+            )
+            captured_kwargs: dict = {}
+
+            async def _fake_run_ranked_game(policy, token, **kwargs):
+                captured_kwargs.update(kwargs)
+                return result
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {"BOT_TOKEN": "fake-token", "RIICHILAB_TRACE_PATH": trace_path},
+                ),
+                patch(
+                    "lisjong.riichilab_client.ranked.run_ranked_game",
+                    _fake_run_ranked_game,
+                ),
+                redirect_stdout(StringIO()),
+            ):
+                return_code = _run_cli()
+
+            self.assertEqual(return_code, 0)
+            self.assertEqual(captured_kwargs.get("trace_path"), trace_path)
+
+
+class RunRankedGameTraceOptInTest(unittest.TestCase):
+    """`run_ranked_game(..., trace_path=...)`のopt-in protocol trace(Issue #45)。
+
+    validationと同じ`drive_session()`経由のtrace実装を、ranked側からも
+    使えることを確認する(Issue #45セクション6の共通化要求)。
+    """
+
+    def _run(self, *, trace_path):
+        env = RiichiEnv(seed=7, game_mode="4p-red-east")
+        observations = env.reset()
+        player_id, observation = next(iter(observations.items()))
+        request = server_style_request_action(observation, request_id=5)
+        transport = _FakeTransport(
+            [
+                _event_text({"type": "start_game", "id": player_id}),
+                _event_text(request),
+                _event_text(
+                    {"type": "action_ack", "request_id": 5, "status": "accepted"}
+                ),
+                _event_text({"type": "end_game"}),
+            ]
+        )
+        captured_connections: list[tuple[str, str]] = []
+
+        async def _run_inner():
+            with patch(
+                "lisjong.riichilab_client.ranked.connect_ranked_transport",
+                _make_fake_connect(transport, captured_connections),
+            ):
+                return await run_ranked_game(
+                    MinimalPolicy(), "fake-token", trace_path=trace_path
+                )
+
+        return asyncio.run(_run_inner())
+
+    def test_tracing_off_by_default_creates_no_trace_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = os.path.join(tmp_dir, "trace.jsonl")
+            result = self._run(trace_path=None)
+            self.assertTrue(result.end_game_received)
+            self.assertFalse(os.path.exists(trace_path))
+
+    def test_trace_path_opt_in_writes_jsonl_records_without_the_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trace_path = os.path.join(tmp_dir, "trace.jsonl")
+            result = self._run(trace_path=trace_path)
+            self.assertTrue(result.end_game_received)
+
+            with open(trace_path, encoding="utf-8") as trace_file:
+                lines = [line for line in trace_file if line.strip()]
+
+            self.assertGreater(len(lines), 0)
+            for line in lines:
+                record = json.loads(line)
+                self.assertIn("timestamp", record)
+                self.assertIn("direction", record)
+                self.assertIn("event_type", record)
+                self.assertIn("payload", record)
+            raw_text = "".join(lines)
+            self.assertNotIn("fake-token", raw_text)
+            self.assertNotIn("Authorization", raw_text)
 
 
 if __name__ == "__main__":

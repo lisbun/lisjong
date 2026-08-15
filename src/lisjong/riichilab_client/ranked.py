@@ -13,11 +13,14 @@ from lisjong.policy_contract.policy import Policy
 from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_client.errors import ProtocolError, RiichiLabClientError
 from lisjong.riichilab_client.session import RankedSession
+from lisjong.riichilab_client.trace import JsonlProtocolTraceWriter
 from lisjong.riichilab_client.transport import (
     DEFAULT_RANKED_URL,
     connect_ranked_transport,
     drive_ranked_session,
 )
+
+_TRACE_PATH_ENV_VAR = "RIICHILAB_TRACE_PATH"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,18 +45,32 @@ async def run_ranked_game(
     token: str,
     *,
     url: str = DEFAULT_RANKED_URL,
+    trace_path: str | os.PathLike | None = None,
 ) -> RankedGameResult:
     """ranked endpointへ1回接続し、1 full hanchanの`end_game`で終了する。
 
     endpointへの接続自体がmatchmaking queue参加であるため、接続直後のjoin
     payloadは送らない。`end_game`後の再queue、次game、自動reconnectも行わない。
+
+    `trace_path`(Issue #45、既定`None`)を渡した場合だけ、送受信した
+    protocol eventをsecret-safeなJSONLとして`trace_path`へ追記する。
+    `token`とは独立したopt-in設定であり、`trace_path`を渡さない限り
+    trace fileは作られない。validationと共通の`drive_session()`を通じて
+    同じtrace実装を利用する。
     """
     if not isinstance(token, str) or not token:
         raise ValueError("token must be a non-empty string")
 
     session = RankedSession(policy)
-    async with connect_ranked_transport(url, token) as transport:
-        await drive_ranked_session(session, transport)
+    trace_writer = (
+        JsonlProtocolTraceWriter(trace_path) if trace_path is not None else None
+    )
+    try:
+        async with connect_ranked_transport(url, token) as transport:
+            await drive_ranked_session(session, transport, trace=trace_writer)
+    finally:
+        if trace_writer is not None:
+            trace_writer.close()
 
     status = session.status()
     if status.seat is None:
@@ -70,7 +87,11 @@ async def run_ranked_game(
 
 
 def _run_cli() -> int:
-    """`python -m lisjong.riichilab_client.ranked`のentry point。"""
+    """`python -m lisjong.riichilab_client.ranked`のentry point。
+
+    protocol trace(Issue #45)は`BOT_TOKEN`とは独立した
+    `RIICHILAB_TRACE_PATH`環境変数で明示的にopt-inした場合だけ有効化する。
+    """
     token = os.environ.get("BOT_TOKEN")
     if not token:
         print(
@@ -80,8 +101,12 @@ def _run_cli() -> int:
         )
         return 2
 
+    trace_path = os.environ.get(_TRACE_PATH_ENV_VAR) or None
+
     try:
-        result = asyncio.run(run_ranked_game(MinimalPolicy(), token))
+        result = asyncio.run(
+            run_ranked_game(MinimalPolicy(), token, trace_path=trace_path)
+        )
     except RiichiLabClientError as error:
         print(
             f"RiichiLab ranked game failed: {type(error).__name__}: {error}",

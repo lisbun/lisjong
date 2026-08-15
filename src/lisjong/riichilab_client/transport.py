@@ -24,6 +24,7 @@ from lisjong.riichilab_client.errors import (
     UnexpectedDisconnectError,
 )
 from lisjong.riichilab_client.session import RankedSession, ValidationSession
+from lisjong.riichilab_client.trace import JsonlProtocolTraceWriter
 
 DEFAULT_VALIDATION_URL = "wss://game.riichi.dev/ws/validate"
 DEFAULT_RANKED_URL = "wss://game.riichi.dev/ws/ranked"
@@ -126,7 +127,10 @@ def parse_json_event(message: str) -> dict:
 
 
 async def drive_session(
-    session: ValidationSession | RankedSession, transport: Transport
+    session: ValidationSession | RankedSession,
+    transport: Transport,
+    *,
+    trace: JsonlProtocolTraceWriter | None = None,
 ) -> None:
     """mode固有terminal eventまで受信し、`session`を進行させる。
 
@@ -136,6 +140,13 @@ async def drive_session(
       fail closedする
     - unexpected disconnectは`UnexpectedDisconnectError`として成功扱い
       しない。mid-game reconnectは行わない
+    - `trace`が渡された場合(Issue #45、default None・opt-in)、recv
+      eventは`session.handle_event()`より前に記録する。これにより
+      unknown eventや、malformed known eventが`ProtocolError`になる
+      直前のeventも残る。send actionはJSON serializationに成功した
+      後・実`transport.send()`の前に記録する。そのため送信record は
+      「送信を試みた」ことを表し、「相手へ届いた」ことは保証しない
+      (実sendが失敗した場合もrecordは残る)
     """
     while not session.is_complete:
         try:
@@ -150,6 +161,9 @@ async def drive_session(
             continue
 
         event = parse_json_event(message)
+        if trace is not None:
+            trace.record("recv", event.get("type"), event)
+
         outgoing = session.handle_event(event)
         if outgoing is None:
             continue
@@ -159,6 +173,9 @@ async def drive_session(
         except (TypeError, ValueError) as error:
             raise ProtocolError("failed to serialize outgoing action") from error
 
+        if trace is not None:
+            trace.record("send", outgoing.get("type"), outgoing)
+
         try:
             await transport.send(outgoing_text)
         except TransportClosed as error:
@@ -166,15 +183,23 @@ async def drive_session(
 
 
 async def drive_validation_session(
-    session: ValidationSession, transport: Transport
+    session: ValidationSession,
+    transport: Transport,
+    *,
+    trace: JsonlProtocolTraceWriter | None = None,
 ) -> None:
     """Issue #39のvalidation driver APIを維持するwrapper。"""
-    await drive_session(session, transport)
+    await drive_session(session, transport, trace=trace)
 
 
-async def drive_ranked_session(session: RankedSession, transport: Transport) -> None:
+async def drive_ranked_session(
+    session: RankedSession,
+    transport: Transport,
+    *,
+    trace: JsonlProtocolTraceWriter | None = None,
+) -> None:
     """`end_game`まで1 ranked hanchanを駆動する。"""
-    await drive_session(session, transport)
+    await drive_session(session, transport, trace=trace)
 
 
 __all__ = [

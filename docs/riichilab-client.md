@@ -94,6 +94,8 @@ src/lisjong/riichilab_client/
                      UnexpectedDisconnectError
     session.py       validation/ranked共通lifecycle、ValidationSession、
                      RankedSession
+    trace.py         protocol trace(Issue #45)。JsonlProtocolTraceWriter、
+                     ProtocolTraceError
     transport.py     Transport protocol、WebSocketTransport、共通connect/driver、
                      validation/ranked互換wrapper
     validation.py      run_validation()、ValidationResult、CLI entry point
@@ -141,6 +143,152 @@ iteratorとしても使えるが、本実装では`await websockets.connect(...)
 - 例外メッセージ・ログ・test fixtureへtoken文字列を含めない設計とした
   (`test_riichilab_client_validation.py`の`SecretHandlingTest`相当の
   確認を`RunValidationEndToEndTest`内で行っている)
+
+## protocol trace(Issue #45)
+
+**設計判断**: [Issue #45](https://github.com/lisbun/lisjong/issues/45)で、
+RiichiLab validation / ranked sessionの送受信protocol eventを、任意で
+secret-safeなJSON Lines(JSONL)へ保存できる観測機能を実装した。目的は、
+PR #43 / Issue #42のranked live smoke testで実測した
+`ProtocolError: ranked end_game must contain four final scores`のような
+protocol差異・unknown event・`ProtocolError`原因調査を、実RiichiLabに対して
+安全に継続できるようにすることである。Policy契約
+(`DecisionContext` / `InternalAction`)やDecisionContext・
+`RiichiLabSeatAdapter`へこの責務を持ち込まない。
+
+### 責務境界
+
+`src/lisjong/riichilab_client/trace.py`が次のみを担当する。
+
+- `JsonlProtocolTraceWriter(path)`: 出力先pathだけを受け取るwriter。
+  JSONL recordの生成、UTC ISO 8601 timestampの付与、fileへのappendを行う
+- `ProtocolTraceError`(`RiichiLabClientError`のsubclass): trace file
+  のopen/write/close失敗時に送出する専用例外
+
+`Policy`、`DecisionContext`、`RiichiLabSeatAdapter`はtrace writerを一切
+知らない。trace挿入点は`connect_transport()`(BOT token / Authorization
+headerを知る唯一の場所)ではなく、credentialを持たない共通
+`transport.drive_session()`である。
+
+### opt-inであること
+
+tracingは既定で無効である。
+
+- `run_validation(policy, token, *, url=..., trace_path=None)` /
+  `run_ranked_game(policy, token, *, url=..., trace_path=None)`は、
+  `trace_path`(`str` / `os.PathLike`)を明示的に渡した場合だけ
+  `JsonlProtocolTraceWriter`を生成し、`drive_session()`へ渡す
+- `trace_path=None`(既定)では trace fileはまったく作られず、既存の
+  `ValidationResult` / `RankedGameResult` / CLI出力の挙動は変わらない
+- validation/ranked CLI(`python -m lisjong.riichilab_client.validation` /
+  `ranked`)は、`BOT_TOKEN`とは独立した環境変数`RIICHILAB_TRACE_PATH`が
+  設定されている場合だけ、そのpathを`trace_path`として使用する。
+  `BOT_TOKEN`を設定してもtracingは有効化されない
+
+### JSONL schema
+
+1行が1 protocol event/actionの独立したvalid JSONである。
+
+```json
+{"timestamp": "2026-08-15T12:00:00.123456+00:00", "direction": "recv", "event_type": "start_game", "payload": {"type": "start_game", "id": 0}}
+{"timestamp": "2026-08-15T12:00:01.000000+00:00", "direction": "recv", "event_type": "request_action", "payload": {"type": "request_action", "request_id": 17, "...": "..."}}
+{"timestamp": "2026-08-15T12:00:01.050000+00:00", "direction": "send", "event_type": "dahai", "payload": {"type": "dahai", "actor": 0, "pai": "1m", "request_id": 17}}
+```
+
+| field | 内容 |
+| --- | --- |
+| `timestamp` | `datetime.now(timezone.utc).isoformat()`によるtimezone-aware UTC ISO 8601 |
+| `direction` | `"recv"` または `"send"` |
+| `event_type` | recvは受信event `payload["type"]`の値(欠落時は`null`)、sendは送信action `payload["type"]`の値 |
+| `payload` | 受信済みparsed JSON event、または送信直前にJSON serialization済みのaction dictそのもの |
+
+`payload`はJSON syntax errorや非objectなど受理できなかったtext frameを
+含まない(下記「recvの記録タイミング」を参照)。session state、Policy
+state、Authorization metadataはrecordへ追加しない。
+
+### recv/sendの記録タイミング
+
+`transport.drive_session()`の順序は次のとおりである。
+
+```text
+recv -> frame種別判定 -> (binary: ignore, 記録なし)
+      -> JSON parse (失敗: ProtocolError, 記録なし)
+      -> trace記録(“recv”)
+      -> session.handle_event() (ProtocolErrorの可能性あり)
+      -> outgoing payload -> JSON serialization (失敗: ProtocolError, 記録なし)
+      -> trace記録(“send”)
+      -> transport.send() (失敗: TransportError)
+```
+
+- **recv**: `session.handle_event()`より前に記録する。これにより、
+  unknown eventや、既知eventのmalformed fieldが原因で`ProtocolError`に
+  なる場合でも、その原因となった受信eventがtraceへ残る
+  (`ProtocolErrorになる前のrecv trace`)。binary frameとJSON syntax
+  errorは、そもそも扱えるprotocol payloadではないため記録しない
+  (Issue #45の「各行がvalid JSON」という契約を優先する)
+- **send**: `session.handle_event()`が返したoutgoing payloadのJSON
+  serializationに成功した後、実`transport.send()`の前に記録する。
+  serializationに失敗したpayloadは「送信済み」として記録しない。
+  一方、record自体は「送信を試みた」ことだけを表し、直後の実
+  `transport.send()`が`TransportError`で失敗した場合でもrecordは
+  そのまま残る(=「相手へ届いた」ことの証明ではない)
+
+### secret境界
+
+- `JsonlProtocolTraceWriter`のconstructorは出力先pathしか受け取らない。
+  BOT_TOKEN、Authorization header、その他credentialを引数として渡す
+  経路自体が存在しない
+- `connect_transport()`だけがBOT token / Authorization headerを知り、
+  `Transport`・`drive_session()`・trace writerのいずれにもcredentialを
+  渡さない、という既存の責務境界を変更していない
+- 単純な文字列redaction(既知secret文字列をtraceへ書いてから置換する)
+  には依存していない。secretがtrace boundaryを通る経路自体を作らない
+  構造でsecret-safeを担保する
+- protocol payload自体(`request_action.observation`、`possible_actions`
+  等)はredactionせずそのまま記録する。protocol調査能力を優先し、
+  Issue #45に個別のredaction要求は定義されていない
+
+### 保存場所
+
+trace出力先はrepositoryへ誤commitしにくいよう、専用directory
+`/traces/`をGit管理対象外とした(`.gitignore`)。`trace_path`は
+呼び出し側が指定する任意のpathであり、`/traces/`配下を使うことを
+推奨するが、writer自体はpathを強制しない。ファイル名にはsecretを
+含めないこと。
+
+### trace writer failure
+
+trace書き込み失敗をsilentに無視しない。`JsonlProtocolTraceWriter`は
+open/write/close失敗時に`ProtocolTraceError`(`RiichiLabClientError`の
+subclass)を送出する。`run_validation()` / `run_ranked_game()`は
+既存の`RiichiLabClientError`捕捉(CLIの`except RiichiLabClientError`)に
+そのまま乗り、既存のexception hierarchyや`ProtocolError` /
+`TransportError`の意味を変更しない。tracingを有効化した利用者が
+trace保存失敗に気づけず「通常成功したように見える」挙動は発生しない。
+
+### validation / ranked共通化
+
+trace実装は共通`transport.drive_session()`に1回だけあり、
+`drive_validation_session()` / `drive_ranked_session()`双方が同じ
+`trace`引数を透過的に渡す。mode固有のprotocol semantics
+(`ValidationSession` / `RankedSession`のterminal条件等)はSession側の
+責務のまま変更していない。
+
+### 有効化方法
+
+```python
+result = await run_validation(policy, token, trace_path="traces/validate.jsonl")
+result = await run_ranked_game(policy, token, trace_path="traces/ranked.jsonl")
+```
+
+```powershell
+$env:BOT_TOKEN = "<bot token>"
+$env:RIICHILAB_TRACE_PATH = "traces/ranked.jsonl"
+python -m lisjong.riichilab_client.ranked
+```
+
+`RIICHILAB_TRACE_PATH`を設定しない場合、CLIは従来どおりtrace fileを
+作らない。
 
 ## `start_game` / seat bind
 
@@ -359,7 +507,18 @@ Issue #39の4層構成を維持し、Issue #42のranked差分を同じ境界で�
 2. **fake WebSocket transport test** (`tests/test_riichilab_client_transport.py`):
    `Transport` protocolのfake実装で`drive_validation_session()`を駆動し、
    JSON text送受信、binary frame無視、JSON parse failure、送信・受信
-   failureの例外変換、serialization failureを確認する
+   failureの例外変換、serialization failureを確認する。あわせて
+   `ProtocolTraceIntegrationTest`が、Issue #45のprotocol traceを
+   `drive_session()`の境界で確認する: recv eventが
+   `session.handle_event()`より前に記録されること、malformed known
+   eventが`ProtocolError`になる直前でもrecv traceが残ること、unknown
+   eventが記録されforward-compatible挙動を壊さないこと、recv/sendの
+   記録順序、binary frameを記録しないこと、serialization失敗を
+   送信済みとして記録しないこと、実`transport.send()`失敗後もsend
+   recordが残ること、trace writer failureがsilentに無視されないこと、
+   実`JsonlProtocolTraceWriter`で複数recordを1行1JSONとして読み戻せる
+   こと、BOT_TOKEN/Authorization/Bearerに相当する文字列がtrace出力へ
+   含まれないことを確認する
 3. **#38 + `MinimalPolicy` integration** (`tests/test_riichilab_client_validation.py`):
    実RiichiEnv 0.4.8の`Observation`を使い、`ValidationSession`が
    `RiichiLabSeatAdapter` + `MinimalPolicy`を経て送信前validation済み
@@ -368,14 +527,26 @@ Issue #39の4層構成を維持し、Issue #42のranked差分を同じ境界で�
    `run_validation()`をfake transportで駆動するend-to-end testで、
    `ValidationResult`の内容とtoken非露出を確認する。CLIをtoken未設定で
    subprocess実行し、`python -m`でrunpy `RuntimeWarning`が発生しないことも
-   回帰testで固定する
+   回帰testで固定する。`RunValidationTraceOptInTest`が、`trace_path`
+   未指定時にtrace fileが作られないこと、`trace_path`指定時に
+   `run_validation()`経由でJSONL recordが書き出され、tokenを含まない
+   ことを確認する
 4. **ranked unit / fake transport / integration**
    (`tests/test_riichilab_client_ranked.py`): seat 0..3、validation seat 0回帰、
    scoresなし`end_game` terminal、optionalなvalid scores、不正scores、
    no join payload、exactly one game、
    binary/unknown event、unexpected disconnect、#38 + `MinimalPolicy` integration、
-   secret-safe result、ranked CLIのRuntimeWarning非再発を確認する
-5. **manual live validation / ranked smoke test**: 下記を参照
+   secret-safe result、ranked CLIのRuntimeWarning非再発を確認する。
+   `RunRankedGameTraceOptInTest`が`run_ranked_game()`側の同じopt-in
+   trace挙動を、`RankedModuleCliTest`が`RIICHILAB_TRACE_PATH`環境変数
+   から`trace_path`が独立して渡されることを確認し、validation/ranked
+   双方が共通`drive_session()`のtrace実装を利用することを固定する
+5. **`JsonlProtocolTraceWriter`のunit test**
+   (`tests/test_riichilab_client_trace.py`): 実WebSocket/RiichiLabなしに、
+   JSONL record生成、timezone-aware ISO 8601 timestamp、複数recordの
+   1行1JSON読み戻し、親directory自動作成、open/write失敗時に
+   `ProtocolTraceError`をsilentに無視せず送出することを確認する
+6. **manual live validation / ranked smoke test**: 下記を参照
 
 ## live validation
 

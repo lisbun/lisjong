@@ -232,3 +232,6 @@ __marimo__/
 /artifacts/
 /runs/
 .claude/
+
+# lisjong: RiichiLab protocol trace output (Issue #45, opt-in, secret-safe JSONL)
+/traces/
