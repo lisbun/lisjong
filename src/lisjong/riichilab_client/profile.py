@@ -52,12 +52,16 @@ class RuntimeProfile:
     `policy_factory`は呼び出しのたびに新しい`Policy`instanceを作る。複数
     profileが同じPolicy classを指すことは許容するが(本IssueではPolicyの
     強さそのものを改善しない)、mapping自体は`name`ごとに固定・独立している。
+
+    表示用のPolicy名を独立したfieldとして持たない。`build_runtime_summary()`
+    が実際に起動する`policy_factory()`のinstanceから`type(...).__name__`を
+    読み取るため、`policy_factory`だけを変更してsummary表示がずれる余地を
+    構造的になくしている。
     """
 
     name: str
     credential_env_var: str
     policy_factory: Callable[[], Policy]
-    policy_label: str
     runtime_namespace: str
 
 
@@ -70,21 +74,18 @@ _PROFILE_DEFINITIONS: tuple[RuntimeProfile, ...] = (
         name="lisjong-dev",
         credential_env_var="LISJONG_DEV_BOT_TOKEN",
         policy_factory=_minimal_policy_factory,
-        policy_label="MinimalPolicy",
         runtime_namespace="lisjong-dev",
     ),
     RuntimeProfile(
         name="lisjong-baseline",
         credential_env_var="LISJONG_BASELINE_BOT_TOKEN",
         policy_factory=_minimal_policy_factory,
-        policy_label="MinimalPolicy",
         runtime_namespace="lisjong-baseline",
     ),
     RuntimeProfile(
         name="lisjong",
         credential_env_var="LISJONG_BOT_TOKEN",
         policy_factory=_minimal_policy_factory,
-        policy_label="MinimalPolicy",
         runtime_namespace="lisjong",
     ),
 )
@@ -190,14 +191,20 @@ def build_runtime_summary(
     *,
     mode: str,
     trace_path: str | os.PathLike | None,
+    policy: Policy,
 ) -> RuntimeSummary:
     """BOT token / Authorization header / credential環境変数の値を含まない
     summaryを組み立てる。credential環境変数の名前もここでは表示しない
     (利便性より情報露出の最小化を優先する)。
+
+    `policy`には実際に`run_validation()` / `run_ranked_game()`へ渡す
+    instanceそのものを渡す。Policy名は`profile`側の独立fieldではなく
+    `type(policy).__name__`から求めるため、`policy_factory`だけを変更して
+    表示名の更新を忘れても、summaryが実行中のPolicyと食い違うことがない。
     """
     return RuntimeSummary(
         profile=profile.name,
-        policy_label=profile.policy_label,
+        policy_label=type(policy).__name__,
         mode=mode,
         trace_enabled=trace_path is not None,
         trace_path=str(trace_path) if trace_path is not None else None,

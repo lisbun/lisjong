@@ -5,6 +5,7 @@
 実CLI subprocessを起動せずに確認する。
 """
 
+import sys
 import unittest
 
 from lisjong.riichilab_client.cli import (
@@ -86,6 +87,25 @@ class ResolveTracePathTest(unittest.TestCase):
         self.assertIsNotNone(path)
         self.assertIn("lisjong-dev", path)
         self.assertTrue(path.endswith(".jsonl"))
+
+    def test_trace_flag_forwards_env_into_the_profile_default_path(self) -> None:
+        """`--trace`既定pathのroot決定でも、渡された`env`を実際に使うこと
+        (`default_trace_path()`への`env`受け渡し忘れがないこと)を確認する。
+        Windows/macOS固有分岐は`DefaultTracePathTest` / `RuntimeRootTest`
+        (test_riichilab_client_profile.py)で確認済みのため、ここでは
+        `resolve_trace_path()`がその`env`をそのまま伝播することだけを見る。
+        """
+        if sys.platform in ("win32", "darwin"):
+            self.skipTest("this test targets the XDG_DATA_HOME branch")
+
+        path = resolve_trace_path(
+            self.profile,
+            trace_flag=True,
+            trace_path_arg=None,
+            env={"XDG_DATA_HOME": "/tmp/lisjong-cli-env-test"},
+        )
+        self.assertIsNotNone(path)
+        self.assertTrue(path.startswith("/tmp/lisjong-cli-env-test/lisjong/"))
 
 
 if __name__ == "__main__":

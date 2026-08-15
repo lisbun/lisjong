@@ -130,13 +130,14 @@ def _run_cli(argv: Sequence[str] | None = None) -> int:
     trace_path = resolve_trace_path(
         profile, trace_flag=args.trace, trace_path_arg=args.trace_path
     )
-    summary = build_runtime_summary(profile, mode="validation", trace_path=trace_path)
+    policy = profile.policy_factory()
+    summary = build_runtime_summary(
+        profile, mode="validation", trace_path=trace_path, policy=policy
+    )
     print(format_runtime_summary(summary))
 
     try:
-        result = asyncio.run(
-            run_validation(profile.policy_factory(), token, trace_path=trace_path)
-        )
+        result = asyncio.run(run_validation(policy, token, trace_path=trace_path))
     except RiichiLabClientError as error:
         print(
             f"RiichiLab validation failed: {type(error).__name__}: {error}",

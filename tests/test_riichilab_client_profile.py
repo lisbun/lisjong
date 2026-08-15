@@ -40,7 +40,6 @@ class ProfileMappingTest(unittest.TestCase):
         self.assertEqual(profile.name, "lisjong-dev")
         self.assertEqual(profile.credential_env_var, "LISJONG_DEV_BOT_TOKEN")
         self.assertEqual(profile.runtime_namespace, "lisjong-dev")
-        self.assertEqual(profile.policy_label, "MinimalPolicy")
         self.assertIsInstance(profile.policy_factory(), MinimalPolicy)
 
     def test_lisjong_baseline_mapping(self) -> None:
@@ -48,7 +47,6 @@ class ProfileMappingTest(unittest.TestCase):
         self.assertEqual(profile.name, "lisjong-baseline")
         self.assertEqual(profile.credential_env_var, "LISJONG_BASELINE_BOT_TOKEN")
         self.assertEqual(profile.runtime_namespace, "lisjong-baseline")
-        self.assertEqual(profile.policy_label, "MinimalPolicy")
         self.assertIsInstance(profile.policy_factory(), MinimalPolicy)
 
     def test_lisjong_production_mapping(self) -> None:
@@ -56,7 +54,6 @@ class ProfileMappingTest(unittest.TestCase):
         self.assertEqual(profile.name, "lisjong")
         self.assertEqual(profile.credential_env_var, "LISJONG_BOT_TOKEN")
         self.assertEqual(profile.runtime_namespace, "lisjong")
-        self.assertEqual(profile.policy_label, "MinimalPolicy")
         self.assertIsInstance(profile.policy_factory(), MinimalPolicy)
 
     def test_policy_factory_returns_a_fresh_instance_each_call(self) -> None:
@@ -238,7 +235,9 @@ class DefaultTracePathTest(unittest.TestCase):
 class RuntimeSummaryTest(unittest.TestCase):
     def test_summary_lists_profile_policy_mode_and_trace_off(self) -> None:
         profile = resolve_profile("lisjong-baseline")
-        summary = build_runtime_summary(profile, mode="ranked", trace_path=None)
+        summary = build_runtime_summary(
+            profile, mode="ranked", trace_path=None, policy=profile.policy_factory()
+        )
         text = format_runtime_summary(summary)
         self.assertIn("profile: lisjong-baseline", text)
         self.assertIn("policy: MinimalPolicy", text)
@@ -249,7 +248,10 @@ class RuntimeSummaryTest(unittest.TestCase):
     def test_summary_shows_trace_path_when_enabled(self) -> None:
         profile = resolve_profile("lisjong-dev")
         summary = build_runtime_summary(
-            profile, mode="validation", trace_path="traces/example.jsonl"
+            profile,
+            mode="validation",
+            trace_path="traces/example.jsonl",
+            policy=profile.policy_factory(),
         )
         text = format_runtime_summary(summary)
         self.assertIn("trace: on", text)
@@ -257,12 +259,33 @@ class RuntimeSummaryTest(unittest.TestCase):
 
     def test_summary_never_contains_credential_env_var_or_value(self) -> None:
         profile = resolve_profile("lisjong")
-        summary = build_runtime_summary(profile, mode="ranked", trace_path=None)
+        summary = build_runtime_summary(
+            profile, mode="ranked", trace_path=None, policy=profile.policy_factory()
+        )
         text = format_runtime_summary(summary)
         self.assertNotIn("LISJONG_BOT_TOKEN", text)
         self.assertNotIn(_DUMMY_SECRET, text)
         self.assertNotIn("Authorization", text)
         self.assertNotIn("Bearer", text)
+
+    def test_summary_policy_label_reflects_the_actual_policy_instance_type(
+        self,
+    ) -> None:
+        """`policy_factory`だけを変更しても、summaryは常に実際に渡した
+        `policy` instanceの型名を表示する(独立した`policy_label` fieldを
+        持たないため、表示漏れによる食い違いが構造的に起きない)。
+        """
+
+        class _ExperimentalPolicy:
+            def choose_action(self, decision):
+                raise NotImplementedError
+
+        profile = resolve_profile("lisjong-dev")
+        summary = build_runtime_summary(
+            profile, mode="ranked", trace_path=None, policy=_ExperimentalPolicy()
+        )
+        self.assertEqual(summary.policy_label, "_ExperimentalPolicy")
+        self.assertIn("policy: _ExperimentalPolicy", format_runtime_summary(summary))
 
 
 class MultiProfileIndependenceTest(unittest.TestCase):

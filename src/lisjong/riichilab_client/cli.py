@@ -75,7 +75,7 @@ def resolve_trace_path(
         return env_value
 
     if trace_flag:
-        return str(default_trace_path(profile))
+        return str(default_trace_path(profile, env=source))
 
     return None
 
