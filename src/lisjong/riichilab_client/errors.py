@@ -3,7 +3,7 @@
 `docs/riichilab-client.md`「責務境界」「fail closed」を実装する。#38
 (`lisjong.riichilab_adapter`)、#34 (`lisjong.policy_contract`)、#23
 (`lisjong.riichienv_adapter`)が送出する例外はここで変更・再wrapせず、
-そのまま`ValidationSession` / `run_validation()`を通じて伝播させる。
+そのままvalidation/ranked sessionと公開runnerを通じて伝播させる。
 """
 
 
@@ -19,7 +19,7 @@ class ProtocolError(RiichiLabClientError):
     lifecycle違反(duplicate/old/decreasing/response mismatch)、
     `action_ack`のprotocol不整合(unknown request_id、unknown status、
     `rejected`/`unparseable`)、`validation_result`のmalformed `passed`、
-    response serialization失敗を含む。
+    ranked `end_game`のmalformed scores、response serialization失敗を含む。
     """
 
 
@@ -28,7 +28,7 @@ class TransportError(RiichiLabClientError):
 
 
 class UnexpectedDisconnectError(TransportError):
-    """validation完了(`validation_result`受信)前にconnectionが切断された場合。
+    """mode固有terminal event受信前にconnectionが切断された場合。
 
     公式protocol上mid-game reconnectはサポートされないため、この例外は
     成功として扱わない。自動的なreconnectやretryは行わない。

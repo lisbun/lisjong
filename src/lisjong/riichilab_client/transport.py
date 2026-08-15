@@ -1,9 +1,8 @@
-"""RiichiLab validation WebSocket接続そのものを扱う最小限のtransport層。
+"""RiichiLab WebSocket接続そのものを扱う最小限のtransport層。
 
-`ValidationSession`(pure transport lifecycle state、`session.py`)と
-WebSocket API自体を分離する。fake/local testは`Transport` protocolへ
-準拠するfake objectを実装するだけで、実WebSocket接続・asyncio eventなしに
-lifecycleを確認できる。
+pure transport lifecycle state(`session.py`)とWebSocket API自体を分離する。
+validation/rankedは同じconnect/receive/send loopを使い、terminal条件だけを
+各sessionへ委譲する。
 
 `websockets` dependencyはこのpackage内だけで使用する
 (`policy_contract` / `policies` / `riichienv_adapter`への依存の逆流はしない)。
@@ -24,24 +23,25 @@ from lisjong.riichilab_client.errors import (
     TransportError,
     UnexpectedDisconnectError,
 )
-from lisjong.riichilab_client.session import ValidationSession
+from lisjong.riichilab_client.session import RankedSession, ValidationSession
 
 DEFAULT_VALIDATION_URL = "wss://game.riichi.dev/ws/validate"
+DEFAULT_RANKED_URL = "wss://game.riichi.dev/ws/ranked"
 
 
 class TransportClosed(Exception):
     """`Transport.recv()`がconnection close(正常/異常問わず)を検出した場合。
 
-    `drive_validation_session()`側で`UnexpectedDisconnectError`へ変換する
+    `drive_session()`側で`UnexpectedDisconnectError`へ変換する
     ための内部signalであり、呼び出し側の公開APIには漏らさない。
     """
 
 
 class Transport(Protocol):
-    """`ValidationSession`を駆動するために必要な最小限のWebSocket操作。
+    """game sessionを駆動するために必要な最小限のWebSocket操作。
 
     実装はtext/binary frameの生データだけを扱う。JSON parse、binary
-    frame ignore、fail closedの判断は`drive_validation_session()`側の
+    frame ignore、fail closedの判断は`drive_session()`側の
     責務とする。
     """
 
@@ -77,9 +77,7 @@ class WebSocketTransport:
 
 
 @asynccontextmanager
-async def connect_validation_transport(
-    url: str, token: str
-) -> AsyncIterator[Transport]:
+async def connect_transport(url: str, token: str) -> AsyncIterator[Transport]:
     """`url`へBearer tokenでWebSocket接続し、`Transport`として提供する。
 
     `token`はAuthorization headerを設定する目的だけに使い、戻り値の
@@ -100,6 +98,22 @@ async def connect_validation_transport(
         await connection.close()
 
 
+@asynccontextmanager
+async def connect_validation_transport(
+    url: str, token: str
+) -> AsyncIterator[Transport]:
+    """Issue #39のvalidation connector APIを維持するwrapper。"""
+    async with connect_transport(url, token) as transport:
+        yield transport
+
+
+@asynccontextmanager
+async def connect_ranked_transport(url: str, token: str) -> AsyncIterator[Transport]:
+    """ranked endpointへ1回だけ接続するwrapper。join payloadは送らない。"""
+    async with connect_transport(url, token) as transport:
+        yield transport
+
+
 def parse_json_event(message: str) -> dict:
     """text frameをJSON top-level objectとしてparseする。fail closed。"""
     try:
@@ -111,10 +125,10 @@ def parse_json_event(message: str) -> dict:
     return parsed
 
 
-async def drive_validation_session(
-    session: ValidationSession, transport: Transport
+async def drive_session(
+    session: ValidationSession | RankedSession, transport: Transport
 ) -> None:
-    """`validation_result`受信までtransportから受信し、`session`を進行させる。
+    """mode固有terminal eventまで受信し、`session`を進行させる。
 
     - binary frameはprotocol failureとしてclient全体を落とさずignoreする
       (Issue #39最新コメント)
@@ -123,12 +137,13 @@ async def drive_validation_session(
     - unexpected disconnectは`UnexpectedDisconnectError`として成功扱い
       しない。mid-game reconnectは行わない
     """
-    while not session.validation_result_received:
+    while not session.is_complete:
         try:
             message = await transport.recv()
         except TransportClosed as error:
             raise UnexpectedDisconnectError(
-                "WebSocket connection closed before validation_result was received"
+                "WebSocket connection closed before "
+                f"{session.terminal_event_name} was received"
             ) from error
 
         if isinstance(message, bytes):
@@ -150,12 +165,29 @@ async def drive_validation_session(
             raise TransportError("failed to send action: connection closed") from error
 
 
+async def drive_validation_session(
+    session: ValidationSession, transport: Transport
+) -> None:
+    """Issue #39のvalidation driver APIを維持するwrapper。"""
+    await drive_session(session, transport)
+
+
+async def drive_ranked_session(session: RankedSession, transport: Transport) -> None:
+    """`end_game`まで1 ranked hanchanを駆動する。"""
+    await drive_session(session, transport)
+
+
 __all__ = [
+    "DEFAULT_RANKED_URL",
     "DEFAULT_VALIDATION_URL",
     "Transport",
     "TransportClosed",
     "WebSocketTransport",
+    "connect_ranked_transport",
+    "connect_transport",
     "connect_validation_transport",
+    "drive_ranked_session",
+    "drive_session",
     "drive_validation_session",
     "parse_json_event",
 ]

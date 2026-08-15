@@ -1,9 +1,9 @@
-"""Issue #39 test群が共有する、実RiichiEnv Observationからserver-style
+"""Issues #39 / #42 test群が共有する、実RiichiEnv Observationからserver-style
 `request_action`を組み立てるhelper。
 
 `test_riichilab_adapter.py`の`_server_style_request_action()`と同じ
 candidate正規化方針(公式`possible_actions` schemaのidentityでdedupe、
-hora/call系へ`pai`を補う)を採用する。このmoduleはIssue #39固有のtest
+hora/call系へ`pai`を補う)を採用する。このmoduleはRiichiLab Client test
 (pure lifecycle / fake transport / #38 integration)が共有するために
 独立させたものであり、Issue #38のtest内部実装への依存を作らない。
 """
