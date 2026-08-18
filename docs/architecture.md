@@ -332,14 +332,20 @@ Issue #61で、これと対になる**公開済み牌のcanonical exact-count pr
 feature**を追加した。こちらはbeliefではなく、既存semantic state
 （discard / meld / dora indicator）から導出する実際に観測された牌の
 exact countである。両者は同じ34牌種 / Wind / red-five axisを共有するが、
-semantic（推定値かexact観測値か）は明確に区別する。
+semantic（推定値かexact観測値か）は明確に区別する。Issue #63で、この
+provenanceとstandard physical inventoryから牌保存則を検証しremaining tile
+inventoryを導出する処理を追加した。Issue #65で、そのremaining inventoryを
+条件付き一様に配分するlisjong初の他家`HandBelief`推定
+（`estimate_conditional_uniform_hand_belief()`）を追加した。
 
 - 入力はlisjongの内部型（`Tile` / `TileType` / `TileCategory` / `Seat` /
   `Wind` / `OwnHandState` / `PolicyInput`等）に限り、RiichiEnv、RiichiLab、
   mjai、WebSocketの型やprotocolへ依存しない
-- baseline / uniform estimator、河・副露・手出し/ツモ切り等を使う他家手牌の
-  実際の推定、`PolicyInput` / `DecisionContext`への統合、neural network、
-  training datasetは責務に含めない
+- Issue #65の`estimate_conditional_uniform_hand_belief()`は、#59 / #61 /
+  #63のexact informationだけを条件とするconditional uniform baselineで
+  あり、河・副露・立直・手出しツモ切り等の内容を使った意味的な補正
+  （semantic inference）、待ち牌・危険牌推定、学習済みestimator、
+  `PolicyInput` / `DecisionContext`への統合は責務に含めない
 
 #### `belief` package (Issue #59)
 
@@ -478,6 +484,54 @@ Issue #63で導出するmoduleである。
 live wall / dead wallの実配列、未開示裏ドラ表示牌）を参照しない。同じ
 `PolicyInput`からは常に同じ結果を返し、incremental update・mutable
 cache・dirty flagは導入しない。
+
+#### 条件付き一様baseline HandBelief (Issue #65)
+
+`src/lisjong/belief/conditional_uniform_hand_belief.py`は、remaining tile
+inventoryをAIから区別できないremaining hidden slots（他家concealed hand・
+live wall・dead wall等）へ一様かつexchangeableに配置されていると仮定する、
+lisjong初の他家`HandBelief`推定をIssue #65で実装したmoduleである。
+
+- 公開APIは`estimate_conditional_uniform_hand_belief(policy_input,
+  opponent_concealed_slot_counts_by_wind) -> ConcealedHandBelief`である。
+  同じ`PolicyInput`から`derive_remaining_tile_inventory()` /
+  `exact_self_belief()` / `wind_for_seat()`をすべて導出するため、remaining
+  inventoryとself exact beliefのsnapshot不整合は起きない
+- `opponent_concealed_slot_counts_by_wind`は各playerの実concealed hand
+  sizeではなく、conditional uniform estimatorがremaining inventoryを
+  配分する対象となるhidden concealed slot countである。canonical Wind
+  order（EAST/SOUTH/WEST/NORTH）固定で、self windのentryは必ず0、各entry
+  はnon-negative int、合計は`total_hidden_slot_count =
+  sum(remaining_tile_counts)`を超えてはならない。self entryが0でない場合、
+  合計超過の場合、`total_hidden_slot_count == 0`なのにopponent slotが
+  正の場合はすべてfail closedする（silent clampしない）
+- 数学モデルは`E[count(p,t)] = remaining_tile_counts[t] *
+  opponent_concealed_slot_counts_by_wind[p] / total_hidden_slot_count`、
+  赤5も同じslot比率を用いる。selfは`exact_self_belief()`のexact beliefの
+  ままとし、baseline推定の対象にしない
+- fixed-point量子化は`fixed_point.round_half_to_even_ratio(numerator,
+  denominator)`で行う。`round(numerator / denominator)`のようにbinary
+  floatを経由せず、`divmod`による整数算術のままIssue #59のround-half-to-even
+  （銀行家丸め）をexact rational上で再現する。新しい丸め規則ではなく、#59の
+  既存canonical ruleの整数算術版である
+- playerごとのrow massと牌種ごとのcolumn massを同時にexact保存する
+  balanced matrix quantizationは実装しない。量子化誤差は
+  `2 * abs(raw * total_hidden_slot_count - remaining_count * player_slots *
+  SCALE) <= total_hidden_slot_count`という既知のcell単位boundと、player
+  row全体の`abs(sum(expected_count_raw) - player_slots * SCALE) <= 17`と
+  いうderived boundをtestで確認する
+- 河・副露・立直・手出しツモ切り・巡目・筋・壁・人読み等による追加推論は
+  行わない。random sampling / Monte Carloは使わず、期待値を解析的に導出する
+  pure / deterministicなestimatorであり、他家の実concealed tiles・live
+  wall / dead wallの実牌種・未開示裏ドラ表示牌等のhidden informationを
+  参照しない
+- state / cacheを持たないpure functionとして実装し、estimatorが複数
+  必要になるまで`ConditionalUniformHandBeliefEstimator` class、Protocol、
+  ABC等の抽象化frameworkは導入しない
+
+concealed slot counts自体の複雑な導出（discard / meld / riichi等による
+heuristic補正、筋・壁・危険牌推定を含む）、wall / dead wallの牌種別belief
+出力、joint distribution、Policyへの統合はこのmoduleの責務ではない。
 
 ## 依存方向
 

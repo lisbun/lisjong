@@ -19,6 +19,7 @@ from lisjong.belief.fixed_point import (
     expected_count_to_raw,
     raw_to_semantic,
     red_five_probability_to_raw,
+    round_half_to_even_ratio,
 )
 from lisjong.belief.hand_belief import HandBelief
 from lisjong.belief.self_belief import exact_self_belief
@@ -222,6 +223,42 @@ class RoundingRuleTest(unittest.TestCase):
         # 2(偶数)へ丸める(1ではない)。
         half_way_to_two = 3 / 16384
         self.assertEqual(expected_count_to_raw(half_way_to_two), 2)
+
+
+class RoundHalfToEvenRatioTest(unittest.TestCase):
+    def test_matches_python_round_for_exact_binary_fractions(self) -> None:
+        # 1/16384 * SCALE(8192) == 0.5 exactly -> round-half-to-evenは0。
+        self.assertEqual(round_half_to_even_ratio(1 * SCALE, 16384), 0)
+        # 3/16384 * SCALE(8192) == 1.5 exactly -> round-half-to-evenは2。
+        self.assertEqual(round_half_to_even_ratio(3 * SCALE, 16384), 2)
+
+    def test_rounds_down_below_half(self) -> None:
+        self.assertEqual(round_half_to_even_ratio(1, 3), 0)
+
+    def test_rounds_up_above_half(self) -> None:
+        self.assertEqual(round_half_to_even_ratio(2, 3), 1)
+
+    def test_exact_division_has_no_error(self) -> None:
+        self.assertEqual(round_half_to_even_ratio(12, 4), 3)
+
+    def test_zero_numerator_is_zero(self) -> None:
+        self.assertEqual(round_half_to_even_ratio(0, 5), 0)
+
+    def test_rejects_non_positive_denominator(self) -> None:
+        with self.assertRaises(ValueError):
+            round_half_to_even_ratio(1, 0)
+        with self.assertRaises(ValueError):
+            round_half_to_even_ratio(1, -1)
+
+    def test_rejects_negative_numerator(self) -> None:
+        with self.assertRaises(ValueError):
+            round_half_to_even_ratio(-1, 5)
+
+    def test_rejects_non_int_arguments(self) -> None:
+        with self.assertRaises(TypeError):
+            round_half_to_even_ratio(1.0, 5)
+        with self.assertRaises(TypeError):
+            round_half_to_even_ratio(1, 5.0)
 
 
 class HandBeliefTest(unittest.TestCase):
