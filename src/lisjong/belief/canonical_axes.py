@@ -31,6 +31,16 @@ _CATEGORY_BASE_INDEX = {
     TileCategory.HONOR: (27, 7),
 }
 
+# indexからcategoryへの逆変換。dict iteration orderへ依存しないよう、
+# 明示的なrange境界の固定tupleとして持つ（0..8=MANZU, 9..17=PINZU,
+# 18..26=SOUZU, 27..33=HONOR）。
+_INDEX_CATEGORY_RANGES = (
+    (0, 9, TileCategory.MANZU),
+    (9, 9, TileCategory.PINZU),
+    (18, 9, TileCategory.SOUZU),
+    (27, 7, TileCategory.HONOR),
+)
+
 _RED_FIVE_INDEX = {
     TileCategory.MANZU: 0,
     TileCategory.PINZU: 1,
@@ -63,10 +73,14 @@ def tile_type_index(tile_type: TileType) -> int:
 
 
 def tile_type_from_index(index: int) -> TileType:
-    """canonical 34牌種index（0..33）をTileTypeへ変換する。"""
+    """canonical 34牌種index（0..33）をTileTypeへ変換する。
+
+    `_INDEX_CATEGORY_RANGES`の明示的なrange境界だけで解決し、dictの
+    iteration orderには依存しない。
+    """
     if type(index) is not int:
         raise TypeError("index must be an int")
-    for category, (base, size) in _CATEGORY_BASE_INDEX.items():
+    for base, size, category in _INDEX_CATEGORY_RANGES:
         if base <= index < base + size:
             return TileType(category, index - base + 1)
     raise ValueError("index must be between 0 and 33")

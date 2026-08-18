@@ -16,7 +16,9 @@ from lisjong.belief.fixed_point import (
     EXPECTED_COUNT_MAX_RAW,
     RED_FIVE_PROBABILITY_MAX_RAW,
     SCALE,
+    expected_count_to_raw,
     raw_to_semantic,
+    red_five_probability_to_raw,
 )
 from lisjong.belief.hand_belief import HandBelief
 from lisjong.belief.self_belief import exact_self_belief
@@ -161,6 +163,65 @@ class FixedPointTest(unittest.TestCase):
     def test_rejects_non_int_raw(self) -> None:
         with self.assertRaises(TypeError):
             raw_to_semantic(1.0)
+
+
+class SemanticRangeValidationTest(unittest.TestCase):
+    def test_expected_count_accepts_lower_and_upper_bound(self) -> None:
+        self.assertEqual(expected_count_to_raw(0.0), 0)
+        self.assertEqual(expected_count_to_raw(4.0), EXPECTED_COUNT_MAX_RAW)
+
+    def test_expected_count_rejects_below_zero(self) -> None:
+        with self.assertRaises(ValueError):
+            expected_count_to_raw(-1e-9)
+
+    def test_expected_count_rejects_above_four(self) -> None:
+        with self.assertRaises(ValueError):
+            expected_count_to_raw(4.0 + 1e-9)
+
+    def test_expected_count_rejects_negative_value_that_would_round_to_zero(
+        self,
+    ) -> None:
+        # roundすればraw 0(範囲内)になるが、quantize前のsemantic valueが
+        # 0.0未満であるため、round結果に関係なく拒否する。
+        tiny_negative = -0.5 / SCALE / 2
+        self.assertLess(tiny_negative, 0.0)
+        self.assertEqual(round(tiny_negative * SCALE), 0)
+        with self.assertRaises(ValueError):
+            expected_count_to_raw(tiny_negative)
+
+    def test_expected_count_rejects_value_above_four_that_would_round_to_max(
+        self,
+    ) -> None:
+        tiny_excess = 4.0 + 0.5 / SCALE / 2
+        self.assertGreater(tiny_excess, 4.0)
+        self.assertEqual(round(tiny_excess * SCALE), EXPECTED_COUNT_MAX_RAW)
+        with self.assertRaises(ValueError):
+            expected_count_to_raw(tiny_excess)
+
+    def test_red_five_probability_accepts_lower_and_upper_bound(self) -> None:
+        self.assertEqual(red_five_probability_to_raw(0.0), 0)
+        self.assertEqual(red_five_probability_to_raw(1.0), RED_FIVE_PROBABILITY_MAX_RAW)
+
+    def test_red_five_probability_rejects_below_zero(self) -> None:
+        with self.assertRaises(ValueError):
+            red_five_probability_to_raw(-1e-9)
+
+    def test_red_five_probability_rejects_above_one(self) -> None:
+        with self.assertRaises(ValueError):
+            red_five_probability_to_raw(1.0 + 1e-9)
+
+
+class RoundingRuleTest(unittest.TestCase):
+    def test_half_way_value_rounds_to_even_raw(self) -> None:
+        # 1 / 16384 * SCALE(8192) == 0.5 exactly; round-half-to-evenでは
+        # 0(偶数)へ丸める。
+        half_way_to_zero = 1 / 16384
+        self.assertEqual(expected_count_to_raw(half_way_to_zero), 0)
+
+        # 3 / 16384 * SCALE(8192) == 1.5 exactly; round-half-to-evenでは
+        # 2(偶数)へ丸める(1ではない)。
+        half_way_to_two = 3 / 16384
+        self.assertEqual(expected_count_to_raw(half_way_to_two), 2)
 
 
 class HandBeliefTest(unittest.TestCase):
