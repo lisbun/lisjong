@@ -79,3 +79,30 @@ def _semantic_to_raw(
     # このcanonical semantic→raw変換の丸め規則として固定し、独自の
     # 四捨五入・切り捨てへは変更しない。
     return round(value * SCALE)
+
+
+def round_half_to_even_ratio(numerator: int, denominator: int) -> int:
+    """`numerator / denominator`をexact rational上でround-half-to-evenする。
+
+    Python組み込み`round()`と同じcanonical丸め規則（round-half-to-even /
+    IEEE 754 roundTiesToEven相当）を、binary floatを経由せず整数算術だけで
+    再現する。`round(numerator / denominator)`のように一度floatへ変換すると、
+    floatの丸め誤差がcanonical rounding contractへ混入し得るため、比率の
+    quantizationをexact integer domainで行う必要がある場合はこちらを使う。
+
+    `numerator`は非負、`denominator`は正のintであることを要求する。
+    """
+    if type(numerator) is not int or type(denominator) is not int:
+        raise TypeError("numerator and denominator must be int")
+    if denominator <= 0:
+        raise ValueError("denominator must be positive")
+    if numerator < 0:
+        raise ValueError("numerator must not be negative")
+
+    quotient, remainder = divmod(numerator, denominator)
+    twice_remainder = 2 * remainder
+    if twice_remainder < denominator:
+        return quotient
+    if twice_remainder > denominator:
+        return quotient + 1
+    return quotient if quotient % 2 == 0 else quotient + 1
