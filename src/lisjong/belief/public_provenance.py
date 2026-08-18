@@ -25,6 +25,11 @@ red-five: offset = wind_index * 3  + red_five_index
 
 exact countを#59のfixed-point domainへ変換する場合は、
 `fixed_point_mass = exact_count * SCALE`でlosslessに変換できる。
+
+`BASE_TILE_COUNT_MAX` / `RED_FIVE_COUNT_MAX`は、Issue #63の
+`tile_inventory.py`が定義するstandard physical tile inventory
+（各基本牌種4枚、各色赤5 1枚）を正本として参照する。inventoryの
+`4` / `1`をこのmoduleで独立したmagic numberとして再定義しない。
 """
 
 from dataclasses import dataclass
@@ -35,14 +40,12 @@ from lisjong.belief.canonical_axes import (
     wind_for_seat,
     wind_index,
 )
+from lisjong.belief.tile_inventory import BASE_TILE_COUNT_MAX, RED_FIVE_COUNT_MAX
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
-
-BASE_TILE_COUNT_MAX = 4
-RED_FIVE_COUNT_MAX = 1
 
 _SUITED_CATEGORIES = (TileCategory.MANZU, TileCategory.PINZU, TileCategory.SOUZU)
 
