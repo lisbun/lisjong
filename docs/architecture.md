@@ -322,18 +322,24 @@ Python packageである。
 高速化は実利用後のbenchmarkで必要性が確認されてから検討する。backendを交換
 しても`calculate_shanten()`を利用する側の契約は変えない。
 
-### 非公開手牌belief
+### 非公開手牌belief・公開済み牌provenance
 
 非公開手牌beliefは、観測そのものではなく、観測可能情報からAIが構築する
 推定stateである。Issue #59時点の責務は、他家手牌を実際に推定する
 algorithmではなく、風別beliefのcanonical representationだけである。
 
+Issue #61で、これと対になる**公開済み牌のcanonical exact-count provenance
+feature**を追加した。こちらはbeliefではなく、既存semantic state
+（discard / meld / dora indicator）から導出する実際に観測された牌の
+exact countである。両者は同じ34牌種 / Wind / red-five axisを共有するが、
+semantic（推定値かexact観測値か）は明確に区別する。
+
 - 入力はlisjongの内部型（`Tile` / `TileType` / `TileCategory` / `Seat` /
-  `Wind` / `OwnHandState`）に限り、RiichiEnv、RiichiLab、mjai、WebSocketの
-  型やprotocolへ依存しない
-- baseline / uniform estimator、河・副露・手出し/ツモ切り等を使う実際の推定、
-  `PolicyInput` / `DecisionContext`への統合、neural network、training
-  datasetは責務に含めない
+  `Wind` / `OwnHandState` / `PolicyInput`等）に限り、RiichiEnv、RiichiLab、
+  mjai、WebSocketの型やprotocolへ依存しない
+- baseline / uniform estimator、河・副露・手出し/ツモ切り等を使う他家手牌の
+  実際の推定、`PolicyInput` / `DecisionContext`への統合、neural network、
+  training datasetは責務に含めない
 
 #### `belief` package (Issue #59)
 
@@ -384,6 +390,48 @@ canonical representationをIssue #59で実装したPython packageである。
 `belief`パッケージが生成するvalue objectは、このIssueでは`PolicyInput`や
 `DecisionContext`へ統合しない。統合、実際の推定algorithm、neural network、
 training datasetは後続Issueで扱う。
+
+#### 公開済み牌provenance (Issue #61)
+
+`src/lisjong/belief/public_provenance.py`は、既存semantic state
+（`PlayerPublicState.discards` / `PlayerPublicState.melds`、
+`RoundState.dora_indicators`）から、公開済み牌のcanonical exact-count
+provenance featureをIssue #61で実装したmoduleである。
+
+- 既存semantic stateを唯一の正本とし、`encode_public_tile_provenance(policy_input)`
+  が`PolicyInput`全体から毎回full recomputationするpure / deterministicな
+  encoderである。numeric featureを第二のmutable game stateとして持たず、
+  incremental update、cache、dirty flagは実装しない
+- `TileProvenanceCounts`（34牌種`tile_counts` + red-five companion
+  `red_five_counts`）と、それを`wind_index`順に束ねる
+  `WindTileProvenanceCounts`が、discardとmeld hand-originそれぞれの
+  `[4, 34]` + `[4, 3]`を表す。dora indicatorは1 windに属さないため
+  `TileProvenanceCounts`単体（`[34]` + `[3]`）で表す
+- `PublicTileProvenance`が`discards` / `meld_hand_origin` / `dora_indicators`を
+  束ねる。`players`のiteration indexをcanonical Wind orderとみなさず、
+  `RoundState.dealer_seat`と`wind_for_seat()`で各seatの自風を明示的に
+  解決してから集計する
+- `discard_counts`は鳴かれた牌も除外せず、捨てたplayerのprovenanceとして
+  数える。`meld_hand_origin_counts`は、meld ownerの手牌に由来すると確定
+  している構成牌だけを数える。`PublicMeld.tiles`という同じ`TileType` +
+  `is_red`なら同値なsemantic multisetから、`called_tile`を
+  `list.remove()`相当で**exactly one occurrenceだけ**減算し、`tile !=
+  called_tile`のようなvalue filterで同値牌をすべて除外しない。ANKANは
+  4枚すべて、CHI/PONは2枚、DAIMINKAN/KAKANは3枚がowner hand-originとなる。
+  called tileはdiscard側とmeld側で二重countしない
+- `TileProvenanceCounts.__post_init__`が、基本牌種count 0..4、赤5 count
+  0..1、および各色`red_five_counts <= 対応する5のtile_counts`を
+  feature内で局所的に検証してfail closedする。discard + meld + dora +
+  concealed間の牌保存則はこのIssueの対象外である
+- exact countはHandBeliefの`expected_count` / `red_five_probability`
+  （推定値）とsemanticを混同しない。`exact_count * SCALE`でIssue #59の
+  fixed-point domainへlosslessに変換できる
+
+`public_provenance.py`は`canonical_axes.py`のWind / 34牌種 / red-five
+mappingをそのまま再利用し、別実装として複製しない。`Discard` /
+`PublicMeld`が持つ順序・手出しツモ切り・鳴き種別等のsemantic structureは
+置き換えず、event-levelなdiscard↔meld対応の再検証もこのmoduleでは行わない
+（Adapter境界がすでに保証するsemantic stateを正本として扱う）。
 
 ## 依存方向
 
