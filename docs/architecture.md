@@ -322,6 +322,69 @@ Python packageである。
 高速化は実利用後のbenchmarkで必要性が確認されてから検討する。backendを交換
 しても`calculate_shanten()`を利用する側の契約は変えない。
 
+### 非公開手牌belief
+
+非公開手牌beliefは、観測そのものではなく、観測可能情報からAIが構築する
+推定stateである。Issue #59時点の責務は、他家手牌を実際に推定する
+algorithmではなく、風別beliefのcanonical representationだけである。
+
+- 入力はlisjongの内部型（`Tile` / `TileType` / `TileCategory` / `Seat` /
+  `Wind` / `OwnHandState`）に限り、RiichiEnv、RiichiLab、mjai、WebSocketの
+  型やprotocolへ依存しない
+- baseline / uniform estimator、河・副露・手出し/ツモ切り等を使う実際の推定、
+  `PolicyInput` / `DecisionContext`への統合、neural network、training
+  datasetは責務に含めない
+
+#### `belief` package (Issue #59)
+
+`src/lisjong/belief/`は、上記責務のうち風別非公開手牌beliefの固定小数点
+canonical representationをIssue #59で実装したPython packageである。
+
+- canonical player axisは`Seat`（固定player座席位置）ではなく`Wind`
+  （東=0、南=1、西=2、北=3固定）である。EASTは常に現在のdealerを表す。
+  `wind_for_seat(seat, dealer_seat)` / `seat_for_wind(wind, dealer_seat)`が
+  `RoundState.dealer_seat`から明示的に相互解決する。`Seat`自体・`Wind`自体へ
+  相手方identityを埋め込まない
+- 34基本牌種は`tile_type_index(tile_type)` / `tile_type_from_index(index)`で
+  0..33のcanonical indexへ明示変換する（萬子0-8、筒子9-17、索子18-26、
+  字牌27-33）。赤5は`red_five_index(category)`で0=5m、1=5p、2=5sへ変換する。
+  いずれも`list(Enum).index(...)`やEnum定義順、dict iteration order、
+  hash、object identityには依存しない
+- storageはunsigned 16-bit整数、`SCALE = 8192 = 2^13`の固定小数点
+  （`raw = round(semantic_value * SCALE)`）とする。expected count
+  （0.0..4.0）はraw 0..32768、red-five probability（0.0..1.0）はraw
+  0..8192とし、0/1/2/3/4枚と0.0/1.0はquantization errorなしでexactに
+  表現する。34牌種側のexpected countは通常5と赤5を合算した値であり、
+  red-five probabilityを34牌種側へ追加加算しない
+- `HandBelief`は1 windの手牌についてのcanonical belief value型であり、
+  `expected_count()` / `red_five_probability()`のsemantic accessorを公開し、
+  通常のPolicy/domain codeは`SCALE`等のraw fixed-point表現を直接扱わない。
+  boundaryで必要な場合だけ`expected_count_raw` / `red_five_probability_raw`
+  のraw fixed-point表現へアクセスする。生成時に、各色について
+  `red_five_probability <= 対応する5のexpected_count`をraw integerのexact
+  comparisonで検証し、1 raw unitでも超過していれば拒否する（equalは合法）
+- `ConcealedHandBelief`は4 windの`HandBelief`を`wind_index`順に束ねる
+  containerであり、`flattened_expected_count_raw`（shape `[4, 34]`相当、
+  offset = `wind_index * 34 + tile_type_index`） /
+  `flattened_red_five_probability_raw`（shape `[4, 3]`相当、offset =
+  `wind_index * 3 + red_five_index`）でWind-major / row-majorのflattened
+  raw bufferを公開する。将来のRust/C++側`[[u16; 34]; 4]`相当表現と自然に
+  対応する
+- `exact_self_belief(own_hand_state)`は既存`OwnHandState`から自手の
+  exact beliefを生成する。`drawn_tile`は`concealed_tiles`内のmetadataとして
+  扱い追加の1枚として数えず、`concealed_tiles`内の各Tileを1回ずつ数える。
+  `OwnHandState`自体が13/14枚固定や非空制約を持たないため、このfactoryも
+  独自にそれらの制約を追加しない
+- Tile identityと同様、physical copy identity（同じ基礎牌種・赤牌区分の
+  牌が何枚目のcopyか）は持たない
+- production dependencyへNumPyは追加せず、Python標準libraryだけで実装する
+- canonical byte buffer APIはIssue #59では公開せず、将来公開する場合は
+  `uint16` little-endianへ固定する
+
+`belief`パッケージが生成するvalue objectは、このIssueでは`PolicyInput`や
+`DecisionContext`へ統合しない。統合、実際の推定algorithm、neural network、
+training datasetは後続Issueで扱う。
+
 ## 依存方向
 
 次の図では、矢印の始点が終点の公開契約または外部APIを利用する。
@@ -339,6 +402,7 @@ flowchart TD
     Impl["Policy implementation"] --> Contract
     Impl --> HandEval["Hand evaluation"]
     HandEval --> Contract
+    Belief["belief"] --> Contract
 ```
 
 Local game runnerとRiichiLab Clientは、それぞれローカル対局とオンライン対局の
@@ -367,6 +431,11 @@ policies
 Hand evaluationはPolicyを呼び出さず、AdapterやRunner / Clientからも参照
 されない。RiichiEnv AdapterやRiichiLab Clientが牌姿評価へ依存する経路は
 作らない。
+
+`belief`パッケージも同様にPolicy contractのvalue型だけへ依存し、Policy
+contract側からは依存されない。Issue #59時点では`PolicyInput` /
+`DecisionContext`、Policy implementation、Adapter、Runner / Clientのいずれも
+`belief`を参照しない。
 
 ### 共通Policy契約package
 
