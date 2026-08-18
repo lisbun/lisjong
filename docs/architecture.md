@@ -422,7 +422,8 @@ provenance featureをIssue #61で実装したmoduleである。
 - `TileProvenanceCounts.__post_init__`が、基本牌種count 0..4、赤5 count
   0..1、および各色`red_five_counts <= 対応する5のtile_counts`を
   feature内で局所的に検証してfail closedする。discard + meld + dora +
-  concealed間の牌保存則はこのIssueの対象外である
+  concealed間の牌保存則はIssue #61単体の対象外であり、Issue #63の
+  `tile_conservation.py`で扱う
 - exact countはHandBeliefの`expected_count` / `red_five_probability`
   （推定値）とsemanticを混同しない。`exact_count * SCALE`でIssue #59の
   fixed-point domainへlosslessに変換できる
@@ -432,6 +433,51 @@ mappingをそのまま再利用し、別実装として複製しない。`Discar
 `PublicMeld`が持つ順序・手出しツモ切り・鳴き種別等のsemantic structureは
 置き換えず、event-levelなdiscard↔meld対応の再検証もこのmoduleでは行わない
 （Adapter境界がすでに保証するsemantic stateを正本として扱う）。
+
+#### 牌保存則とremaining tile inventory (Issue #63)
+
+`src/lisjong/belief/tile_inventory.py`と`src/lisjong/belief/tile_conservation.py`
+は、観測済みprovenanceから牌保存則を検証し、remaining tile inventoryを
+Issue #63で導出するmoduleである。
+
+- `tile_inventory.py`が標準4人麻雀のphysical tile inventoryの唯一の正本
+  である。`STANDARD_TILE_COUNTS`（34牌種、各4枚）、
+  `STANDARD_RED_FIVE_COUNTS`（赤5m/5p/5s、各1枚）、
+  `TOTAL_PHYSICAL_TILE_COUNT`（136）を定義し、`public_provenance.py`の
+  `BASE_TILE_COUNT_MAX` / `RED_FIVE_COUNT_MAX`もこのmoduleを正本として
+  参照する。`34` / `4` / `136` / `1`をmoduleごとに独立したmagic numberとして
+  散在させない
+- `derive_remaining_tile_inventory(policy_input)`が、
+  `remaining tile inventory = standard physical inventory - exact accounted
+  provenance`をfull recomputationするpure / deterministicなencoderである。
+  self concealed handは`OwnHandState.concealed_tiles`を直接exact count
+  し、`HandBelief` / `exact_self_belief()`は経由しない（`HandBelief`の
+  red-five companionはprobabilityであり、`OwnHandState`内の不正な同色赤5
+  重複を隠してしまうおそれがあるため）。discard / meld hand-origin / dora
+  indicatorは#61の`encode_public_tile_provenance()`をそのまま再利用する
+- `TileConservationResult`が`exact_accounted_counts` / `exact_accounted_red_five_counts`
+  （長さ34 / 3）と`remaining_tile_counts` / `remaining_red_five_counts`
+  （長さ34 / 3）を束ねる。remaining側にWind axisやowner / location情報を
+  持たせない。`remaining tile inventory`は山（live wall）と同一視せず、
+  他家concealed hand・live wall・dead wall・未開示裏ドラ表示牌等をまとめた
+  残余inventoryであり、`RoundState.live_wall_tiles_remaining`とは
+  semanticが異なる（一致を要求する関係を導入しない）
+- `TileConservationResult.__post_init__`が、各牌種で
+  `accounted + remaining == 4`、各色で`accounted_red + remaining_red == 1`、
+  `accounted_red <= 対応するaccounted_five`、
+  `remaining_red <= 対応するremaining_five`をexact integer comparisonで
+  fail closed検証する。最後の条件により、`accounted 5m = 4, accounted
+  red5m = 0`のような、`remaining 5m = 0, remaining red5m = 1`という
+  standard inventoryと矛盾する状態を拒否する。clamp、wraparound、負の
+  remainingは受理しない
+- 実装上の主validationはper-tile conservationであり、
+  `sum(exact_accounted_counts) + sum(remaining_tile_counts) == 136`という
+  global conservationはderived invariant / cross-checkとして扱う
+
+`derive_remaining_tile_inventory()`はhidden game state（他家の実手牌、
+live wall / dead wallの実配列、未開示裏ドラ表示牌）を参照しない。同じ
+`PolicyInput`からは常に同じ結果を返し、incremental update・mutable
+cache・dirty flagは導入しない。
 
 ## 依存方向
 
