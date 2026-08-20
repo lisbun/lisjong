@@ -21,11 +21,34 @@ lisjong ecosystem全体のrepository責務、repository間依存方向、長期�
 [`lisjong-project`](https://github.com/lisbun/lisjong-project) を正本とします。
 本repositoryでは `lisjong` 内部のPolicy、AI戦略、Adapter、integrationのarchitectureと実装を管理します。
 
+## AI vision
+
+lisjongは、不完全情報ゲームであるリーチ麻雀において、観測可能な情報から
+hidden stateに対するbeliefを構築し、その不確実性と牌効率・打点・リスク等の
+structural / value evaluationを組み合わせて意思決定へ活用する麻雀AIを目指します。
+
+hidden-information inferenceの中では、**各他家のconcealed handに各牌種が何枚
+存在するかの期待値を高精度に推定すること**を主要な研究・開発テーマとします。
+将来的に既存手法と定量比較可能な評価基盤を整備したうえで、最高水準の推定能力を
+目標とします。これは将来目標であり、現在の性能について未検証な達成済み主張は
+行いません。
+
+現在の`HandBelief`やconditional-uniform estimatorは、このvisionへ向けた
+AI-side representation / baselineです。現在の具体的shape、fixed-point表現、
+classやestimator方式をlong-term requirementとして固定せず、将来のheuristic / learned
+inferenceや追加belief targetへ発展できる余地を残します。
+
+推定精度そのものと麻雀AIとしての強さは別の評価対象として扱います。HandBeliefの
+accuracy / calibration等のcomponent-specific evaluationは`lisjong`が扱い、Policyへ
+統合した後のcontrolled performance comparisonは
+[`lisjong-arena`](https://github.com/lisbun/lisjong-arena)へ接続します。
+技術的な責務境界は[Architecture](docs/architecture.md)を参照してください。
+
 ## 位置づけ
 
 | 対象 | 役割 |
 | --- | --- |
-| lisjong | 自作麻雀AI、Policy、学習・推論、接続Adapter、評価 |
+| lisjong | 自作麻雀AI、Policy、学習・推論、接続Adapter、AI component評価 |
 | [RiichiEnv](https://riichi.dev/docs/local-testing) | ローカル対局・開発・回帰評価環境 |
 | [RiichiLab](https://riichi.dev/) | オンライン接続先 |
 | Mortal | 比較対象・互換性確認用の外部AI |
@@ -223,8 +246,9 @@ RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
 1半荘Clientも実装し、検証用botによるlive smoke testを完走しています。
 `lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profileを導入し、
 credential・Policy・runtime output(protocol trace含む)をprofile単位で
-分離、別processからの同時起動にも対応しています。学習・推論機能はまだ
-実装していません。
+分離、別processからの同時起動にも対応しています。AI-sideではremaining tile
+inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
+observation-aware heuristic / learned estimatorや学習済みmodelは未導入です。
 
 ## License
 
