@@ -162,6 +162,24 @@ class PolicyPriorityTest(unittest.TestCase):
                     self.policy.choose_action(_decision(_TWO_STEP_HAND, actions)), ron
                 )
 
+    def test_winning_action_has_priority_over_riichi(self) -> None:
+        # Issue #76: RonAction/TsumoAction still outrank RiichiAction, and
+        # the existing winning-action stable tie-break is unaffected by the
+        # new Always Riichi baseline.
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        ron = RonAction(
+            actor=Seat.SEAT_0,
+            target=Seat.SEAT_1,
+            winning_tile=MANZU_1,
+        )
+        tsumo = TsumoAction(actor=Seat.SEAT_0, winning_tile=MANZU_1)
+
+        for actions in itertools.permutations((riichi, ron, tsumo)):
+            with self.subTest(actions=actions):
+                self.assertEqual(
+                    self.policy.choose_action(_decision(_TWO_STEP_HAND, actions)), ron
+                )
+
     def test_lower_shanten_cannot_be_reversed(self) -> None:
         keep_tenpai = _discard(RED_DRAGON)
         break_meld = _discard(MANZU_4)
@@ -256,6 +274,67 @@ class PolicyPriorityTest(unittest.TestCase):
                     self.policy.choose_action(_decision(concealed, actions)),
                     discard_east,
                 )
+
+
+class AlwaysRiichiTest(unittest.TestCase):
+    """Issue #76: legalなRiichiActionは通常打牌評価より優先される。"""
+
+    def setUp(self) -> None:
+        self.policy = TwoStepUkeirePolicy()
+
+    def test_riichi_is_chosen_over_multiple_discards(self) -> None:
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+
+        # 通常打牌評価(2段階受け入れ)は一切呼ばれないはず: 混在させない責務分離の確認。
+        with patch.object(
+            two_step,
+            "_choose_discard",
+            side_effect=AssertionError("discard evaluation must not run"),
+        ):
+            for actions in itertools.permutations((riichi, discard_9s, discard_white)):
+                with self.subTest(actions=actions):
+                    self.assertEqual(
+                        self.policy.choose_action(_decision(_TWO_STEP_HAND, actions)),
+                        riichi,
+                    )
+
+    def test_riichi_choice_is_order_independent_and_deterministic(self) -> None:
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+        pass_action = PassAction(actor=Seat.SEAT_0)
+
+        results = {
+            self.policy.choose_action(_decision(_TWO_STEP_HAND, actions))
+            for actions in itertools.permutations(
+                (riichi, discard_9s, discard_white, pass_action)
+            )
+        }
+
+        self.assertEqual(results, {riichi})
+
+    def test_selected_riichi_action_is_the_legal_action_instance(self) -> None:
+        # Policy must not independently construct a RiichiAction; the chosen
+        # value must be identical to the one presented in legal_actions.
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        pass_action = PassAction(actor=Seat.SEAT_0)
+
+        chosen = self.policy.choose_action(_decision((), (pass_action, riichi)))
+
+        self.assertIs(chosen, riichi)
+
+    def test_discard_only_decision_is_unaffected_by_riichi_baseline(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+
+        self.assertEqual(
+            self.policy.choose_action(
+                _decision(_TWO_STEP_HAND, (discard_9s, discard_white))
+            ),
+            discard_white,
+        )
 
 
 class TwoStepScoreTest(unittest.TestCase):
@@ -503,23 +582,33 @@ class DeterminismAndErrorBoundaryTest(unittest.TestCase):
                 _decision((MANZU_1, MANZU_2), (_discard(MANZU_7),))
             )
 
-    def test_ambiguous_non_discard_decision_fails_closed(self) -> None:
-        actions = (
-            RiichiAction(actor=Seat.SEAT_0),
-            KyuushuKyuuhaiAction(actor=Seat.SEAT_0),
-        )
+    def test_ambiguous_non_discard_decision_still_prefers_riichi(self) -> None:
+        # Issue #76: Always Riichi baseline. This combination is synthetic
+        # (RiichiAction and KyuushuKyuuhaiAction do not co-occur in a real
+        # game), but legal_actions is the source of truth for legality, so
+        # the winning > Riichi > ... priority applies uniformly.
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        kyuushu = KyuushuKyuuhaiAction(actor=Seat.SEAT_0)
 
-        with self.assertRaises(TwoStepUkeirePolicyError):
-            TwoStepUkeirePolicy().choose_action(_decision((), actions))
+        for actions in itertools.permutations((riichi, kyuushu)):
+            with self.subTest(actions=actions):
+                self.assertEqual(
+                    TwoStepUkeirePolicy().choose_action(_decision((), actions)),
+                    riichi,
+                )
 
-    def test_pass_is_the_conservative_non_discard_choice(self) -> None:
+    def test_riichi_is_chosen_over_pass(self) -> None:
+        # Issue #76: Always Riichi baseline outranks the conservative Pass
+        # fallback whenever a legal RiichiAction is present.
         pass_action = PassAction(actor=Seat.SEAT_0)
         riichi = RiichiAction(actor=Seat.SEAT_0)
 
-        self.assertEqual(
-            TwoStepUkeirePolicy().choose_action(_decision((), (riichi, pass_action))),
-            pass_action,
-        )
+        for actions in itertools.permutations((riichi, pass_action)):
+            with self.subTest(actions=actions):
+                self.assertEqual(
+                    TwoStepUkeirePolicy().choose_action(_decision((), actions)),
+                    riichi,
+                )
 
 
 class PolicyGenerationAndScopeTest(unittest.TestCase):

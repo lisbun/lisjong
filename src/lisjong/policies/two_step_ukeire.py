@@ -12,6 +12,16 @@
 山の内部状態、他家の実手牌、belief、未来のlegal actionは使用しない。向聴数は
 公開`calculate_shanten()`だけを正本とし、赤5と通常5は仮想branchでは同じ
 `TileType`として扱う。実際の最初の`DiscardAction` identityは維持する。
+
+Issue #76により、`choose_action()`は次の優先順位でAlways Riichi baselineを
+持つ。
+
+    winning action > RiichiAction > 通常打牌評価 > pass > 既存fallback
+
+`decision.legal_actions`に`RiichiAction`が存在することを合法性の正本とし、
+面前・聴牌・持ち点等のリーチ条件はここで再計算しない。この判定は通常打牌
+評価ロジック（上記2段階受け入れ）とは独立したprivate helperに置き、将来
+リーチ / ダマ判断へ差し替えられる責務分離を保つ。
 """
 
 from collections.abc import Mapping, Sequence
@@ -21,6 +31,7 @@ from lisjong.policy_contract.action import (
     DiscardAction,
     InternalAction,
     PassAction,
+    RiichiAction,
     RonAction,
     TsumoAction,
 )
@@ -322,6 +333,21 @@ def _choose_discard(
     )
 
 
+def _choose_riichi(
+    legal_actions: tuple[InternalAction, ...],
+) -> RiichiAction | None:
+    """legalなRiichiActionがあればそれを返す、Always Riichi baseline。
+
+    リーチ合法性は`legal_actions`の存在自体を正本とし、面前・聴牌・持ち点等の
+    麻雀ルールをここで再計算しない。将来リーチ / ダマ判断へ差し替える際は、
+    この関数の中身だけを置き換えればよい。
+    """
+    for action in legal_actions:
+        if isinstance(action, RiichiAction):
+            return action
+    return None
+
+
 class TwoStepUkeirePolicy:
     """同向聴・同現在受け入れ候補だけを2段階受け入れで比較するPolicy。"""
 
@@ -333,6 +359,10 @@ class TwoStepUkeirePolicy:
         )
         if winning_actions:
             return min(winning_actions, key=_winning_action_sort_key)
+
+        riichi_action = _choose_riichi(decision.legal_actions)
+        if riichi_action is not None:
+            return riichi_action
 
         discard_actions = tuple(
             action
