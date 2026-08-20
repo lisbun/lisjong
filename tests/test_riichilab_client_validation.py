@@ -27,7 +27,7 @@ from unittest.mock import patch
 from _riichilab_client_test_helpers import resolve_for_env, server_style_request_action
 from riichienv import RiichiEnv
 
-from lisjong.policies import MinimalPolicy, UkeirePolicy
+from lisjong.policies import MinimalPolicy, TwoStepUkeirePolicy
 from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_client.errors import UnexpectedDisconnectError
 from lisjong.riichilab_client.transport import TransportClosed
@@ -176,9 +176,9 @@ class ValidationModuleCliRuntimeTest(unittest.TestCase):
 
         self.assertEqual(return_code, 0)
         self.assertEqual(len(captured_policies), 1)
-        self.assertIsInstance(captured_policies[0], UkeirePolicy)
+        self.assertIsInstance(captured_policies[0], TwoStepUkeirePolicy)
         self.assertIn("profile: lisjong-dev", output.getvalue())
-        self.assertIn("policy: UkeirePolicy", output.getvalue())
+        self.assertIn("policy: TwoStepUkeirePolicy", output.getvalue())
         self.assertIn("mode: validation", output.getvalue())
         self.assertIn("trace: off", output.getvalue())
         self.assertIn("RiichiLab validation passed", output.getvalue())
