@@ -1,6 +1,7 @@
 """remaining tile inventoryから条件付き一様baseline HandBeliefを導出する。
 
-Issue #65を実装する。Issue #63の`derive_remaining_tile_inventory()`が導出する
+Issue #65のbaseline estimatorとIssue #68のglobal conservation-preserving
+quantizationを実装する。Issue #63の`derive_remaining_tile_inventory()`が導出する
 `remaining_tile_counts` / `remaining_red_five_counts`が、AIから区別できない
 remaining hidden slots（他家concealed hand、live wall、dead wall等）へ
 一様かつexchangeableに配置されていると仮定するbaseline estimatorである。
@@ -24,11 +25,12 @@ selfについてはbaseline推定を行わず、既存`exact_self_belief()`を�
 ではなく、conditional uniform estimatorがremaining inventoryを配分する対象
 となるhidden concealed slot countである。self wind entryは必ず0とする。
 
-fixed-point quantizationは、Issue #59のround-half-to-even canonical
-rounding ruleを`fixed_point.round_half_to_even_ratio()`でbinary floatを
-経由せず整数算術のまま再現する。playerごとのrow massと牌種ごとのcolumn
-massを同時にexact保存するbalanced matrix quantizationは実装せず、
-quantization driftはtestでbound確認する。
+fixed-point quantizationでは、各physical tile poolについてopponent全体の
+canonical target massをround-half-to-evenで決め、floor allocation後のraw
+unitをfractional remainder降順、同値ならcanonical Wind順で配分する。
+5牌は赤5と非赤5の排他的poolを別々に配分してから合成する。これにより
+column単位のphysical conservationを保つ一方、playerごとのrow massまで
+exact保存するbalanced matrix quantizationは実装しない。
 
 同一`PolicyInput`から`derive_remaining_tile_inventory()` /
 `exact_self_belief()` / `wind_for_seat()`をすべて導出するため、remaining
@@ -37,19 +39,21 @@ inventoryとself exact beliefのsnapshot不整合は起きない。state / cache
 class / Protocol / ABC等の抽象化framework化は行わない。
 """
 
-from lisjong.belief.canonical_axes import wind_for_seat, wind_index
+from lisjong.belief.canonical_axes import (
+    red_five_index,
+    tile_type_index,
+    wind_for_seat,
+    wind_index,
+)
 from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
 from lisjong.belief.fixed_point import SCALE, round_half_to_even_ratio
 from lisjong.belief.hand_belief import HandBelief
 from lisjong.belief.self_belief import exact_self_belief
-from lisjong.belief.tile_conservation import (
-    TileConservationResult,
-    derive_remaining_tile_inventory,
-)
+from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.policy_contract.policy_input import PolicyInput
+from lisjong.policy_contract.tile import TileCategory, TileType
 
-_ZERO_EXPECTED_COUNT_RAW = tuple([0] * 34)
-_ZERO_RED_FIVE_PROBABILITY_RAW = (0, 0, 0)
+_SUITED_CATEGORIES = (TileCategory.MANZU, TileCategory.PINZU, TileCategory.SOUZU)
 
 
 def _normalize_slot_counts_by_wind(values: object) -> tuple[int, int, int, int]:
@@ -76,30 +80,86 @@ def _normalize_slot_counts_by_wind(values: object) -> tuple[int, int, int, int]:
     return counts
 
 
-def _baseline_hand_belief(
-    conservation: TileConservationResult, player_slots: int, total_hidden_slots: int
-) -> HandBelief:
-    if player_slots == 0:
-        return HandBelief(
-            expected_count_raw=_ZERO_EXPECTED_COUNT_RAW,
-            red_five_probability_raw=_ZERO_RED_FIVE_PROBABILITY_RAW,
-        )
+def _allocate_fixed_point_pool(
+    remaining_count: int,
+    slot_counts_by_wind: tuple[int, int, int, int],
+    total_hidden_slots: int,
+) -> tuple[int, int, int, int]:
+    """1つのphysical tile poolをcanonical Wind順で同時配分する。"""
+    if total_hidden_slots == 0:
+        return (0, 0, 0, 0)
 
-    expected_count_raw = tuple(
-        round_half_to_even_ratio(
-            remaining_count * player_slots * SCALE, total_hidden_slots
-        )
-        for remaining_count in conservation.remaining_tile_counts
+    numerators = tuple(
+        remaining_count * player_slots * SCALE for player_slots in slot_counts_by_wind
     )
-    red_five_probability_raw = tuple(
-        round_half_to_even_ratio(
-            remaining_red_count * player_slots * SCALE, total_hidden_slots
-        )
-        for remaining_red_count in conservation.remaining_red_five_counts
+    quotient_remainders = tuple(
+        divmod(numerator, total_hidden_slots) for numerator in numerators
     )
-    return HandBelief(
-        expected_count_raw=expected_count_raw,
-        red_five_probability_raw=red_five_probability_raw,
+    allocated = [quotient for quotient, _remainder in quotient_remainders]
+
+    opponent_slots = sum(slot_counts_by_wind)
+    target_total_raw = round_half_to_even_ratio(
+        remaining_count * opponent_slots * SCALE, total_hidden_slots
+    )
+    units_to_distribute = target_total_raw - sum(allocated)
+
+    wind_numbers = sorted(
+        range(4),
+        key=lambda wind_number: (-quotient_remainders[wind_number][1], wind_number),
+    )
+    for wind_number in wind_numbers[:units_to_distribute]:
+        allocated[wind_number] += 1
+
+    return tuple(allocated)
+
+
+def _allocate_opponent_hands(
+    remaining_tile_counts: tuple[int, ...],
+    remaining_red_five_counts: tuple[int, ...],
+    slot_counts_by_wind: tuple[int, int, int, int],
+    total_hidden_slots: int,
+) -> tuple[HandBelief, HandBelief, HandBelief, HandBelief]:
+    expected_by_wind = [[0] * 34 for _ in range(4)]
+    red_five_by_wind = [[0] * 3 for _ in range(4)]
+    five_indices = {
+        tile_type_index(TileType(category, 5)) for category in _SUITED_CATEGORIES
+    }
+
+    for tile_index, remaining_count in enumerate(remaining_tile_counts):
+        if tile_index in five_indices:
+            continue
+        allocated = _allocate_fixed_point_pool(
+            remaining_count, slot_counts_by_wind, total_hidden_slots
+        )
+        for wind_number, raw in enumerate(allocated):
+            expected_by_wind[wind_number][tile_index] = raw
+
+    for category in _SUITED_CATEGORIES:
+        five_index = tile_type_index(TileType(category, 5))
+        color_index = red_five_index(category)
+        remaining_five_count = remaining_tile_counts[five_index]
+        remaining_red_count = remaining_red_five_counts[color_index]
+        remaining_normal_count = remaining_five_count - remaining_red_count
+
+        normal_allocated = _allocate_fixed_point_pool(
+            remaining_normal_count, slot_counts_by_wind, total_hidden_slots
+        )
+        red_allocated = _allocate_fixed_point_pool(
+            remaining_red_count, slot_counts_by_wind, total_hidden_slots
+        )
+        for wind_number in range(4):
+            red_raw = red_allocated[wind_number]
+            expected_by_wind[wind_number][five_index] = (
+                normal_allocated[wind_number] + red_raw
+            )
+            red_five_by_wind[wind_number][color_index] = red_raw
+
+    return tuple(
+        HandBelief(
+            expected_count_raw=tuple(expected_by_wind[wind_number]),
+            red_five_probability_raw=tuple(red_five_by_wind[wind_number]),
+        )
+        for wind_number in range(4)
     )
 
 
@@ -137,14 +197,17 @@ def estimate_conditional_uniform_hand_belief(
             "total_hidden_slot_count"
         )
 
+    opponent_hands = _allocate_opponent_hands(
+        conservation.remaining_tile_counts,
+        conservation.remaining_red_five_counts,
+        slot_counts,
+        total_hidden_slots,
+    )
     self_hand_belief = exact_self_belief(policy_input.own_hand)
-
     hands = tuple(
         self_hand_belief
         if wind_number == self_wind_number
-        else _baseline_hand_belief(
-            conservation, slot_counts[wind_number], total_hidden_slots
-        )
+        else opponent_hands[wind_number]
         for wind_number in range(4)
     )
 
