@@ -1018,14 +1018,19 @@ class UkeirePolicySpecialHandTest(unittest.TestCase):
 
 
 class PolicyGenerationTest(unittest.TestCase):
-    """3世代のPolicyが、比較可能な公開Policyとして併存することを確認する。"""
+    """Policy世代が、比較可能な公開Policyとして併存することを確認する。"""
 
     def test_every_policy_generation_stays_publicly_available(self) -> None:
         import lisjong.policies as policies
 
         self.assertEqual(
             set(policies.__all__),
-            {"MinimalPolicy", "ShantenPolicy", "UkeirePolicy"},
+            {
+                "MinimalPolicy",
+                "ShantenPolicy",
+                "UkeirePolicy",
+                "TwoStepUkeirePolicy",
+            },
         )
 
     def test_ukeire_policy_does_not_reuse_the_shanten_policy_error_type(self) -> None:

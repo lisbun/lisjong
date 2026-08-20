@@ -1,7 +1,12 @@
 import unittest
 
 from lisjong.local_game_runner import LocalGameRunner
-from lisjong.policies import MinimalPolicy, ShantenPolicy, UkeirePolicy
+from lisjong.policies import (
+    MinimalPolicy,
+    ShantenPolicy,
+    TwoStepUkeirePolicy,
+    UkeirePolicy,
+)
 from lisjong.policy_contract import DecisionContext, InternalAction, Seat
 
 
@@ -143,6 +148,27 @@ class LocalGameRunnerUkeirePolicyIntegrationTest(unittest.TestCase):
         seed = 12345
         runner = LocalGameRunner(
             {seat: UkeirePolicy() for seat in Seat},
+            seed=seed,
+            game_mode="4p-red-half",
+            max_steps=10_000,
+        )
+
+        result = runner.run()
+
+        self.assertTrue(runner._env.done())
+        self.assertEqual(result.seed, seed)
+        self.assertEqual(result.game_mode, "4p-red-half")
+        self.assertGreater(result.steps, 1)
+        self.assertGreater(result.decisions, result.steps)
+
+
+class LocalGameRunnerTwoStepUkeirePolicyIntegrationTest(unittest.TestCase):
+    """Issue #58: `TwoStepUkeirePolicy`で固定seed半荘を完走できる。"""
+
+    def test_fixed_seed_half_game_completes_with_two_step_ukeire_policy(self) -> None:
+        seed = 12345
+        runner = LocalGameRunner(
+            {seat: TwoStepUkeirePolicy() for seat in Seat},
             seed=seed,
             game_mode="4p-red-half",
             max_steps=10_000,
