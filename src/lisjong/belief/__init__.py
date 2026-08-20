@@ -18,6 +18,9 @@ hidden slots（他家concealed hand・live wall・dead wall等）へ一様かつ
 exchangeableに配置されていると仮定して他家`HandBelief`へ配分する、
 lisjong初のbaseline estimatorを追加した。selfは`exact_self_belief()`の
 exact beliefのままとし、baseline推定の対象にしない。
+Issue #68でphysical tile poolごとのglobal conservation-preserving allocationを
+追加し、Issue #67でremaining inventoryから3 opponentsのbeliefをstrictに
+差し引く`NonPlayerHiddenBelief`とglobal conservation validationを追加した。
 
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
@@ -57,6 +60,10 @@ from lisjong.belief.fixed_point import (
     round_half_to_even_ratio,
 )
 from lisjong.belief.hand_belief import HandBelief
+from lisjong.belief.non_player_hidden_belief import (
+    NonPlayerHiddenBelief,
+    derive_non_player_hidden_belief,
+)
 from lisjong.belief.public_provenance import (
     BASE_TILE_COUNT_MAX,
     RED_FIVE_COUNT_MAX,
@@ -91,12 +98,14 @@ __all__ = [
     "TOTAL_PHYSICAL_TILE_COUNT",
     "ConcealedHandBelief",
     "HandBelief",
+    "NonPlayerHiddenBelief",
     "PublicTileProvenance",
     "TileConservationResult",
     "TileProvenanceCounts",
     "WindTileProvenanceCounts",
     "concealed_hand_offset",
     "derive_remaining_tile_inventory",
+    "derive_non_player_hidden_belief",
     "encode_public_tile_provenance",
     "estimate_conditional_uniform_hand_belief",
     "exact_self_belief",
