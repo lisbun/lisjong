@@ -24,6 +24,110 @@ Policyの公開契約は[Policy契約](policy-contract.md)、Policy入力の具�
 decision-local mappingは[Action identity](action-identity.md)を正本とする。
 共通Policy契約型のPython packageは`src/lisjong/policy_contract/`である。
 
+## Long-term AI architecture
+
+lisjongは、不完全情報ゲームであるリーチ麻雀において、観測可能な情報から
+hidden stateに対するbeliefを構築し、その不確実性とstructural / value evaluationを
+組み合わせて意思決定へ活用するAIを長期的に目指す。
+
+概念的な責務境界は次のように捉える。この図は特定のclassやruntime call graphを
+固定するものではなく、推論・評価・意思決定を独立に改善可能にするための境界を
+示す。
+
+```text
+observable information
+        ↓
+canonical observable state
+        ↓
+physical accounting
+        ↓
+hidden-state inference / belief
+        │
+        ├──────────────┐
+        │              │
+        ▼              ▼
+structural        score / risk /
+evaluation        value estimation
+        │              │
+        └──────┬───────┘
+               ▼
+        Policy / decision
+```
+
+hidden-information inferenceの中では、**各他家のconcealed handに各牌種が何枚
+存在するかの期待値を高精度に推定すること**を主要な研究・開発テーマとする。
+将来的に既存手法と定量比較可能な評価基盤を整備したうえで、最高水準の推定能力を
+目標とする。ただし、未検証の性能を現在すでに達成済みであるとは主張しない。
+
+現在の`HandBelief` / `ConcealedHandBelief`、34牌種 + red-five companion、
+fixed-point `SCALE`、Wind-major layout、conditional-uniform estimator等は、
+このvisionを実現するための**現在のcontract / baseline**であり、long-term vision
+そのものではない。将来joint distribution、追加belief target、observation-aware
+heuristic、statistical / learned estimator、learned latent representation等へ
+発展しても、この上位境界を維持できる抽象度を保つ。
+
+estimatorは概念的に次の順序で高度化できる。
+
+```text
+Exact observable knowledge
+        +
+Conditional-uniform baseline
+        ↓
+Observation-aware heuristic estimator
+        ↓
+Statistical / learned estimator
+        ↓
+Higher-accuracy calibrated inference
+```
+
+どのfeature、algorithm、model architectureを使うかは個別Issueで決定する。
+河、副露、立直、巡目、手出し / ツモ切り、ドラ表示牌、自手等の合法的に観測可能な
+情報は将来のestimator input候補となるが、実対局時のonline inferenceへ他家の
+実手牌、完全な山等のhidden ground truthを入力しない。
+
+一方、offline component evaluationではpredictionとhidden ground truthを比較して
+accuracy / calibration等を定量評価できる。runtime推論経路とoffline evaluatorを
+分離し、評価目的で利用できるground truthをPolicy inputへ逆流させない。
+
+beliefをcanonicalなAI-side stateとして受け入れる境界では、麻雀牌のphysical
+inventoryと整合する必要がある。learned estimator内部へ特定の保存則実装方式を
+強制するのではなく、model output後のvalidation / projection等も許容しつつ、
+物理的に不可能なbeliefを黙って正常値として扱わない。具体的な保存則、fixed-point
+validation、representation contractは後述の現在の`belief` packageを正本とする。
+
+inference quality、decision quality、game performanceは別の主張として扱う。
+
+```text
+Inference quality
+    -> component-specific accuracy / calibration
+
+Decision quality
+    -> belief / valueから選択するActionのquality
+
+Game performance
+    -> controlled game / match result
+```
+
+HandBelief等のcomponent-specific correctness / accuracy / calibrationは`lisjong`側を
+正本とし、Policyへ統合した後のcontrolled performance comparisonは
+`lisjong-arena`へ接続する。推定精度の向上を、そのままPolicyや最終対局成績の向上と
+同一視しない。
+
+将来的にはhidden-state beliefを向聴・受け入れ・lookahead等のstructural evaluation、
+打点・放銃risk・局収支等のvalue estimationと統合し、立直、鳴き、押し引き、
+score-aware decision等へ接続する。Expected valueは中心的な候補だが、順位価値、
+ラス回避、トップ取り等のgame-level objectiveを含むutility-aware decisionを許容し、
+単一の局収支EVをlong-termな最終目的関数として固定しない。
+
+成熟したOSSのreference / backend / benchmark / tooling利用、十分に独立した実装との
+differential validation、agreementをproofや多数決oracleとしない原則、および
+correctness -> validation -> measurement -> actual bottleneck optimizationの順序は
+[`lisjong-project` のArchitecture](https://github.com/lisbun/lisjong-project/blob/main/docs/architecture.md)と
+[`Roadmap`](https://github.com/lisbun/lisjong-project/blob/main/docs/roadmap.md)を
+project-wideな正本とする。lisjong内部ではstable AI-side contractを所有し、具体的な
+reference / evaluator / backendをその内側で差し替え可能にする。特定OSS名、version、
+adapter仕様、native化やcacheの採否は個別Issueで決定する。
+
 ## 責務境界
 
 ### Policy
@@ -337,6 +441,10 @@ provenanceとstandard physical inventoryから牌保存則を検証しremaining 
 inventoryを導出する処理を追加した。Issue #65で、そのremaining inventoryを
 条件付き一様に配分するlisjong初の他家`HandBelief`推定
 （`estimate_conditional_uniform_hand_belief()`）を追加した。
+
+これらは前述のLong-term AI architectureにおける現在のrepresentation / physical
+accounting / baseline estimatorであり、将来方式をこの具体contractへ固定する
+ものではない。
 
 - 入力はlisjongの内部型（`Tile` / `TileType` / `TileCategory` / `Seat` /
   `Wind` / `OwnHandState` / `PolicyInput`等）に限り、RiichiEnv、RiichiLab、
@@ -681,10 +789,10 @@ modelを利用する場合は、提供元、license、version、取得方法、h
 
 ## 現在の非目標
 
-- 具体Policyの戦略改善
+- 具体Policyへのbelief / value統合と戦略改善
+- observation-aware heuristic / learned estimator、training pipelineの実装
 - RiichiLab rankedの継続運用、rating改善、reconnect、auto requeue、
   multi-connection
-- AIの学習・推論と強さの評価
 - Mortalまたはpython-studyとの統合
 - 3人麻雀対応
 - Rustによる最適化
