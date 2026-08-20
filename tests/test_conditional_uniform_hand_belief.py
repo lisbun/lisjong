@@ -1,16 +1,17 @@
 import unittest
 
-from lisjong.belief.canonical_axes import tile_type_index, wind_for_seat
+from lisjong.belief.canonical_axes import (
+    red_five_index,
+    tile_type_index,
+    wind_for_seat,
+)
 from lisjong.belief.conditional_uniform_hand_belief import (
-    _baseline_hand_belief,
+    _allocate_fixed_point_pool,
     estimate_conditional_uniform_hand_belief,
 )
 from lisjong.belief.fixed_point import SCALE, round_half_to_even_ratio
 from lisjong.belief.self_belief import exact_self_belief
-from lisjong.belief.tile_conservation import (
-    TileConservationResult,
-    derive_remaining_tile_inventory,
-)
+from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
@@ -172,29 +173,27 @@ class UnequalOpponentSlotsTest(unittest.TestCase):
         )
 
         total_hidden_slots = 136 - 1  # self概算の1枚だけaccounted
-        manzu_5 = TileType(TileCategory.MANZU, 5)
-        remaining_5m = 4  # 5mはaccountされていない
+        souzu_9 = TileType(TileCategory.SOUZU, 9)
+        tile_index = tile_type_index(souzu_9)
+        remaining_count = 4
+        south_raw = result.hand(Wind.SOUTH).expected_count_raw[tile_index]
+        north_raw = result.hand(Wind.NORTH).expected_count_raw[tile_index]
 
-        expected_south_raw = round_half_to_even_ratio(
-            remaining_5m * south_slots * SCALE, total_hidden_slots
+        self.assertLess(
+            abs(south_raw * total_hidden_slots - remaining_count * south_slots * SCALE),
+            total_hidden_slots,
         )
-        expected_north_raw = round_half_to_even_ratio(
-            remaining_5m * north_slots * SCALE, total_hidden_slots
-        )
-
-        self.assertEqual(
-            result.expected_count(Wind.SOUTH, manzu_5), expected_south_raw / SCALE
-        )
-        self.assertEqual(
-            result.expected_count(Wind.NORTH, manzu_5), expected_north_raw / SCALE
+        self.assertLess(
+            abs(north_raw * total_hidden_slots - remaining_count * north_slots * SCALE),
+            total_hidden_slots,
         )
         # west_slots == 0 -> belief is exactly zero.
-        self.assertEqual(result.expected_count(Wind.WEST, manzu_5), 0.0)
-        self.assertGreater(expected_north_raw, 0)
+        self.assertEqual(result.expected_count(Wind.WEST, souzu_9), 0.0)
+        self.assertGreater(north_raw, 0)
         # north has more slots than west(0) so north > west.
         self.assertGreater(
-            result.expected_count(Wind.NORTH, manzu_5),
-            result.expected_count(Wind.WEST, manzu_5),
+            result.expected_count(Wind.NORTH, souzu_9),
+            result.expected_count(Wind.WEST, souzu_9),
         )
 
 
@@ -256,39 +255,183 @@ class NonPlayerMassNotFullyAllocatedTest(unittest.TestCase):
         self.assertGreater(result.expected_count(Wind.SOUTH, souzu_9), 0.0)
 
 
-class ExactHalfToEvenBoundaryTest(unittest.TestCase):
-    def _conservation_with_single_type_remaining(
-        self, remaining_index: int, remaining_count: int
-    ) -> TileConservationResult:
-        accounted = [4] * 34
-        remaining = [0] * 34
-        accounted[remaining_index] = 4 - remaining_count
-        remaining[remaining_index] = remaining_count
-        return TileConservationResult(
-            exact_accounted_counts=tuple(accounted),
-            exact_accounted_red_five_counts=(1, 1, 1),
-            remaining_tile_counts=tuple(remaining),
-            remaining_red_five_counts=(0, 0, 0),
+class FixedPointPoolAllocationTest(unittest.TestCase):
+    def test_known_8193_raw_counterexample_is_conserved(self) -> None:
+        allocated = _allocate_fixed_point_pool(1, (0, 1, 1, 1), 3)
+        self.assertEqual(allocated, (0, 2731, 2731, 2730))
+        self.assertEqual(sum(allocated), SCALE)
+
+    def test_aggregate_target_uses_round_half_to_even(self) -> None:
+        self.assertEqual(
+            _allocate_fixed_point_pool(1, (1, 0, 0, 0), 16384),
+            (0, 0, 0, 0),
+        )
+        self.assertEqual(
+            _allocate_fixed_point_pool(3, (1, 0, 0, 0), 16384),
+            (2, 0, 0, 0),
         )
 
-    def test_exact_half_rounds_to_even(self) -> None:
-        index = tile_type_index(TileType(TileCategory.MANZU, 1))
-        conservation = self._conservation_with_single_type_remaining(index, 1)
-        # numerator = 1(remaining) * 1(player_slots) * SCALE(8192)
-        # denominator = 16384 -> ratio == 0.5 exactly -> round-half-to-even -> 0
-        belief = _baseline_hand_belief(
-            conservation, player_slots=1, total_hidden_slots=16384
+    def test_asymmetric_allocations_are_floor_or_ceil(self) -> None:
+        remaining_count = 4
+        slot_counts = (0, 1, 2, 4)
+        total_hidden_slots = 11
+        allocated = _allocate_fixed_point_pool(
+            remaining_count, slot_counts, total_hidden_slots
         )
-        self.assertEqual(belief.expected_count_raw[index], 0)
 
-    def test_exact_one_and_a_half_rounds_to_even(self) -> None:
-        index = tile_type_index(TileType(TileCategory.MANZU, 1))
-        conservation = self._conservation_with_single_type_remaining(index, 3)
-        # numerator = 3 * 1 * SCALE, denominator = 16384 -> ratio == 1.5 -> 2
-        belief = _baseline_hand_belief(
-            conservation, player_slots=1, total_hidden_slots=16384
+        expected_total = round_half_to_even_ratio(
+            remaining_count * sum(slot_counts) * SCALE, total_hidden_slots
         )
-        self.assertEqual(belief.expected_count_raw[index], 2)
+        self.assertEqual(sum(allocated), expected_total)
+        for raw, player_slots in zip(allocated, slot_counts, strict=True):
+            numerator = remaining_count * player_slots * SCALE
+            floor_raw, remainder = divmod(numerator, total_hidden_slots)
+            self.assertIn(raw, {floor_raw, floor_raw + bool(remainder)})
+
+    def test_zero_remaining_and_zero_hidden_slots(self) -> None:
+        self.assertEqual(_allocate_fixed_point_pool(0, (0, 0, 0, 0), 7), (0, 0, 0, 0))
+        self.assertEqual(_allocate_fixed_point_pool(0, (0, 0, 0, 0), 0), (0, 0, 0, 0))
+
+
+class GlobalConservationTest(unittest.TestCase):
+    def _opponent_winds(self) -> tuple[Wind, Wind, Wind]:
+        return (Wind.SOUTH, Wind.WEST, Wind.NORTH)
+
+    def test_known_counterexample_is_conserved_end_to_end(self) -> None:
+        concealed_tiles = list(_full_standard_tile_list())
+        for rank in (1, 2, 3):
+            concealed_tiles.remove(_tile(TileType(TileCategory.MANZU, rank)))
+        policy_input = _policy_input(concealed_tiles=tuple(concealed_tiles))
+        result = estimate_conditional_uniform_hand_belief(policy_input, (0, 1, 1, 1))
+        tile_index = tile_type_index(TileType(TileCategory.MANZU, 1))
+        allocated = tuple(
+            result.hand(wind).expected_count_raw[tile_index]
+            for wind in self._opponent_winds()
+        )
+
+        self.assertEqual(allocated, (2731, 2731, 2730))
+        self.assertEqual(sum(allocated), SCALE)
+
+    def test_partial_allocation_preserves_each_physical_pool_target(self) -> None:
+        policy_input = _policy_input()
+        slots = (0, 13, 7, 5)
+        opponent_slots = sum(slots)
+        total_hidden_slots = 136
+        result = estimate_conditional_uniform_hand_belief(policy_input, slots)
+        conservation = derive_remaining_tile_inventory(policy_input)
+        five_indices = {
+            tile_type_index(TileType(category, 5))
+            for category in (
+                TileCategory.MANZU,
+                TileCategory.PINZU,
+                TileCategory.SOUZU,
+            )
+        }
+
+        for tile_index, remaining_count in enumerate(
+            conservation.remaining_tile_counts
+        ):
+            allocated_total = sum(
+                result.hand(wind).expected_count_raw[tile_index]
+                for wind in self._opponent_winds()
+            )
+            self.assertLessEqual(allocated_total, remaining_count * SCALE)
+            if tile_index not in five_indices:
+                self.assertEqual(
+                    allocated_total,
+                    round_half_to_even_ratio(
+                        remaining_count * opponent_slots * SCALE,
+                        total_hidden_slots,
+                    ),
+                )
+
+        for category in (
+            TileCategory.MANZU,
+            TileCategory.PINZU,
+            TileCategory.SOUZU,
+        ):
+            five_index = tile_type_index(TileType(category, 5))
+            color_index = red_five_index(category)
+            remaining_five = conservation.remaining_tile_counts[five_index]
+            remaining_red = conservation.remaining_red_five_counts[color_index]
+            remaining_normal = remaining_five - remaining_red
+            normal_allocated = _allocate_fixed_point_pool(
+                remaining_normal, slots, total_hidden_slots
+            )
+            red_allocated = _allocate_fixed_point_pool(
+                remaining_red, slots, total_hidden_slots
+            )
+            for wind_number, wind in enumerate(
+                (Wind.EAST, Wind.SOUTH, Wind.WEST, Wind.NORTH)
+            ):
+                five_raw = result.hand(wind).expected_count_raw[five_index]
+                red_raw = result.hand(wind).red_five_probability_raw[color_index]
+                self.assertEqual(red_raw, red_allocated[wind_number])
+                self.assertEqual(
+                    five_raw,
+                    normal_allocated[wind_number] + red_allocated[wind_number],
+                )
+            red_total = sum(
+                result.hand(wind).red_five_probability_raw[color_index]
+                for wind in self._opponent_winds()
+            )
+            normal_total = sum(
+                result.hand(wind).expected_count_raw[five_index]
+                - result.hand(wind).red_five_probability_raw[color_index]
+                for wind in self._opponent_winds()
+            )
+            self.assertEqual(
+                red_total,
+                round_half_to_even_ratio(
+                    remaining_red * opponent_slots * SCALE, total_hidden_slots
+                ),
+            )
+            self.assertEqual(
+                normal_total,
+                round_half_to_even_ratio(
+                    remaining_normal * opponent_slots * SCALE, total_hidden_slots
+                ),
+            )
+
+    def test_full_allocation_is_exact_for_basic_red_and_normal_pools(self) -> None:
+        policy_input = _policy_input()
+        result = estimate_conditional_uniform_hand_belief(policy_input, (0, 46, 45, 45))
+        conservation = derive_remaining_tile_inventory(policy_input)
+
+        for tile_index, remaining_count in enumerate(
+            conservation.remaining_tile_counts
+        ):
+            allocated_total = sum(
+                result.hand(wind).expected_count_raw[tile_index]
+                for wind in self._opponent_winds()
+            )
+            self.assertEqual(allocated_total, remaining_count * SCALE)
+
+        for category in (
+            TileCategory.MANZU,
+            TileCategory.PINZU,
+            TileCategory.SOUZU,
+        ):
+            five_index = tile_type_index(TileType(category, 5))
+            color_index = red_five_index(category)
+            red_total = 0
+            normal_total = 0
+            for wind in self._opponent_winds():
+                five_raw = result.hand(wind).expected_count_raw[five_index]
+                red_raw = result.hand(wind).red_five_probability_raw[color_index]
+                self.assertLessEqual(red_raw, five_raw)
+                red_total += red_raw
+                normal_total += five_raw - red_raw
+            remaining_red = conservation.remaining_red_five_counts[color_index]
+            remaining_five = conservation.remaining_tile_counts[five_index]
+            self.assertEqual(red_total, remaining_red * SCALE)
+            self.assertEqual(normal_total, (remaining_five - remaining_red) * SCALE)
+
+    def test_all_zero_opponent_slots_allocate_no_mass(self) -> None:
+        result = estimate_conditional_uniform_hand_belief(_policy_input(), (0, 0, 0, 0))
+        for wind in self._opponent_winds():
+            self.assertEqual(sum(result.hand(wind).expected_count_raw), 0)
+            self.assertEqual(sum(result.hand(wind).red_five_probability_raw), 0)
 
 
 class QuantizationErrorBoundTest(unittest.TestCase):
@@ -296,30 +439,45 @@ class QuantizationErrorBoundTest(unittest.TestCase):
         policy_input = _policy_input(
             concealed_tiles=(_tile(TileType(TileCategory.MANZU, 3)),)
         )
-        south_slots = 13
-        result = estimate_conditional_uniform_hand_belief(
-            policy_input, (0, south_slots, 0, 0)
-        )
+        slots = (0, 13, 7, 5)
+        result = estimate_conditional_uniform_hand_belief(policy_input, slots)
         total_hidden_slots = 135
 
         conservation = derive_remaining_tile_inventory(policy_input)
-        for index, remaining_count in enumerate(conservation.remaining_tile_counts):
-            raw = result.hand(Wind.SOUTH).expected_count_raw[index]
-            error = abs(
-                raw * total_hidden_slots - remaining_count * south_slots * SCALE
+        five_indices = {
+            tile_type_index(TileType(category, 5))
+            for category in (
+                TileCategory.MANZU,
+                TileCategory.PINZU,
+                TileCategory.SOUZU,
             )
-            self.assertLessEqual(2 * error, total_hidden_slots)
+        }
+        for wind, player_slots in zip(Wind, slots, strict=True):
+            if wind is Wind.EAST:
+                continue
+            for index, remaining_count in enumerate(conservation.remaining_tile_counts):
+                raw = result.hand(wind).expected_count_raw[index]
+                error = abs(
+                    raw * total_hidden_slots - remaining_count * player_slots * SCALE
+                )
+                error_bound = (
+                    2 * total_hidden_slots
+                    if index in five_indices
+                    else total_hidden_slots
+                )
+                self.assertLess(error, error_bound)
 
     def test_row_mass_drift_bound(self) -> None:
         policy_input = _policy_input(
             concealed_tiles=(_tile(TileType(TileCategory.MANZU, 3)),)
         )
-        south_slots = 13
-        result = estimate_conditional_uniform_hand_belief(
-            policy_input, (0, south_slots, 0, 0)
-        )
-        row_mass = sum(result.hand(Wind.SOUTH).expected_count_raw)
-        self.assertLessEqual(abs(row_mass - south_slots * SCALE), 17)
+        slots = (0, 13, 7, 5)
+        result = estimate_conditional_uniform_hand_belief(policy_input, slots)
+        for wind, player_slots in zip(Wind, slots, strict=True):
+            if wind is Wind.EAST:
+                continue
+            row_mass = sum(result.hand(wind).expected_count_raw)
+            self.assertLess(abs(row_mass - player_slots * SCALE), 37)
 
 
 if __name__ == "__main__":
