@@ -130,6 +130,26 @@ class LocalGameRunnerIntegrationTest(unittest.TestCase):
         }
         self.assertGreater(len(kyoku), 1)
 
+    def test_fixed_seed_single_game_trace_is_reproducible(self) -> None:
+        seed = 12345
+        traces = []
+        results = []
+
+        for _ in range(2):
+            recorder = GameTraceRecorder()
+            result = LocalGameRunner(
+                {seat: MinimalPolicy() for seat in Seat},
+                seed=seed,
+                game_mode="4p-red-single",
+                max_steps=10_000,
+                trace_sink=recorder,
+            ).run()
+            results.append(result)
+            traces.append(recorder.snapshot())
+
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(traces[0], traces[1])
+
 
 class LocalGameRunnerShantenPolicyIntegrationTest(unittest.TestCase):
     """Issue #51完了条件: `ShantenPolicy`でRiichiEnv固定seed対局を完走できる。
