@@ -6,12 +6,14 @@
 ``execute_policy()``と``build_decision()``が返すpaired mappingを利用する。
 """
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 from riichienv import Action as RiichiEnvAction
 from riichienv import Observation, RiichiEnv
 
+from lisjong.game_trace import GameTraceEvent, GameTraceSink
 from lisjong.policy_contract import Policy, Seat, execute_policy
 from lisjong.riichienv_adapter import (
     RiichiEnvActionMappingSession,
@@ -118,6 +120,7 @@ class LocalGameRunner:
         "_seat_runtimes",
         "_seed",
         "_started",
+        "_trace_sink",
     )
 
     def __init__(
@@ -127,6 +130,7 @@ class LocalGameRunner:
         seed: int,
         game_mode: str = "4p-red-half",
         max_steps: int | None = None,
+        trace_sink: GameTraceSink | None = None,
     ) -> None:
         if type(seed) is not int:
             raise TypeError("seed must be an int")
@@ -145,6 +149,7 @@ class LocalGameRunner:
         self._seat_runtimes = _build_seat_runtimes(policies)
         self._env = RiichiEnv(seed=seed, game_mode=game_mode)
         self._started = False
+        self._trace_sink = trace_sink
 
     def _build_actions(
         self,
@@ -164,6 +169,39 @@ class LocalGameRunner:
             actions[player_id] = decision.mapping.resolve(selected)
         return actions
 
+    def _publish_trace_events(self, next_sequence: int) -> int:
+        """``mjai_log``の未通知entryを順序どおりdetached JSONで通知する。"""
+        if self._trace_sink is None:
+            return next_sequence
+
+        source_events = self._env.mjai_log
+        if not isinstance(source_events, list):
+            raise LocalGameRunnerError("RiichiEnv.mjai_log must be a list")
+        if len(source_events) < next_sequence:
+            raise LocalGameRunnerError("RiichiEnv.mjai_log unexpectedly shrank")
+
+        for source_event in source_events[next_sequence:]:
+            if type(source_event) is not dict:
+                raise LocalGameRunnerError(
+                    "RiichiEnv.mjai_log entries must be dictionaries"
+                )
+            try:
+                detached_event = json.dumps(
+                    source_event,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+            except TypeError, ValueError:
+                raise LocalGameRunnerError(
+                    "RiichiEnv.mjai_log entry is not JSON serializable"
+                ) from None
+            self._trace_sink.on_event(
+                GameTraceEvent(sequence=next_sequence, event=detached_event)
+            )
+            next_sequence += 1
+        return next_sequence
+
     def run(self) -> LocalGameResult:
         """``env.done()``まで対局を進め、終了後のscores / ranksを返す。
 
@@ -175,7 +213,11 @@ class LocalGameRunner:
             raise LocalGameRunnerError("LocalGameRunner instances can run only once")
         self._started = True
 
+        if self._trace_sink is not None:
+            self._trace_sink.on_start(seed=self._seed, game_mode=self._game_mode)
+
         observations = self._env.reset()
+        next_trace_sequence = self._publish_trace_events(0)
         steps = 0
         decisions = 0
 
@@ -193,8 +235,10 @@ class LocalGameRunner:
             decisions += len(actions)
             observations = self._env.step(actions)
             steps += 1
+            next_trace_sequence = self._publish_trace_events(next_trace_sequence)
 
-        return LocalGameResult(
+        self._publish_trace_events(next_trace_sequence)
+        result = LocalGameResult(
             seed=self._seed,
             game_mode=self._game_mode,
             scores=tuple(self._env.scores()),
@@ -202,6 +246,9 @@ class LocalGameRunner:
             steps=steps,
             decisions=decisions,
         )
+        if self._trace_sink is not None:
+            self._trace_sink.on_complete()
+        return result
 
 
 __all__ = [

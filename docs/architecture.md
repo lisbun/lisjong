@@ -269,6 +269,8 @@ seatごとに独立して所有する。
 - `env.done()`を対局終了判定の正本とし、局情報から独自に終了を推測しない
 - 対局終了後のscores、ranks、step数、Policy判断数を`LocalGameResult`で返す
 - 任意の`max_steps`へ終了前に到達した場合は、正常結果にせず明示的に失敗する
+- opt-inの`GameTraceSink`が指定された場合だけ、`reset()`直後と各`step()`後の
+  `env.mjai_log`新規entryを順序どおり同期通知する
 
 Local game runnerはRiichiEnv外部型からPolicy内部型への変換やPolicy固有の判断を
 所有しない。あるstepで1 seatでもAdapter変換、Policy実行、返却値検証、paired
@@ -276,6 +278,29 @@ mappingによるresolveに失敗した場合は、部分的なAction集合やfal
 `env.step()`を呼び出さず、元の例外を伝播する。完全対局ログを取得できる場合も、
 Policy入力を生成する経路とは分離する。ログの永続化先や評価componentの具体的な
 構成は本書では確定しない。
+
+#### GameTrace observability boundary
+
+`src/lisjong/game_trace.py`の`GameTrace`は、1回の正常終了したlocal game executionを
+表すimmutable valueである。`LocalGameRunner`だけがseed / game modeの正本をsinkへ
+供給し、各source entryをexecution全体で0-basedかつ連続する
+`GameTraceEvent.sequence`へ対応付ける。payloadはRiichiEnv 0.4.8のMJAI event `dict`を
+一度JSON文字列へserializeした値とし、RiichiEnv / runnerが所有するmutable objectと
+参照共有しない。
+
+標準`GameTraceRecorder`は`NEW -> STARTED -> COMPLETED`だけを許可する。start前のevent、
+重複start、start前または重複complete、complete後のevent、complete前のsnapshotは
+fail closedとする。successful completionの通知順は、terminal eventを含むfinal flush、
+`env.scores()` / `env.ranks()`取得、`LocalGameResult`構築、trace complete、result返却である。
+したがってfailed / aborted executionや正常resultを構築できなかったexecutionはcompleted
+`GameTrace`を生成しない。partial traceの公開契約は持たない。
+
+GameTrace is not Policy input. GameTrace may contain privileged observer information.
+Privileged trace information must never flow back into Policy decisions. GameTrace情報を
+`DecisionContext`、`PolicyInput`、`SeatMaterializedState`、`Policy.choose_action()`へ渡さない。
+GameTrace payload must be detached from mutable gameplay runtime state. A completed GameTrace
+represents one successfully completed execution. Arena固有metricやAI内部analysisは別consumer /
+別channelの責務であり、GameTrace v1へ混在させない。
 
 ### RiichiLab Client
 
@@ -650,6 +675,7 @@ flowchart TD
     Runner["Local game runner"] --> SDK["RiichiEnv SDK"]
     Runner --> Adapter["RiichiEnv Adapter"]
     Runner --> Contract["Policy contract"]
+    Runner --> Trace["GameTrace observer output"]
     Client["RiichiLab Client"] --> LabAPI["RiichiLab API"]
     Client --> SDK
     Client --> Adapter
