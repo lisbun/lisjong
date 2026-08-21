@@ -110,24 +110,36 @@ testではPolicy契約、RiichiEnv Adapter、共通Policy実行境界、Local ga
 1半荘を進行します。再現性のためseedは`RiichiEnv`のconstructorへ渡します。
 
 ```python
+from lisjong.game_trace import GameTraceRecorder
 from lisjong.local_game_runner import LocalGameRunner
 from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract import Seat
 
 policies = {seat: MinimalPolicy() for seat in Seat}
+recorder = GameTraceRecorder()
 result = LocalGameRunner(
     policies,
     seed=12345,
     game_mode="4p-red-half",
     max_steps=10_000,
+    trace_sink=recorder,
 ).run()
+trace = recorder.snapshot()
 
 print(result.scores, result.ranks)
+print(len(trace.events), trace.events[-1].event)
 ```
 
 返却される`LocalGameResult`にはseed、game mode、最終scores / ranks、step数、
 Policy判断数が含まれます。`max_steps`はhang防止用の安全上限であり、対局終了前に
 到達した場合は正常結果を返さず`StepLimitExceededError`で失敗します。
+
+`trace_sink`はopt-inです。標準`GameTraceRecorder`は、RiichiEnvが生成したMJAI
+eventを対局中に0-basedの連続順で受け取り、正常な`LocalGameResult`の構築後だけ
+immutableなcompleted `GameTrace`を返します。各`GameTraceEvent.event`はruntimeの
+mutable `dict`から切り離したMJAI JSON文字列です。途中失敗時はpartial traceを公開せず、
+sinkの例外も無視せず対局失敗として伝播します。GameTraceはprivileged observer outputで
+あり、Policy inputにはなりません。
 
 ## RiichiLab bot実行profile
 

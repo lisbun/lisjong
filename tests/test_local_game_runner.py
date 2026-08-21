@@ -1,7 +1,13 @@
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from lisjong.game_trace import (
+    GameTraceEvent,
+    GameTraceLifecycleError,
+    GameTraceRecorder,
+)
 from lisjong.local_game_runner import (
     LocalGameResult,
     LocalGameRunner,
@@ -67,6 +73,60 @@ class _FakeEnv:
     def ranks(self) -> list[int]:
         self.ranks_calls += 1
         return [1, 4, 2, 3]
+
+
+class _TraceFakeEnv(_FakeEnv):
+    def __init__(
+        self,
+        initial_observations: dict[int, _Observation],
+        *,
+        finish_after_step: bool = True,
+    ) -> None:
+        super().__init__(
+            initial_observations,
+            finish_after_step=finish_after_step,
+        )
+        self._mjai_log: list[dict[str, object]] = []
+        self.mjai_log_reads = 0
+
+    @property
+    def mjai_log(self) -> list[dict[str, object]]:
+        self.mjai_log_reads += 1
+        return self._mjai_log
+
+    def reset(self) -> dict[int, _Observation]:
+        observations = super().reset()
+        self._mjai_log.extend(
+            [
+                {"type": "start_game", "names": ["a", "b", "c", "d"]},
+                {"type": "start_kyoku"},
+            ]
+        )
+        return observations
+
+    def step(self, actions: dict[int, object]) -> dict[int, _Observation]:
+        observations = super().step(actions)
+        self._mjai_log.append({"type": "dahai", "actor": 0, "pai": "1m"})
+        if self._done:
+            self._mjai_log.extend([{"type": "end_kyoku"}, {"type": "end_game"}])
+        return observations
+
+
+class _RecordingSink:
+    def __init__(self, *, failure: Exception | None = None) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.failure = failure
+
+    def on_start(self, *, seed: int, game_mode: str) -> None:
+        self.calls.append(("start", (seed, game_mode)))
+
+    def on_event(self, event: GameTraceEvent) -> None:
+        self.calls.append(("event", event))
+        if self.failure is not None:
+            raise self.failure
+
+    def on_complete(self) -> None:
+        self.calls.append(("complete", None))
 
 
 def _policies() -> dict[Seat, _NeverCalledPolicy]:
@@ -318,6 +378,141 @@ class LocalGameRunnerTest(unittest.TestCase):
                     LocalGameRunner(policies, seed=7)
 
         env_type.assert_not_called()
+
+    def test_publishes_initial_step_and_terminal_events_exactly_once(self) -> None:
+        env = _TraceFakeEnv({0: _Observation(0)})
+        sink = _RecordingSink()
+        with (
+            patch("lisjong.local_game_runner.RiichiEnv", return_value=env),
+            patch(
+                "lisjong.local_game_runner.build_decision",
+                return_value=SimpleNamespace(
+                    context=object(), mapping=_FakeMapping(object())
+                ),
+            ),
+            patch("lisjong.local_game_runner.execute_policy", return_value=object()),
+        ):
+            result = LocalGameRunner(_policies(), seed=7, trace_sink=sink).run()
+
+        self.assertEqual(sink.calls[0], ("start", (7, "4p-red-half")))
+        self.assertEqual(sink.calls[-1], ("complete", None))
+        events = [value for kind, value in sink.calls if kind == "event"]
+        self.assertEqual(
+            [json.loads(event.event)["type"] for event in events],
+            ["start_game", "start_kyoku", "dahai", "end_kyoku", "end_game"],
+        )
+        self.assertEqual([event.sequence for event in events], list(range(5)))
+        self.assertEqual(result.steps, 1)
+        self.assertEqual(env.scores_calls, 1)
+        self.assertEqual(env.ranks_calls, 1)
+        self.assertEqual(env.mjai_log_reads, 3)
+
+    def test_trace_payload_is_detached_from_runtime_log(self) -> None:
+        env = _TraceFakeEnv({0: _Observation(0)})
+        recorder = GameTraceRecorder()
+        with (
+            patch("lisjong.local_game_runner.RiichiEnv", return_value=env),
+            patch(
+                "lisjong.local_game_runner.build_decision",
+                return_value=SimpleNamespace(
+                    context=object(), mapping=_FakeMapping(object())
+                ),
+            ),
+            patch("lisjong.local_game_runner.execute_policy", return_value=object()),
+        ):
+            LocalGameRunner(_policies(), seed=7, trace_sink=recorder).run()
+
+        trace = recorder.snapshot()
+        env._mjai_log[0]["names"][0] = "changed"
+
+        self.assertEqual(json.loads(trace.events[0].event)["names"][0], "a")
+
+    def test_trace_disabled_does_not_read_mjai_log(self) -> None:
+        class UnreadableLogEnv(_FakeEnv):
+            @property
+            def mjai_log(self):
+                raise AssertionError("mjai_log must not be read when trace is disabled")
+
+        env = UnreadableLogEnv({0: _Observation(0)})
+        with (
+            patch("lisjong.local_game_runner.RiichiEnv", return_value=env),
+            patch(
+                "lisjong.local_game_runner.build_decision",
+                return_value=SimpleNamespace(
+                    context=object(), mapping=_FakeMapping(object())
+                ),
+            ),
+            patch("lisjong.local_game_runner.execute_policy", return_value=object()),
+        ):
+            result = LocalGameRunner(_policies(), seed=7).run()
+
+        self.assertEqual(result.steps, 1)
+
+    def test_propagates_sink_exception_without_completing_execution(self) -> None:
+        env = _TraceFakeEnv({0: _Observation(0)})
+        error = RuntimeError("observer failed")
+        sink = _RecordingSink(failure=error)
+        with patch("lisjong.local_game_runner.RiichiEnv", return_value=env):
+            runner = LocalGameRunner(_policies(), seed=7, trace_sink=sink)
+            with self.assertRaises(RuntimeError) as caught:
+                runner.run()
+
+        self.assertIs(caught.exception, error)
+        self.assertEqual(env.step_calls, [])
+        self.assertNotIn(("complete", None), sink.calls)
+
+    def test_failure_does_not_create_completed_trace(self) -> None:
+        env = _TraceFakeEnv(
+            {0: _Observation(0)},
+            finish_after_step=False,
+        )
+        recorder = GameTraceRecorder()
+        with (
+            patch("lisjong.local_game_runner.RiichiEnv", return_value=env),
+            patch(
+                "lisjong.local_game_runner.build_decision",
+                return_value=SimpleNamespace(
+                    context=object(), mapping=_FakeMapping(object())
+                ),
+            ),
+            patch("lisjong.local_game_runner.execute_policy", return_value=object()),
+        ):
+            runner = LocalGameRunner(
+                _policies(),
+                seed=7,
+                max_steps=1,
+                trace_sink=recorder,
+            )
+            with self.assertRaises(StepLimitExceededError):
+                runner.run()
+
+        with self.assertRaises(GameTraceLifecycleError):
+            recorder.snapshot()
+
+    def test_completes_only_after_result_construction_succeeds(self) -> None:
+        env = _TraceFakeEnv({0: _Observation(0)})
+        recorder = GameTraceRecorder()
+        error = ValueError("result construction failed")
+        with (
+            patch("lisjong.local_game_runner.RiichiEnv", return_value=env),
+            patch(
+                "lisjong.local_game_runner.build_decision",
+                return_value=SimpleNamespace(
+                    context=object(), mapping=_FakeMapping(object())
+                ),
+            ),
+            patch("lisjong.local_game_runner.execute_policy", return_value=object()),
+            patch("lisjong.local_game_runner.LocalGameResult", side_effect=error),
+        ):
+            runner = LocalGameRunner(_policies(), seed=7, trace_sink=recorder)
+            with self.assertRaises(ValueError) as caught:
+                runner.run()
+
+        self.assertIs(caught.exception, error)
+        self.assertEqual(env.scores_calls, 1)
+        self.assertEqual(env.ranks_calls, 1)
+        with self.assertRaises(GameTraceLifecycleError):
+            recorder.snapshot()
 
 
 if __name__ == "__main__":

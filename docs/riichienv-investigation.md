@@ -85,7 +85,7 @@ RiichiLabの`request_action`には、少なくとも`request_id`、`possible_act
 | `Observation.events` | 観測窓におけるイベント履歴を提供する | `new_events()`と同内容になる局面を含むseat別delta挙動を一部実測済み。全局面・全versionの履歴範囲は未確認 |
 | `Observation.select_action_from_mjai(...)` | MJAI 応答を合法な `Action` へ対応付ける | 実行経路に出現した打牌、pon、chi、noneのround-tripは実測済み。不正・曖昧な入力と未出現Actionは未確認 |
 | `Observation.deserialize_from_base64(...)` | RiichiLabから受け取るserialized observationを復元する | RiichiLab Clientと共通Agentの境界 |
-| `RiichiEnv.mjai_log` | 対局のMJAI event列を提供する | Python公開形、完全ログとseat別eventの情報境界 |
+| `RiichiEnv.mjai_log` | 対局のMJAI event列を提供する | Python公開形、完全ログとseat別eventの情報境界に加え、Issue #80でlive incremental sourceとしての単調追加・非消費・entry不変性・終局までを実測済み |
 | `apply_event(...)` | MJAI イベントを状態へ適用する | 学習・リプレイ用途との境界 |
 | `get_observation(player_id)` | 指定プレイヤーの観測を取得する | 取得可能なタイミング |
 | `observe_event(event, player_id)` | イベント適用後、行動可能なら観測を返す | RiichiLab オンライン推論との共通化範囲 |
@@ -778,6 +778,42 @@ Issue #28の実装検証として、riichi/kan/call/和了を優先する方針�
 - 上記2のdrawn_tile転用がRiichiEnv 0.4.8ソース上でどう実装されているか（ソース確認は未実施）。
 - ankan chankan（国士無双限定、既定ルールでは無効）でも同様の`drawn_tile`転用が起きるか。
 
+### 2026-08-22: Issue #80 GameTrace event source preflight
+
+#### 実測条件
+
+これは公式仕様の引用ではなく、`C:\Dev\lisjong`の通常版CPython 3.14.6、
+`riichienv==0.4.8`で行った実測である。既存Local game runner integrationと同じ
+`RiichiEnv(seed=12345, game_mode="4p-red-half")`、4 seatの`MinimalPolicy`を使い、
+`env.done()`まで完走した。seedは`reset(seed=...)`ではなくconstructorへ渡した。
+
+#### 実測結果
+
+| 確認項目 | 結果 |
+| --- | --- |
+| runtime representation | `env.mjai_log`は`list`、全entryは`dict` |
+| reset直後 | 3 entryを取得可能。順に`start_game`、`start_kyoku`、`tsumo` |
+| stepごとの追加 | 786 stepを通じてlog長は3から1427へ単調増加し、縮小なし |
+| non-consuming read | 同一時点で繰り返し参照しても内容・長さは変化せず |
+| 過去entryの安定性 | 各stepで保存済みprefixと再読込prefixが一致し、後からの変更なし |
+| 複数局 | `start_kyoku` / `end_kyoku`を各9件含み、局間でlog resetなし |
+| terminal / game-end | 末尾5 typeは`tsumo`、`dahai`、`ryukyoku`、`end_kyoku`、`end_game` |
+| incrementalとfull log | reset直後・各step後・終了後final flushで集めた1427 entryが、終了後のfull `mjai_log`と順序込みで一致 |
+| JSON保存可能性 | compact JSON文字列化と`json.loads()`後の値が全1427 entryで元の`dict`と一致 |
+| 対局結果 | 786 steps、791 decisions、scores `(24000, 34400, 24000, 17600)`、ranks `(2, 1, 3, 4)` |
+
+#### 設計判断
+
+以上の実測に基づき、Issue #80では`env.mjai_log`をLocalGameRunnerのlive incremental
+sourceとして採用する。cursorで未通知entryだけを読み、payload equalityによるdeduplicationは
+行わない。複数seatの`Observation.new_events()`をmergeする代替設計は不要である。
+
+runtimeの`dict`をpublic contractへ直接漏らすとconsumerとgameplay runtimeが参照共有する
+ため、各source entryを一度compact MJAI JSON文字列へserializeし、immutableな
+`GameTraceEvent.event`として通知する。これは実測結果から導いたlisjong側の設計判断であり、
+RiichiEnvの公式保証とは区別する。将来RiichiEnv versionを変更する場合は、同じpreflightを
+再実行して前提を検証する。
+
 ## 最小再現コード
 
 次のコードは、環境ループと合法手の最小確認を目的とした調査案であり、正式な Policy 実装ではない。同等の`legal_actions()[0]`選択方針による1局完走は実測済みだが、この掲載コードを恒久的な調査コードとして保存したものではない。
@@ -994,3 +1030,4 @@ RiichiEnv を `lisjong` の通常依存へ追加する判断は、対象環境�
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2、python-build-standaloneビルド） | Issue #27の`[AI-REVIEW]`対応として、v0.4.8ソース確認（`riichienv-core/src/state/mod.rs`、`wall.rs`）と実機再現により、kakan chankanのtarget解決（`last_discard`）、`live_wall_tiles_remaining`の具体的counter algorithm（`84 - tsumo event数`、不一致0件で検証）を確定し、7 variant round-trip・kakan meld更新・重複candidate例をCPython 3.14系でも再確認した |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.14.0rc2） | Issue #29のRiichiEnv Adapter実装向けに、`Action.__eq__`がobject identityに基づき`legal_actions()`再呼び出し結果とは値が同じでも一致しないこと、representative tie-break keyとして`(tile, sorted(consume_tiles))`が同一semantic group内で完全な全順序になること、`riichienv.Action` / `Observation` / `Meld`がPython constructorを公開していることを追加実測した |
 | 2026-08-14 | RiichiEnv 0.4.8（Linux / CPython 3.11.15および3.14.0rc2） | Issue #28のproduction Adapter実装検証中に、reach宣言牌がchi/pon claim可能な場合の`riichi_declared`とevent到着のlag、槍槓のron応答機会における`drawn_tile`が自席handにない値になる事象を新たに実測し、約1,500 seed・80万decision超の大規模検証で他に未知の不整合がないことを確認した |
+| 2026-08-22 | RiichiEnv 0.4.8（Windows / CPython 3.14.6） | Issue #80向けに固定seed半荘の`mjai_log`をpreflightし、reset直後取得、単調追加、非消費、過去entry不変、複数局継続、terminal / `end_game`、incremental列と終了後full logの一致を実測した |

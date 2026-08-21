@@ -1,5 +1,7 @@
+import json
 import unittest
 
+from lisjong.game_trace import GameTraceRecorder
 from lisjong.local_game_runner import LocalGameRunner
 from lisjong.policies import (
     MinimalPolicy,
@@ -47,6 +49,7 @@ def _module_is_leaked_from_riichienv(value: object, seen: set[int]) -> bool:
 class _RecordingMinimalPolicy:
     def __init__(self) -> None:
         self.decisions: list[DecisionContext] = []
+        self.selected_actions: list[InternalAction] = []
         self._delegate = MinimalPolicy()
 
     def choose_action(self, decision: DecisionContext) -> InternalAction:
@@ -55,27 +58,34 @@ class _RecordingMinimalPolicy:
         if _module_is_leaked_from_riichienv(decision, set()):
             raise AssertionError("RiichiEnv object leaked into DecisionContext")
         self.decisions.append(decision)
-        return self._delegate.choose_action(decision)
+        selected = self._delegate.choose_action(decision)
+        self.selected_actions.append(selected)
+        return selected
 
 
 class LocalGameRunnerIntegrationTest(unittest.TestCase):
     def test_fixed_seed_half_game_completes_and_is_reproducible(self) -> None:
         seed = 12345
         policies = {seat: _RecordingMinimalPolicy() for seat in Seat}
+        recorder = GameTraceRecorder()
         first_runner = LocalGameRunner(
             policies,
             seed=seed,
             game_mode="4p-red-half",
             max_steps=10_000,
+            trace_sink=recorder,
         )
 
         first = first_runner.run()
-        second = LocalGameRunner(
-            {seat: MinimalPolicy() for seat in Seat},
+        second_policies = {seat: _RecordingMinimalPolicy() for seat in Seat}
+        second_runner = LocalGameRunner(
+            second_policies,
             seed=seed,
             game_mode="4p-red-half",
             max_steps=10_000,
-        ).run()
+        )
+        second = second_runner.run()
+        trace = recorder.snapshot()
 
         self.assertTrue(first_runner._env.done())
         self.assertEqual(first, second)
@@ -85,12 +95,30 @@ class LocalGameRunnerIntegrationTest(unittest.TestCase):
         self.assertEqual(first.ranks, (2, 1, 3, 4))
         self.assertGreater(first.steps, 1)
         self.assertGreater(first.decisions, first.steps)
+        self.assertEqual(trace.seed, first.seed)
+        self.assertEqual(trace.game_mode, first.game_mode)
+        self.assertEqual(
+            [json.loads(event.event) for event in trace.events],
+            first_runner._env.mjai_log,
+        )
+        self.assertEqual(
+            [event.sequence for event in trace.events],
+            list(range(len(trace.events))),
+        )
+        event_types = [json.loads(event.event)["type"] for event in trace.events]
+        self.assertGreater(event_types.count("start_kyoku"), 1)
+        self.assertEqual(event_types[-1], "end_game")
+        self.assertEqual(
+            {seat: policy.selected_actions for seat, policy in policies.items()},
+            {seat: policy.selected_actions for seat, policy in second_policies.items()},
+        )
 
         recorded = [
             decision for policy in policies.values() for decision in policy.decisions
         ]
         self.assertEqual(len(recorded), first.decisions)
         self.assertTrue(all(policy.decisions for policy in policies.values()))
+        self.assertTrue(second_runner._env.done())
 
         kyoku = {
             (
