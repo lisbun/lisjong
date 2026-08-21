@@ -274,18 +274,8 @@ def _choose_discard(
     policy_input: PolicyInput, discard_actions: tuple[DiscardAction, ...]
 ) -> DiscardAction:
     known_counts = _known_tile_counts(policy_input)
-    concealed_tiles = policy_input.own_hand.concealed_tiles
     evaluator = _DecisionShantenEvaluator()
-
-    evaluated = tuple(
-        (
-            evaluator.calculate(remaining_hand),
-            action,
-            remaining_hand,
-        )
-        for action in discard_actions
-        for remaining_hand in (_remove_one_matching_tile(concealed_tiles, action.tile),)
-    )
+    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     minimum_shanten = min(shanten for shanten, _, _ in evaluated)
     minimum_shanten_candidates = tuple(
         (action, hand)
@@ -333,6 +323,24 @@ def _choose_discard(
     )
 
 
+def _evaluate_post_discard_hands(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+    evaluator: _DecisionShantenEvaluator,
+) -> tuple[tuple[int, DiscardAction, list[Tile]], ...]:
+    """元のlegal discardごとの打牌後向聴数と手牌を評価する。"""
+    concealed_tiles = policy_input.own_hand.concealed_tiles
+    return tuple(
+        (
+            evaluator.calculate(remaining_hand),
+            action,
+            remaining_hand,
+        )
+        for action in discard_actions
+        for remaining_hand in (_remove_one_matching_tile(concealed_tiles, action.tile),)
+    )
+
+
 def _choose_riichi(
     legal_actions: tuple[InternalAction, ...],
 ) -> RiichiAction | None:
@@ -350,6 +358,14 @@ def _choose_riichi(
 
 class TwoStepUkeirePolicy:
     """同向聴・同現在受け入れ候補だけを2段階受け入れで比較するPolicy。"""
+
+    def _choose_discard_action(
+        self,
+        policy_input: PolicyInput,
+        discard_actions: tuple[DiscardAction, ...],
+    ) -> DiscardAction:
+        """このPolicy世代がlegal discard集合から選ぶprivate extension point。"""
+        return _choose_discard(policy_input, discard_actions)
 
     def choose_action(self, decision: DecisionContext) -> InternalAction:
         winning_actions = tuple(
@@ -370,7 +386,7 @@ class TwoStepUkeirePolicy:
             if isinstance(action, DiscardAction)
         )
         if discard_actions:
-            return _choose_discard(decision.input, discard_actions)
+            return self._choose_discard_action(decision.input, discard_actions)
 
         pass_actions = tuple(
             action

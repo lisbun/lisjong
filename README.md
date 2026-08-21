@@ -137,9 +137,14 @@ outputを一方向に解決する**profile**を明示的に選択して行いま
 
 | profile | 用途 | credential環境変数 | Policy |
 | --- | --- | --- | --- |
-| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `UkeirePolicy` |
+| `lisjong-dev` | 開発・smoke test・protocol調査用 | `LISJONG_DEV_BOT_TOKEN` | `TwoStepUkeirePolicy` |
 | `lisjong-baseline` | Policy性能比較の決定的な基準 | `LISJONG_BASELINE_BOT_TOKEN` | `MinimalPolicy` |
 | `lisjong` | 本番運用(十分に検証済みのPolicyのみ) | `LISJONG_BOT_TOKEN` | `MinimalPolicy` |
+
+`lisjong.policies`は、守備なし比較基準の`TwoStepUkeirePolicy`に加え、
+非聴牌かつ他家リーチ時に全リーチ者への共通現物を優先する
+`GenbutsuDefenseTwoStepUkeirePolicy`を公開する。後者は比較用の独立したPolicy世代で
+あり、上記runtime profileへは自動的に割り当てない。
 
 各profileは自分専用のcredential環境変数だけを参照し、他profileの
 credentialやPolicyへ暗黙fallbackしません。`--profile`未指定・未知
