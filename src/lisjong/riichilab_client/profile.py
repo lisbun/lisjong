@@ -10,9 +10,9 @@ profileは表示名やdefault値ではなく、
 
 このmoduleはPolicy契約(`DecisionContext`)、`RiichiLabSeatAdapter`、
 `ValidationSession` / `RankedSession`、`Transport`のいずれへも依存を逆流させ
-ない。profileはこれらの下位境界の外側で、`run_validation()` /
-`run_ranked_game()`へ渡す`policy`と`token`、およびCLI runtime outputを
-組み立てるためだけに存在する。
+ない。profileはこれらの下位境界の外側で、lisjongのvalidation executionと、
+`lisjong-arena`が所有するranked executionへ渡す`policy`と`token`、およびCLI
+runtime outputを組み立てるための設定層である。
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def build_runtime_summary(
     summaryを組み立てる。credential環境変数の名前もここでは表示しない
     (利便性より情報露出の最小化を優先する)。
 
-    `policy`には実際に`run_validation()` / `run_ranked_game()`へ渡す
+    `policy`には、validationまたはArena-owned ranked executionで実際に使用する
     instanceそのものを渡す。Policy名は`profile`側の独立fieldではなく
     `type(policy).__name__`から求めるため、`policy_factory`だけを変更して
     表示名の更新を忘れても、summaryが実行中のPolicyと食い違うことがない。
