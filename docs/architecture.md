@@ -374,7 +374,7 @@ lifecycle管理、timeout schedulerは対象外であり、後続Issue #39が扱
 具体的なnormalization規則、`to_mjai()`実測結果、公式仕様との既知の未確認
 事項は[RiichiLab request_action Adapter](riichilab-adapter.md)を正本とする。
 
-#### `riichilab_client` package (Issues #39 / #42 / #86)
+#### `riichilab_client` package (Issues #39 / #42 / #86 / #89)
 
 `src/lisjong/riichilab_client/`は、RiichiLab `/ws/validate` / `/ws/ranked`との
 lower-level WebSocket lifecycleを実装するPython packageである。Policy判断、
@@ -389,19 +389,25 @@ Observation変換、Action mapping、`possible_actions` semantic validationは
   実際の`websockets` library接続を最小限のasync `recv`/`send`/`close`へ
   適合させる。`websockets`依存はこのpackage内だけで使用し、
   `policy_contract` / `policies` / `riichienv_adapter`へは逆流させない
-- `run_validation(policy, token)`(`validation.py`)がlisjong側の公開execution APIであり、
-  `ValidationResult`を返す。`python -m lisjong.riichilab_client.validation`も
-  validation用first-party CLIとして残す
-- ranked lower-level public APIとして`RankedSession`、`DEFAULT_RANKED_URL`、
-  `connect_ranked_transport()`、`drive_ranked_session()`、共通errors、protocol traceを
-  維持し、Arenaのranked one-game orchestrationがtemporaryにconsumerとなる
-- profile / credential / trace-path helpersも、Arena側へのphysical migrationまでは
-  lisjongに残し、Arena ranked CLIからtemporaryに利用される
+- validation / ranked lower-level public APIとして`ValidationSession` /
+  `RankedSession`、`DEFAULT_VALIDATION_URL` / `DEFAULT_RANKED_URL`、
+  `connect_validation_transport()` / `connect_ranked_transport()`、
+  `drive_validation_session()` / `drive_ranked_session()`、共通errors、protocol trace
+  writerを維持し、Arenaのvalidation / ranked one-game orchestrationがtemporaryに
+  consumerとなる
 - Issue #86で`src/lisjong/riichilab_client/ranked.py`、`RankedGameResult`、
   `run_ranked_game()`、legacy `python -m lisjong.riichilab_client.ranked`、package-root
   exportsを削除済みである。canonical replacementは
   `lisjong_arena.riichilab.ranked.RankedGameResult` /
   `lisjong_arena.riichilab.ranked.run_ranked_game()`である
+- Issue #89で`src/lisjong/riichilab_client/validation.py`、`ValidationResult`、
+  `run_validation()`、legacy `python -m lisjong.riichilab_client.validation`、
+  execution profile / credential composition(`profile.py`)、common CLI /
+  trace-path composition(`cli.py`)、およびpackage-root `ValidationResult` /
+  `run_validation` lazy exportを削除済みである。canonical replacementは
+  `lisjong_arena.riichilab.validation.ValidationResult` /
+  `lisjong_arena.riichilab.validation.run_validation()`と、
+  `lisjong_arena.riichilab.profile` / `lisjong_arena.riichilab.cli`である
 - replacementをlisjongからre-exportするcompatibility shimは作らず、
   `lisjong -> lisjong-arena`のreverse dependencyを導入しない
 

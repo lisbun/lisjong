@@ -10,7 +10,8 @@ semantic validationの詳細は[RiichiLab request_action Adapter](riichilab-adap
 
 ## 現在のownership
 
-2026-08-22時点で、RiichiLab ranked one-game orchestrationのcanonical ownerは
+2026-08-22時点で、RiichiLab ranked / validation one-game orchestrationと
+execution profile / credential / common CLI compositionのcanonical ownerは
 `lisjong-arena`である。
 
 - `lisbun/lisjong-arena#17` / PR #18で、Arena-local
@@ -19,28 +20,37 @@ semantic validationの詳細は[RiichiLab request_action Adapter](riichilab-adap
 - `lisbun/lisjong#86`で、lisjong側のlegacy
   `RankedGameResult` / `run_ranked_game()` / `python -m lisjong.riichilab_client.ranked`
   とpackage-root exportを除去済みである
+- `lisbun/lisjong-arena#19` / PR #20で、Arena-local
+  `lisjong_arena.riichilab.validation.ValidationResult`と`run_validation()`、
+  first-party validation CLI、execution profile / credential / common CLI /
+  trace-path composition(`lisjong_arena.riichilab.profile` / `lisjong_arena.riichilab.cli`)
+  を実装した。Arena ranked CLIもこの時点でlisjong側profile / CLI helperへの依存を
+  解消し、Arena-local compositionへ切り替えている
+- `lisbun/lisjong#89`で、lisjong側のlegacy `ValidationResult` / `run_validation()` /
+  `python -m lisjong.riichilab_client.validation`、`profile.py`、`cli.py`と
+  package-root exportを除去済みである
 - compatibility re-exportは作らず、`lisjong -> lisjong-arena`のreverse dependencyを
   導入しない
-- Session / transport / protocol trace / profile / credential helper / Adapterは、
-  physical migrationが完了するまでlisjongに残り、Arenaがtemporaryにconsumerとなる
+- Session / transport / protocol trace writer / Adapterは、physical migrationが
+  完了するまでlisjongに残り、Arenaがtemporaryにconsumerとなる
 
 現在の境界は次のとおりである。
 
 ```text
 lisjong-arena
-    canonical ranked one-game orchestration
-    RankedGameResult
-    run_ranked_game()
-    first-party ranked CLI
+    canonical ranked / validation one-game orchestration
+    RankedGameResult / run_ranked_game()
+    ValidationResult / run_validation()
+    first-party ranked / validation CLI
+    execution profile / credential / common CLI composition
         |
         v
 lisjong
-    RankedSession
+    RankedSession / ValidationSession
     Transport / WebSocketTransport
-    connect_ranked_transport()
-    drive_ranked_session()
+    connect_ranked_transport() / connect_validation_transport()
+    drive_ranked_session() / drive_validation_session()
     JsonlProtocolTraceWriter
-    profile / credential / trace-path helpers
     RiichiLabSeatAdapter
     Policy contract
 ```
@@ -76,10 +86,8 @@ Issue #42実装前の2026-08-15に、RiichiLab公式文書を再確認した。
 
 ## lisjong側の公開境界
 
-Issue #86後もlisjong側に残す主要な公開APIは次である。
+Issue #89後もlisjong側に残す主要な公開APIは次である。
 
-- validation execution:
-  `ValidationResult`、`run_validation()`
 - session:
   `RankedSession`、`ValidationSession`、`SessionStatus`
 - transport:
@@ -92,25 +100,26 @@ Issue #86後もlisjong側に残す主要な公開APIは次である。
   `RiichiLabClientError`、`ProtocolError`、`TransportError`、
   `UnexpectedDisconnectError`
 
-`RankedGameResult`と`run_ranked_game()`はlisjong側の公開APIではない。
-ranked one-game orchestrationが必要なconsumerはArenaのcanonical APIを使う。
+`RankedGameResult` / `run_ranked_game()`、`ValidationResult` / `run_validation()`は
+いずれもlisjong側の公開APIではない。one-game orchestrationが必要なconsumerは
+Arenaのcanonical APIを使う。execution profile / credential resolution / common CLI
+引数解析 / trace-path解決も同様にlisjong側にはなく、`lisjong_arena.riichilab.profile` /
+`lisjong_arena.riichilab.cli`がcanonicalである。
 
 ## package構成
 
 ```text
 src/lisjong/riichilab_client/
-    __init__.py     lower-level public API + validation lazy export
+    __init__.py     lower-level public API
     errors.py       client error hierarchy
     session.py      validation/ranked共通lifecycle
     trace.py        secret-safe protocol trace
     transport.py    Transport / WebSocketTransport / connect / drive
-    profile.py      bot profile / credential source / runtime namespace
-    cli.py          profile CLI共通の引数解析・trace path解決
-    validation.py   run_validation() / ValidationResult / validation CLI
 ```
 
-Issue #86で`ranked.py`は削除済みである。rankedのSession / transport差分は`session.py` /
-`transport.py`に残るため、file削除とlower-level runtime削除を同一視しない。
+Issue #86で`ranked.py`、Issue #89で`validation.py` / `profile.py` / `cli.py`は
+削除済みである。rankedのSession / transport差分は`session.py` / `transport.py`に
+残るため、file削除とlower-level runtime削除を同一視しない。
 
 ## lower-level Session / transport contract
 
@@ -215,7 +224,8 @@ orchestration責務であり、Issue #86のcleanupと同時には実装しない
 
 BOT tokenはruntime secretとして扱う。
 
-- validationでは`run_validation(policy, token, ...)`へ明示注入する
+- validationではArenaの`run_validation(policy, token, ...)`へ明示注入し、Arenaが
+  lisjongのlower-level `connect_validation_transport()`へ渡す
 - rankedではArenaの`run_ranked_game(policy, token, ...)`へ明示注入し、Arenaが
   lisjongのlower-level `connect_ranked_transport()`へ渡す
 - tokenはAuthorization header設定にのみ使い、Session / result / trace payloadへ
@@ -224,10 +234,12 @@ BOT tokenはruntime secretとして扱う。
   test fixtureへ含めない
 - credential環境変数の値をrepositoryへcommitしない
 
-## profile (Issue #44)
+## execution profile / credential / CLI composition (Arena-owned, Issues #44 / #45 / #19)
 
-`profile.py` / `cli.py`はbot identity、credential source、Policy、runtime namespace、
-trace output policyを一方向に解決するcomposition/configuration layerである。
+bot identity、credential source、Policy、runtime namespace、trace output policyを
+一方向に解決するcomposition/configuration layer(旧`profile.py` / `cli.py`)は、
+`lisjong-arena` Issue #19でcanonical implementationがArenaへ移り、本Issue #89で
+lisjong側のlegacy実装を削除した。
 
 ```text
 profile
@@ -238,7 +250,8 @@ profile
  -> trace path policy
 ```
 
-少なくとも次の3 profileを提供する。
+は`lisjong_arena.riichilab.profile` / `lisjong_arena.riichilab.cli`がcanonical +
+physical ownerである。少なくとも次の3 profileを提供する(mapping自体の正本はArena側)。
 
 | profile | credential環境変数 | Policy | runtime namespace |
 | --- | --- | --- | --- |
@@ -249,21 +262,15 @@ profile
 - 他profileのcredentialへfallbackしない
 - profile未指定・未知profile・credential未設定はfail closed
 - credentialの値ではなく環境変数名だけを設定として保持する
-- profile / credential / trace-path helperはArenaへのphysical migrationまではlisjongに
-  残し、Arena ranked CLIがtemporaryに再利用する
+- lisjongが引き続き所有するのは、profile mappingが参照するPolicy class自体
+  (`MinimalPolicy` / `TwoStepUkeirePolicy`等)だけである
 
-validation first-party CLIはlisjong側に残る。
-
-```powershell
-$env:LISJONG_DEV_BOT_TOKEN = "<dev validation用bot token>"
-python -m lisjong.riichilab_client.validation --profile lisjong-dev
-```
-
-ranked first-party CLIはArenaを使用する。
+ranked / validation双方のfirst-party CLIはArenaを使用する。
 
 ```powershell
-$env:LISJONG_DEV_BOT_TOKEN = "<dev ranked用bot token>"
+$env:LISJONG_DEV_BOT_TOKEN = "<dev用bot token>"
 python -m lisjong_arena.riichilab.ranked --profile lisjong-dev
+python -m lisjong_arena.riichilab.validation --profile lisjong-dev
 ```
 
 ## protocol trace (Issue #45)
@@ -293,10 +300,11 @@ record timingは次の契約とする。
 - writer open/write/close failureは`ProtocolTraceError`としてfail closed
 
 `drive_validation_session()` / `drive_ranked_session()`は共通`drive_session()`のtrace
-実装を利用する。rankedではArena orchestrationがwriterを生成し、このlower-level driverへ
-渡す。
+実装を利用する。validation / ranked双方でArena orchestrationがwriterを生成し、この
+lower-level driverへ渡す。
 
-trace path解決の優先順位は既存helperで次のとおりである。
+trace path解決の優先順位は、canonical implementationである
+`lisjong_arena.riichilab.cli`が次のとおり維持する。
 
 1. `--trace-path`
 2. `RIICHILAB_TRACE_PATH`
@@ -304,7 +312,7 @@ trace path解決の優先順位は既存helperで次のとおりである。
 4. 無効
 
 profile既定pathはrepository配下ではなくOS user-local領域を使い、profile別directoryと
-UTC timestamp + UUID4で衝突を避ける。
+UTC timestamp + UUID4で衝突を避ける。この解決ロジック自体はlisjongには存在しない。
 
 ## fail-closed原則
 
@@ -329,23 +337,27 @@ Client側から生成しない。
 
 ## test ownership
 
-Issue #86後もlisjong側で保持するtestはlower-level runtimeとvalidationのcontractを
-対象とする。
+Issue #89後もlisjong側で保持するtestはlower-level runtimeのcontractだけを対象とする。
 
-- `tests/test_riichilab_client_session.py`: 共通lifecycle / validation差分
+- `tests/test_riichilab_client_session.py`: 共通lifecycle / validation / ranked terminal差分
 - `tests/test_riichilab_client_transport.py`: transport / JSON / trace integration
-- `tests/test_riichilab_client_validation.py`: validation end-to-end / Adapter + Policy integration
+- `tests/test_riichilab_client_validation.py`: `ValidationSession` lifecycleと#38 Adapter +
+  Policy integration(lower-level onlyへ縮小済み)
 - `tests/test_riichilab_client_trace.py`: trace writer
-- `tests/test_riichilab_client_profile.py`: profile / credential / runtime namespace independence
-- `tests/test_riichilab_client_cli.py`: shared CLI / trace-path resolution
 - `tests/test_riichilab_client_ranked.py`: `RankedSession`、ranked terminal、fake transport、
   Adapter + Policy integration、およびlegacy orchestration APIがlisjongから消えたこと
 
-`test_riichilab_client_ranked.py`をfile単位では削除しない。
-`RunRankedGameTest`、legacy ranked CLI、lisjong-owned `RankedGameResult` contract、
-runner trace orchestration等の上位coverageだけを除去する。Arena-local
-`run_ranked_game()` / `RankedGameResult` / ranked CLIのcoverageはcanonical ownerである
-`lisjong-arena`側が担当する。
+`test_riichilab_client_ranked.py` / `test_riichilab_client_validation.py`をfile単位では
+削除しない。`RunRankedGameTest` / legacy ranked CLI / `RankedGameResult` contract、
+`RunValidationEndToEndTest` / legacy validation CLI / `ValidationResult` contract等の
+上位orchestration coverageだけを除去する。Arena-local `run_ranked_game()` /
+`RankedGameResult` / ranked CLIと`run_validation()` / `ValidationResult` / validation CLI
+のcoverageはcanonical ownerである`lisjong-arena`側が担当する。
+
+`tests/test_riichilab_client_profile.py` / `tests/test_riichilab_client_cli.py`は
+Issue #89でlisjong-owned responsibilityが残らないことを確認したうえでfile自体を
+削除した。profile / credential / CLI compositionのcoverageは`lisjong-arena`側の
+`tests/test_riichilab_profile.py` / `tests/test_riichilab_cli.py`が担当する。
 
 ## live実測履歴
 
@@ -363,6 +375,10 @@ end_game: yes
 これにより、WebSocket authorization、`start_game.id`、`request_action`、Observation
 deserialize、Policy execution、Action mapping、MJAI response、`end_game`、
 `validation_result.passed`までの経路を実serverで確認した。
+
+この記録は当時のlisjong-owned validation runnerで取得したhistorical実測である。
+現在のfirst-party validation executionはArenaへ移管済みであり、このhistoryを
+lisjong側APIが現存する根拠として扱わない。
 
 ### ranked
 
@@ -398,18 +414,40 @@ first-party replacementはArena #17 / PR #18で成立済みである。deprecati
 re-exportをlisjongに残すと、reverse dependencyまたはlegacy ownershipの固定化に
 つながるため設けない。
 
+## Issue #89のbreaking change
+
+Issue #89もpublic APIのbreaking removalを含む。
+
+削除対象:
+
+- `lisjong.riichilab_client.validation`
+- `lisjong.riichilab_client.ValidationResult`
+- `lisjong.riichilab_client.run_validation`
+- `python -m lisjong.riichilab_client.validation`
+- `lisjong.riichilab_client.profile`(execution profile / credential resolution)
+- `lisjong.riichilab_client.cli`(common CLI引数解析 / trace-path解決)
+
+first-party replacementはArena #19 / PR #20で成立済みである。`profile.py` / `cli.py`は
+package rootでstable public APIとして保証していたsurfaceではなく、Arenaへcanonical
+移管済みのlegacy execution-composition implementation surfaceとして削除した。
+deprecation wrapperやre-exportをlisjongに残すと、reverse dependencyまたはlegacy
+ownershipの固定化につながるため設けない。`MinimalPolicy` / `TwoStepUkeirePolicy`等の
+Policy class自体、`ValidationSession` / `RankedSession` / transport / trace writer /
+Adapter、および`DEFAULT_VALIDATION_URL`(lower-level transport APIの一部)は削除して
+いない。
+
 ## 今後のmigration
 
-Issue #86後も、次はtemporaryにlisjongへ残る。
+Issue #89後も、次はtemporaryにlisjongへ残る。
 
 - Session
 - transport
-- protocol trace
-- profile / credential / trace-path helpers
+- protocol trace writer
 - RiichiLab Adapter / possible-action validation
 
 これらのphysical migrationは別Issueで段階的に行う。Arena側dependency pinの更新も
-lisjong #86には含めず、cleanup後のSHAへ更新するArena側changeとして扱う。
+lisjong #86 / #89には含めず、cleanup後のSHAへ更新するArena側changeとして扱う。
 
-Issue #86ではretry / reconnect / requeue / continuous participation、raw online game
-record、Policy / DecisionContext / InternalAction変更、generic runtime抽象化を行わない。
+Issue #86 / #89ではretry / reconnect / requeue / continuous participation、raw online
+game record、Policy / DecisionContext / InternalAction変更、generic runtime抽象化を
+行わない。
