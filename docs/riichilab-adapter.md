@@ -286,7 +286,7 @@ identityから`tsumogiri`を除外した。selected側の`InternalAction.tsumogi
   `request_id`はgame内で一意なmonotonically increasing integerであるため
   (Issue #38 review: blocking 2)、初回実装が許容していた`str`は受理しない。
   monotonicity検証、previous requestとの比較、stale/duplicate判定、
-  `action_ack`との対応付けはこの境界の責務ではなく、#39で扱う。この境界が
+  `action_ack`との対応付けはこの境界の責務ではなく、Arena runtimeが扱う。この境界が
   行うのは、現在の`request_id`が仕様どおりの`int`であることの確認と、その
   値をresponseへechoすることまでである
 - `possible_actions`: list-likeなcollection(内容の検証はvalidation側で行う)
@@ -306,24 +306,27 @@ identityから`tsumogiri`を除外した。selected側の`InternalAction.tsumogi
   継続保持する
 - `RiichiLabSeatAdapter.process_request_action(raw_request_action) -> SendReadyResponse`:
   1件の`request_action`を、送信前validation済みのpayloadまで処理する
-- `SendReadyResponse(request_id, action)`: 後続#39がそのままJSON化して
+- `SendReadyResponse(request_id, action)`: Arena runtimeがそのままJSON化して
   送信できるpayload
 
 内部処理順は`build_decision()`(#23) → `execute_policy()`(#34) →
 `mapping.resolve()` → MJAI response変換 → `possible_actions`検証 →
 `request_id`bindである。WebSocket接続、token、`start_game` /
 `action_ack` / `validation_result` / `end_game`、`request_id`のgame内
-lifecycle管理、timeout schedulerはこのpackageの責務ではなく、#39で実装する。
+lifecycle管理、timeout schedulerはこのpackageの責務ではなく、Arena runtimeが扱う。
 
-`docs/architecture.md`の「RiichiLab Client」節が定める情報境界
+`docs/architecture.md`の「RiichiLab execution / Adapter boundary」節が定める情報境界
 (Policyへ渡してよいのは`DecisionContext`だけ)は、このpackageでも維持する。
 
-## Issue #39実装後の補足
+## lower-level runtime migration後の補足
 
 WebSocket接続、`start_game` / `action_ack` / `validation_result` /
-`end_game`、`request_id`のgame内lifecycle管理はIssue #39で
-`src/lisjong/riichilab_client/`として実装済みである。詳細は
-[RiichiLab WebSocket Client](riichilab-client.md)を参照する。
+`end_game`、`request_id`のgame内lifecycle管理はIssue #39で最初に
+`src/lisjong/riichilab_client/`へ実装した。その後、Arena Issue #23 / PR #24で
+Arena-local implementationへcanonical + physical migrationし、lisjong Issue #91で
+legacy packageを削除した。current runtime contractはArena側
+[RiichiLab client runtime contract](https://github.com/lisbun/lisjong-arena/blob/main/docs/riichilab-client.md)
+を正本とする。本書は引き続きAdapter / Policy semanticsだけの正本である。
 
 Issue #39実装時点でも、本書冒頭に記載した`riichi.dev`ドメインへの
 network egress blockは、実装を行ったAI実行環境では解消していない
