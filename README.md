@@ -187,10 +187,10 @@ credential環境変数はrepositoryへcommitせず、実行時に注入してく
 ## RiichiLab ranked smoke test
 
 RiichiLab ranked one-game orchestrationのcanonical implementationとfirst-party CLIは、
-`lisjong-arena` Issue #17でArenaへ移管しました。`lisjong` Issue #86ではlegacyな
+`lisjong-arena` Issue #17でArenaへ移管しました。`lisjong` Issue #86でlegacyな
 `lisjong.riichilab_client.RankedGameResult` / `run_ranked_game()`と
-`python -m lisjong.riichilab_client.ranked`を削除します。compatibility re-exportや
-`lisjong -> lisjong-arena`のreverse dependencyは設けません。
+`python -m lisjong.riichilab_client.ranked`を削除済みです。compatibility re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
 
 現在の公開境界は次です。
 
