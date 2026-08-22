@@ -1,25 +1,19 @@
-"""RiichiLab ranked 1半荘lifecycleのunit / fake transport / integration test。"""
+"""RiichiLab ranked lower-level lifecycle / fake transport / integration test。"""
 
 import asyncio
+import importlib
 import json
-import os
-import subprocess
-import sys
-import tempfile
 import unittest
-from contextlib import asynccontextmanager, redirect_stdout
-from dataclasses import fields
-from io import StringIO
 from unittest.mock import patch
 
 from _riichilab_client_test_helpers import server_style_request_action
 from riichienv import RiichiEnv
 
+from lisjong import riichilab_client
 from lisjong.policies import MinimalPolicy
 from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_adapter.adapter import SendReadyResponse
 from lisjong.riichilab_client.errors import ProtocolError, UnexpectedDisconnectError
-from lisjong.riichilab_client.ranked import RankedGameResult, _run_cli, run_ranked_game
 from lisjong.riichilab_client.session import RankedSession, ValidationSession
 from lisjong.riichilab_client.transport import (
     TransportClosed,
@@ -75,20 +69,6 @@ def _request_action(request_id: int) -> dict:
         "possible_actions": [],
         "observation": "unused-by-fake-adapter",
     }
-
-
-def _make_fake_connect(
-    transport: _FakeTransport, captured_connections: list[tuple[str, str]]
-):
-    @asynccontextmanager
-    async def _connect(url: str, token: str):
-        # 接続自体がqueue参加であり、connector entry時点でsendは0件。
-        if transport.sent:
-            raise AssertionError("ranked connector sent data before server event")
-        captured_connections.append((url, token))
-        yield transport
-
-    return _connect
 
 
 class RankedSeatBindTest(unittest.TestCase):
@@ -292,7 +272,7 @@ class RankedFakeTransportTest(unittest.TestCase):
     def test_disconnect_before_end_game_is_failure(self) -> None:
         session = RankedSession(MinimalPolicy())
         transport = _FakeTransport([_event_text({"type": "start_game", "id": 0})])
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self.seat)):
             with self.assertRaises(UnexpectedDisconnectError):
                 asyncio.run(drive_ranked_session(session, transport))
 
@@ -329,341 +309,16 @@ class RankedMinimalPolicyIntegrationTest(unittest.TestCase):
             self.assertFalse(hasattr(decision, leaked_attr))
 
 
-class RunRankedGameTest(unittest.TestCase):
-    def test_completes_observed_hanchan_without_scores(self) -> None:
-        env = RiichiEnv(seed=7, game_mode="4p-red-east")
-        observations = env.reset()
-        player_id, observation = next(iter(observations.items()))
-        request = server_style_request_action(observation, request_id=5)
-        transport = _FakeTransport(
-            [
-                _event_text({"type": "start_game", "id": player_id}),
-                _event_text(request),
-                _event_text(
-                    {"type": "action_ack", "request_id": 5, "status": "accepted"}
-                ),
-                _event_text({"type": "end_game"}),
-            ]
-        )
-        captured_connections: list[tuple[str, str]] = []
+class LegacyRankedOrchestrationRemovalTest(unittest.TestCase):
+    def test_package_root_no_longer_exports_ranked_orchestration(self) -> None:
+        for name in ("RankedGameResult", "run_ranked_game"):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(riichilab_client, name))
+                self.assertNotIn(name, riichilab_client.__all__)
 
-        async def _run():
-            with patch(
-                "lisjong.riichilab_client.ranked.connect_ranked_transport",
-                _make_fake_connect(transport, captured_connections),
-            ):
-                return await run_ranked_game(
-                    MinimalPolicy(), "fake-token", url="wss://example.invalid/ranked"
-                )
-
-        result = asyncio.run(_run())
-        self.assertTrue(result.end_game_received)
-        self.assertEqual(result.seat, Seat(player_id))
-        self.assertEqual(result.requests_received, 1)
-        self.assertEqual(result.responses_sent, 1)
-        self.assertEqual(result.ack_history[5], ("accepted",))
-        self.assertIsNone(result.scores)
-        self.assertEqual(
-            captured_connections,
-            [("wss://example.invalid/ranked", "fake-token")],
-        )
-        for field in fields(result):
-            self.assertNotEqual(getattr(result, field.name), "fake-token")
-
-    def test_rejects_empty_token(self) -> None:
-        with self.assertRaises(ValueError):
-            asyncio.run(run_ranked_game(MinimalPolicy(), ""))
-
-
-class RankedModuleCliTest(unittest.TestCase):
-    def test_module_cli_without_profile_fails_closed_without_runtime_warning(
-        self,
-    ) -> None:
-        environment = os.environ.copy()
-        completed = subprocess.run(
-            [sys.executable, "-m", "lisjong.riichilab_client.ranked"],
-            capture_output=True,
-            check=False,
-            env=environment,
-            text=True,
-        )
-
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn("--profile", completed.stderr)
-        self.assertNotIn("RuntimeWarning", completed.stderr)
-
-    def test_module_cli_rejects_unknown_profile(self) -> None:
-        environment = os.environ.copy()
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "lisjong.riichilab_client.ranked",
-                "--profile",
-                "lisjong-production",
-            ],
-            capture_output=True,
-            check=False,
-            env=environment,
-            text=True,
-        )
-
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn("invalid choice", completed.stderr)
-        self.assertNotIn("RuntimeWarning", completed.stderr)
-
-    def test_module_cli_missing_profile_credential_fails_closed(self) -> None:
-        environment = os.environ.copy()
-        environment.pop("LISJONG_DEV_BOT_TOKEN", None)
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "lisjong.riichilab_client.ranked",
-                "--profile",
-                "lisjong-dev",
-            ],
-            capture_output=True,
-            check=False,
-            env=environment,
-            text=True,
-        )
-
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn("LISJONG_DEV_BOT_TOKEN", completed.stderr)
-        self.assertNotIn("RuntimeWarning", completed.stderr)
-
-    def test_cli_reports_unavailable_scores_as_success(self) -> None:
-        result = RankedGameResult(
-            end_game_received=True,
-            seat=Seat.SEAT_2,
-            requests_received=10,
-            responses_sent=10,
-            ack_history={},
-            scores=None,
-        )
-        output = StringIO()
-
-        with (
-            patch.dict(os.environ, {"LISJONG_BOT_TOKEN": "fake-token"}),
-            patch(
-                "lisjong.riichilab_client.ranked.run_ranked_game",
-                return_value=result,
-            ),
-            redirect_stdout(output),
-        ):
-            return_code = _run_cli(["--profile", "lisjong"])
-
-        self.assertEqual(return_code, 0)
-        self.assertIn("profile: lisjong", output.getvalue())
-        self.assertIn("policy: MinimalPolicy", output.getvalue())
-        self.assertIn("mode: ranked", output.getvalue())
-        self.assertIn("trace: off", output.getvalue())
-        self.assertIn("RiichiLab ranked game completed", output.getvalue())
-        self.assertIn("end_game: yes", output.getvalue())
-        self.assertIn("scores: unavailable", output.getvalue())
-        self.assertNotIn("fake-token", output.getvalue())
-
-    def test_package_root_lazy_exports_ranked_api(self) -> None:
-        from lisjong import riichilab_client
-        from lisjong.riichilab_client.ranked import RankedGameResult
-
-        self.assertIs(riichilab_client.run_ranked_game, run_ranked_game)
-        self.assertIs(riichilab_client.RankedGameResult, RankedGameResult)
-
-    def test_cli_reads_trace_path_from_its_own_env_var_independent_of_credential(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            trace_path = os.path.join(tmp_dir, "trace.jsonl")
-            result = RankedGameResult(
-                end_game_received=True,
-                seat=Seat.SEAT_0,
-                requests_received=1,
-                responses_sent=1,
-                ack_history={},
-                scores=None,
-            )
-            captured_kwargs: dict = {}
-
-            async def _fake_run_ranked_game(policy, token, **kwargs):
-                captured_kwargs.update(kwargs)
-                return result
-
-            with (
-                patch.dict(
-                    os.environ,
-                    {
-                        "LISJONG_DEV_BOT_TOKEN": "fake-token",
-                        "RIICHILAB_TRACE_PATH": trace_path,
-                    },
-                ),
-                patch(
-                    "lisjong.riichilab_client.ranked.run_ranked_game",
-                    _fake_run_ranked_game,
-                ),
-                redirect_stdout(StringIO()),
-            ):
-                return_code = _run_cli(["--profile", "lisjong-dev"])
-
-            self.assertEqual(return_code, 0)
-            self.assertEqual(captured_kwargs.get("trace_path"), trace_path)
-
-    def test_cli_uses_profile_policy_factory(self) -> None:
-        result = RankedGameResult(
-            end_game_received=True,
-            seat=Seat.SEAT_1,
-            requests_received=1,
-            responses_sent=1,
-            ack_history={},
-            scores=None,
-        )
-        captured_policies: list = []
-
-        async def _fake_run_ranked_game(policy, token, **kwargs):
-            captured_policies.append(policy)
-            return result
-
-        with (
-            patch.dict(os.environ, {"LISJONG_BASELINE_BOT_TOKEN": "fake-token"}),
-            patch(
-                "lisjong.riichilab_client.ranked.run_ranked_game",
-                _fake_run_ranked_game,
-            ),
-            redirect_stdout(StringIO()),
-        ):
-            return_code = _run_cli(["--profile", "lisjong-baseline"])
-
-        self.assertEqual(return_code, 0)
-        self.assertEqual(len(captured_policies), 1)
-        self.assertIsInstance(captured_policies[0], MinimalPolicy)
-
-
-class MultiProcessProfileIndependenceTest(unittest.TestCase):
-    """別processから`lisjong-dev` / `lisjong-baseline`を同時起動しても
-    credential sourceが混線しないことを、実subprocessで確認する
-    (Issue #44セクション9)。ネットワーク接続前のcredential解決だけで
-    fail closedするため、live RiichiLab接続は不要。
-    """
-
-    def test_dev_and_baseline_processes_do_not_cross_talk(self) -> None:
-        dev_secret = "dev-secret-should-not-leak"
-        baseline_secret = "baseline-secret-should-not-leak"
-
-        dev_env = os.environ.copy()
-        dev_env.pop("LISJONG_DEV_BOT_TOKEN", None)
-        dev_env["LISJONG_BASELINE_BOT_TOKEN"] = baseline_secret
-
-        baseline_env = os.environ.copy()
-        baseline_env.pop("LISJONG_BASELINE_BOT_TOKEN", None)
-        baseline_env["LISJONG_DEV_BOT_TOKEN"] = dev_secret
-
-        dev_process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "lisjong.riichilab_client.ranked",
-                "--profile",
-                "lisjong-dev",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=dev_env,
-            text=True,
-        )
-        baseline_process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "lisjong.riichilab_client.ranked",
-                "--profile",
-                "lisjong-baseline",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=baseline_env,
-            text=True,
-        )
-
-        dev_stdout, dev_stderr = dev_process.communicate(timeout=30)
-        baseline_stdout, baseline_stderr = baseline_process.communicate(timeout=30)
-
-        self.assertEqual(dev_process.returncode, 2)
-        self.assertEqual(baseline_process.returncode, 2)
-
-        self.assertIn("LISJONG_DEV_BOT_TOKEN", dev_stderr)
-        self.assertIn("LISJONG_BASELINE_BOT_TOKEN", baseline_stderr)
-
-        # 各processは自分専用のcredential環境変数名しか参照・報告しない。
-        self.assertNotIn("LISJONG_BASELINE_BOT_TOKEN", dev_stderr)
-        self.assertNotIn("LISJONG_DEV_BOT_TOKEN", baseline_stderr)
-
-        # 他profile用に設定したdummy secretの値がどちらのoutputにも漏れない。
-        self.assertNotIn(baseline_secret, dev_stdout + dev_stderr)
-        self.assertNotIn(dev_secret, baseline_stdout + baseline_stderr)
-
-
-class RunRankedGameTraceOptInTest(unittest.TestCase):
-    """`run_ranked_game(..., trace_path=...)`のopt-in protocol trace(Issue #45)。
-
-    validationと同じ`drive_session()`経由のtrace実装を、ranked側からも
-    使えることを確認する(Issue #45セクション6の共通化要求)。
-    """
-
-    def _run(self, *, trace_path):
-        env = RiichiEnv(seed=7, game_mode="4p-red-east")
-        observations = env.reset()
-        player_id, observation = next(iter(observations.items()))
-        request = server_style_request_action(observation, request_id=5)
-        transport = _FakeTransport(
-            [
-                _event_text({"type": "start_game", "id": player_id}),
-                _event_text(request),
-                _event_text(
-                    {"type": "action_ack", "request_id": 5, "status": "accepted"}
-                ),
-                _event_text({"type": "end_game"}),
-            ]
-        )
-        captured_connections: list[tuple[str, str]] = []
-
-        async def _run_inner():
-            with patch(
-                "lisjong.riichilab_client.ranked.connect_ranked_transport",
-                _make_fake_connect(transport, captured_connections),
-            ):
-                return await run_ranked_game(
-                    MinimalPolicy(), "fake-token", trace_path=trace_path
-                )
-
-        return asyncio.run(_run_inner())
-
-    def test_tracing_off_by_default_creates_no_trace_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            trace_path = os.path.join(tmp_dir, "trace.jsonl")
-            result = self._run(trace_path=None)
-            self.assertTrue(result.end_game_received)
-            self.assertFalse(os.path.exists(trace_path))
-
-    def test_trace_path_opt_in_writes_jsonl_records_without_the_token(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            trace_path = os.path.join(tmp_dir, "trace.jsonl")
-            result = self._run(trace_path=trace_path)
-            self.assertTrue(result.end_game_received)
-
-            with open(trace_path, encoding="utf-8") as trace_file:
-                lines = [line for line in trace_file if line.strip()]
-
-            self.assertGreater(len(lines), 0)
-            for line in lines:
-                record = json.loads(line)
-                self.assertIn("timestamp", record)
-                self.assertIn("direction", record)
-                self.assertIn("event_type", record)
-                self.assertIn("payload", record)
-            raw_text = "".join(lines)
-            self.assertNotIn("fake-token", raw_text)
-            self.assertNotIn("Authorization", raw_text)
+    def test_legacy_ranked_execution_module_is_removed(self) -> None:
+        with self.assertRaises(ModuleNotFoundError):
+            importlib.import_module("lisjong.riichilab_client.ranked")
 
 
 if __name__ == "__main__":
