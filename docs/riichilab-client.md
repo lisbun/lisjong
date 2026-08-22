@@ -18,7 +18,7 @@ semantic validationの詳細は[RiichiLab request_action Adapter](riichilab-adap
   first-party ranked CLIを実装した
 - `lisbun/lisjong#86`で、lisjong側のlegacy
   `RankedGameResult` / `run_ranked_game()` / `python -m lisjong.riichilab_client.ranked`
-  とpackage-root exportを除去する
+  とpackage-root exportを除去済みである
 - compatibility re-exportは作らず、`lisjong -> lisjong-arena`のreverse dependencyを
   導入しない
 - Session / transport / protocol trace / profile / credential helper / Adapterは、
@@ -109,7 +109,7 @@ src/lisjong/riichilab_client/
     validation.py   run_validation() / ValidationResult / validation CLI
 ```
 
-Issue #86で`ranked.py`は削除する。rankedのSession / transport差分は`session.py` /
+Issue #86で`ranked.py`は削除済みである。rankedのSession / transport差分は`session.py` /
 `transport.py`に残るため、file削除とlower-level runtime削除を同一視しない。
 
 ## lower-level Session / transport contract
