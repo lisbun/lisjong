@@ -307,7 +307,7 @@ represents one successfully completed execution. Arena固有metricやAI内部ana
 RiichiLabのexternal execution / observationはproject-wideには`lisjong-arena`のtarget
 responsibilityである。Issue #17 / PR #18でranked one-game orchestrationのcanonical
 implementationとfirst-party CLIをArenaへ移し、Issue #86でlisjong側のlegacy
-`RankedGameResult` / `run_ranked_game()` / ranked CLIを除去する。本節で説明する
+`RankedGameResult` / `run_ranked_game()` / ranked CLIを除去済みである。本節で説明する
 lisjong側RiichiLab Clientは、Arenaがまだtemporaryにconsumerとして利用する
 lower-level Session / transport / trace / profile helpersと、Policy境界へ接続する
 Adapter実装を指す。
@@ -399,7 +399,7 @@ Observation変換、Action mapping、`possible_actions` semantic validationは
   lisjongに残し、Arena ranked CLIからtemporaryに利用される
 - Issue #86で`src/lisjong/riichilab_client/ranked.py`、`RankedGameResult`、
   `run_ranked_game()`、legacy `python -m lisjong.riichilab_client.ranked`、package-root
-  exportsを削除する。canonical replacementは
+  exportsを削除済みである。canonical replacementは
   `lisjong_arena.riichilab.ranked.RankedGameResult` /
   `lisjong_arena.riichilab.ranked.run_ranked_game()`である
 - replacementをlisjongからre-exportするcompatibility shimは作らず、
