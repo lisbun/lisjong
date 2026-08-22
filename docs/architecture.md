@@ -751,6 +751,54 @@ furiten / yaku / scoring integration、`GameTrace` / `DecisionTrace`への
 追加はIssue #82のscope外であり、このcanonical representationを固定した
 後続Issueで扱う。
 
+#### exact wait ground-truth builder (Issue #84)
+
+Issue #84で、完全情報のconcealed tiles + own melds（chi / pon / open kan /
+added kan / concealed kanを含む既存`PublicMeld`）から、Level 2 exact
+`HandBelief`を決定論的に生成する`exact_hand_belief_with_waits()`
+（`lisjong.belief.exact_wait_ground_truth`）を追加した。`OwnHandState`から
+直接呼びたい場合の`exact_hand_belief_with_waits_for_own_hand_state()`も
+併せて提供する。
+
+- 対象stateはstable **13-equivalent hand**に限る。`len(concealed_tiles) +
+  3 * len(own_melds) == 13`をfail-closedで検証し、14-equivalentのdrawn
+  stateを暗黙にnon-tenpaiへ変換しない。`OwnHandState`を経由する場合も
+  `drawn_tile`が`None`であることを要求し、drawn stateを暗黙にdiscard後
+  stateへ変換しない
+- structural equivalent count（chi / pon / 任意の槓はすべて1 completed
+  meld = 3-equivalent）と、physical tile count（chi / pon = 3枚、槓 = 4枚）
+  を明確に分離する。5枚目candidate拒否等の物理制約はphysical countで判定し、
+  stable-state検証はstructural countで判定する
+- `expected_count` / `red_five_probability`はconcealed handのみから
+  `self_belief.concealed_hand_marginals()`を再利用して導出し、own melds内の
+  牌を加算しない。既存`exact_self_belief()`と同じconcealed-only contractを
+  共有する
+- own meldsを固定済み完成meldとして扱い、concealed部分だけを`(4 - meld数)
+  melds + 1雀頭`へ分解する全decompositionを、この用途専用のprivate
+  backtracking探索（`_enumerate_standard_decompositions()`）で列挙する。
+  `_python_shanten._StandardFormSearch`はshantenのbest block scoreだけを
+  返す探索であり、全decomposition列挙やmulti-label分類という異なる責務を
+  持つため流用・拡張しない
+- candidate `t`が完成させたgroup（pair / triplet / sequence内の低い端・
+  中央・高い端）から、tanki / shanpon / kanchan / penchan / ryanmen
+  low-side / ryanmen high-sideを機械的に分類する。1つのdecompositionだけを
+  採用せず、全decompositionでcandidateが関わるgroupすべてをmulti-labelで
+  記録する
+- 七対子・国士無双は`len(own_melds) == 0`の場合だけ評価する（concealed kan
+  を含め、meldが1件でも存在すれば評価しない）。七対子の待ちは`tanki`へ
+  包含し、専用channelは追加しない。国士は専用`kokushi` channelとし、
+  `tanki`へは含めない
+- 返り値の`wait_probability_raw`は、独立したsolver結果ではなく7つの
+  mechanism tableの論理和（existential OR）から`by construction`で導出する
+- concealed hand + own meldsの物理牌数（基本牌種ごとの合計枚数、色ごとの
+  赤5枚数）が、`lisjong.belief.tile_inventory`の`BASE_TILE_COUNT_MAX` /
+  `STANDARD_RED_FIVE_COUNTS`を超える場合はcandidate列挙前にfail-closedで
+  拒否する
+- 非聴牌はLevel 2 all-zeroとして返し、`None`にはしない
+- hidden handからのwait推定heuristic、learned estimator、training
+  dataset生成、Policyへの統合、放銃危険度、furiten / yaku / scoring
+  integrationはこのbuilderの責務ではない
+
 ## 依存方向
 
 次の図では、矢印の始点が終点の公開契約または外部APIを利用する。

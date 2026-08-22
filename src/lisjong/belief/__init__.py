@@ -29,6 +29,15 @@ optional featureとして追加した。wait beliefを推定するestimator、�
 wait ground truthを生成するbuilder、Policyからの利用はscope外であり、
 `estimate_conditional_uniform_hand_belief()` / `exact_self_belief()`等の
 既存estimatorはwait beliefを未提供（`None`）のままとする。
+Issue #84「完全情報手牌からcanonical structural wait ground truthを導出する」
+で、完全情報のconcealed tiles + own melds（chi / pon / open kan / added kan /
+concealed kanを含む既存`PublicMeld`）から、決定論的にLevel 2 exact
+`HandBelief`を生成する`exact_hand_belief_with_waits()`を追加した。tile
+marginals（`expected_count` / `red_five_probability`）はconcealed handのみの
+既存contractを維持し、wait / wait mechanismだけがconcealed hand + own melds
+を条件としたderived hand-state beliefである。hidden handからのwait推定
+heuristic、learned estimator、training dataset生成、Policyへの統合はこの
+builderの責務ではない。
 
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
@@ -57,6 +66,10 @@ from lisjong.belief.canonical_axes import (
 from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
 from lisjong.belief.conditional_uniform_hand_belief import (
     estimate_conditional_uniform_hand_belief,
+)
+from lisjong.belief.exact_wait_ground_truth import (
+    exact_hand_belief_with_waits,
+    exact_hand_belief_with_waits_for_own_hand_state,
 )
 from lisjong.belief.fixed_point import (
     EXPECTED_COUNT_MAX_RAW,
@@ -119,6 +132,8 @@ __all__ = [
     "derive_non_player_hidden_belief",
     "encode_public_tile_provenance",
     "estimate_conditional_uniform_hand_belief",
+    "exact_hand_belief_with_waits",
+    "exact_hand_belief_with_waits_for_own_hand_state",
     "exact_self_belief",
     "expected_count_to_raw",
     "probability_to_raw",
