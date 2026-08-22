@@ -304,9 +304,17 @@ represents one successfully completed execution. Arena固有metricやAI内部ana
 
 ### RiichiLab Client
 
-RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycleを担当する。
+RiichiLabのexternal execution / observationはproject-wideには`lisjong-arena`のtarget
+responsibilityである。Issue #17 / PR #18でranked one-game orchestrationのcanonical
+implementationとfirst-party CLIをArenaへ移し、Issue #86でlisjong側のlegacy
+`RankedGameResult` / `run_ranked_game()` / ranked CLIを除去済みである。本節で説明する
+lisjong側RiichiLab Clientは、Arenaがまだtemporaryにconsumerとして利用する
+lower-level Session / transport / trace / profile helpersと、Policy境界へ接続する
+Adapter実装を指す。
 
-- 認証、接続、受信、送信、timeout・time budget、ack、終了処理を担当する
+このlower-level runtimeは次を担当する。
+
+- 認証付きtransport接続、受信、送信、time metadata、ack、terminal event処理を担当する
 - `request_action`を受信し、必要なRiichiEnv SDK機能を使ってserialized
   observationをRiichiEnvの`Observation`として復元する
 - serialized Observation、seat-visibleなevent delta、online session内の
@@ -322,15 +330,15 @@ RiichiLab Clientは、RiichiLabとのオンライン接続とsession lifecycle�
 - `request_id`と`possible_actions`を管理し、選択結果をオンラインの合法手候補に
   対して送信前に再検証して、MJAI ActionとしてRiichiLabへ返す
 - `action_ack`等のprotocol上の応答を処理する
-- オンライン対局中に接続が切断された場合は安全に終了し、初期スコープでは
-  ゲーム途中からの再接続・復旧を試みない
+- オンライン対局中に接続が切断された場合は安全に終了し、現行lower-level
+  runtimeではゲーム途中からの再接続・復旧を試みない
 - tokenをログ、例外、Replay、test fixtureへ含めない
 - Policy固有の判断や学習処理を所有しない
+- rankedのrequeue / retry / continuous participation等の上位orchestrationを所有しない
 
 RiichiLab Clientが保持してよいmaterialized stateは、Policy入力に必要な
 seat-visibleな現在状態の正規化に限る。Policyの過去判断、AI内部memory、
 非公開情報を含めず、requestやtransport固有情報をPolicy入力へ混入させない。
-具体的なcounter algorithmと同期testは後続実装で確定する。
 
 #### `riichilab_adapter` package (Issue #38)
 
@@ -366,15 +374,12 @@ lifecycle管理、timeout schedulerは対象外であり、後続Issue #39が扱
 具体的なnormalization規則、`to_mjai()`実測結果、公式仕様との既知の未確認
 事項は[RiichiLab request_action Adapter](riichilab-adapter.md)を正本とする。
 
-#### `riichilab_client` package (Issues #39 / #42)
+#### `riichilab_client` package (Issues #39 / #42 / #86)
 
-`src/lisjong/riichilab_client/`は、RiichiLab Clientが担う責務のうち、
-「RiichiLab `/ws/validate` / `/ws/ranked`とのWebSocket transport lifecycle(接続、
-`start_game` / `request_action` / `action_ack` / `validation_result` /
-`end_game`、`request_id`のgame内lifecycle管理)」をIssue #39 / #42で実装した
-Python packageである。Policy判断、Observation変換、Action mapping、
-`possible_actions` semantic validationは`riichilab_adapter`(#38)を
-consumerとして再利用し、この境界へ再実装しない。
+`src/lisjong/riichilab_client/`は、RiichiLab `/ws/validate` / `/ws/ranked`との
+lower-level WebSocket lifecycleを実装するPython packageである。Policy判断、
+Observation変換、Action mapping、`possible_actions` semantic validationは
+`riichilab_adapter`(#38)をconsumerとして再利用し、この境界へ再実装しない。
 
 - 非公開の共通game session(`session.py`)へ`start_game` bind、request_idの
   monotonic検証、`action_ack` history、#38 Adapter呼び出しを1回だけ実装する。
@@ -384,31 +389,33 @@ consumerとして再利用し、この境界へ再実装しない。
   実際の`websockets` library接続を最小限のasync `recv`/`send`/`close`へ
   適合させる。`websockets`依存はこのpackage内だけで使用し、
   `policy_contract` / `policies` / `riichienv_adapter`へは逆流させない
-- `run_validation(policy, token)`(`validation.py`)が公開APIであり、
-  `ValidationResult`(`passed`、`validation_result_received`、
-  `end_game_received`、failure reason、request/response件数、
-  `action_ack` status historyを保持)を返す。tokenやraw Observation、
-  raw `request_action`全文等のsecretは`ValidationResult`へ含めない
-- `python -m lisjong.riichilab_client.validation`が、環境変数`BOT_TOKEN`
-  からtokenを読み込むlive validation用のCLI entry pointを提供する
-- `run_ranked_game(policy, token)`(`ranked.py`)は、ranked endpointへの接続自体を
-  queue参加としてjoin payloadを送らず、1 connection / 1 hanchanだけ処理する。
-  `end_game`後はdisconnectし、自動requeue・next game・reconnectを行わない
-- `RankedGameResult`は自seat、request/response件数、ack history、optionalな
-  final scoresを保持する。実ranked serverの`end_game`にscoresがない場合は
-  `None`とし、rank / ratingやscore値を推測・補完しない
+- `run_validation(policy, token)`(`validation.py`)がlisjong側の公開execution APIであり、
+  `ValidationResult`を返す。`python -m lisjong.riichilab_client.validation`も
+  validation用first-party CLIとして残す
+- ranked lower-level public APIとして`RankedSession`、`DEFAULT_RANKED_URL`、
+  `connect_ranked_transport()`、`drive_ranked_session()`、共通errors、protocol traceを
+  維持し、Arenaのranked one-game orchestrationがtemporaryにconsumerとなる
+- profile / credential / trace-path helpersも、Arena側へのphysical migrationまでは
+  lisjongに残し、Arena ranked CLIからtemporaryに利用される
+- Issue #86で`src/lisjong/riichilab_client/ranked.py`、`RankedGameResult`、
+  `run_ranked_game()`、legacy `python -m lisjong.riichilab_client.ranked`、package-root
+  exportsを削除済みである。canonical replacementは
+  `lisjong_arena.riichilab.ranked.RankedGameResult` /
+  `lisjong_arena.riichilab.ranked.run_ranked_game()`である
+- replacementをlisjongからre-exportするcompatibility shimは作らず、
+  `lisjong -> lisjong-arena`のreverse dependencyを導入しない
 
 request_idのmonotonic contract(`+1`連番を仮定しない)、`action_ack`を
 「1 request = 1 ack」と仮定しないack status history設計、
 client-side deadline cancellationをMVPでは実装しない判断、binary frame
-ignoreは両modeで共通である。validationの`end_game`後は
-`validation_result`を待ち、rankedの`end_game`後はdisconnectする。詳細は
+ignoreはvalidation/ranked lower-level Sessionで共通である。validationの
+`end_game`後は`validation_result`を待ち、rankedの`end_game`は
+`RankedSession`のterminalである。詳細は
 [RiichiLab WebSocket Client](riichilab-client.md)を正本とする。
 
-途中再接続を将来にわたって禁止するものではない。RiichiLabの仕様と必要性を
-確認し、別Issueで合意した場合に限り、初期スコープ外の機能として検討する。
-Issues #39 / #42時点ではmid-game reconnectを実装せず、unexpected disconnectは
-成功として扱わない。
+途中再接続を将来にわたって禁止するものではない。上位のretry / reconnect /
+requeue / continuous participationはArena側の別Issueで合意して扱う。lisjongに
+残るlower-level runtimeへ#86のcleanupと同時に追加しない。
 
 WebSocket、`request_id`、`possible_actions`、timeout、`action_ack`等の
 protocol情報はPolicyへ渡さない。共通のsemantic identity原則は
@@ -809,7 +816,8 @@ flowchart TD
     Runner --> Adapter["RiichiEnv Adapter"]
     Runner --> Contract["Policy contract"]
     Runner --> Trace["GameTrace observer output"]
-    Client["RiichiLab Client"] --> LabAPI["RiichiLab API"]
+    Arena["lisjong-arena ranked orchestration"] --> Client["lisjong lower-level RiichiLab runtime"]
+    Client --> LabAPI["RiichiLab API"]
     Client --> SDK
     Client --> Adapter
     Client --> Contract
@@ -820,9 +828,10 @@ flowchart TD
     Belief["belief"] --> Contract
 ```
 
-Local game runnerとRiichiLab Clientは、それぞれローカル対局とオンライン対局の
-オーケストレーションを担当する。両者はRiichiEnv AdapterとPolicy contractを
-直接利用し、Adapterによる変換・検証の前後でPolicy判断を呼び出す。
+Local game runnerはlisjong内でローカル対局をオーケストレーションする。RiichiLab
+ranked one-game orchestrationはArenaがcanonical ownerであり、現在はlisjongに残る
+lower-level Client runtimeとAdapter / Policy contractをconsumerとして利用する。
+この矢印は`lisjong-arena -> lisjong`であり、reverse dependencyは作らない。
 
 AdapterからPolicy contractへの矢印は、Policy入力や内部action等の共通契約へ
 依存し得ることを表し、AdapterがPolicyを呼び出す経路を表すものではない。
@@ -830,7 +839,8 @@ Policy implementationはPolicy contractを実装する。
 
 Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
 mjai、WebSocketへ依存しない。外部環境の仕様変更はLocal game runner、
-RiichiEnv Adapter、またはRiichiLab Clientで吸収し、Policyへ直接伝播させない。
+RiichiEnv Adapter、lisjong lower-level RiichiLab runtime、またはArena側execution /
+observation layerで吸収し、Policyへ直接伝播させない。
 
 Hand evaluationはPolicy contractのvalue型だけへ依存し、Policy implementationが
 Hand evaluationを利用する。依存方向は次のとおりで、逆流させない。

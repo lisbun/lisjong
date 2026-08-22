@@ -143,9 +143,10 @@ sinkの例外も無視せず対局失敗として伝播します。GameTraceはp
 
 ## RiichiLab bot実行profile
 
-RiichiLab botのCLI起動は、bot identity・credential・使用Policy・runtime
-outputを一方向に解決する**profile**を明示的に選択して行います
-(Issue #44)。少なくとも次の3 profileを提供します。
+RiichiLab botのprofile定義・credential解決・runtime output設定は、Issue #44で
+`lisjong.riichilab_client.profile` / `cli`へ実装しました。現在はlisjongの
+validation CLIと、`lisjong-arena`が所有するranked first-party CLIの双方から
+この設定層をtemporaryに再利用します。少なくとも次の3 profileを提供します。
 
 | profile | 用途 | credential環境変数 | Policy |
 | --- | --- | --- | --- |
@@ -159,12 +160,10 @@ outputを一方向に解決する**profile**を明示的に選択して行いま
 あり、上記runtime profileへは自動的に割り当てない。
 
 各profileは自分専用のcredential環境変数だけを参照し、他profileの
-credentialやPolicyへ暗黙fallbackしません。`--profile`未指定・未知
-profile・対応credential未設定は、いずれも非zero exit codeとsecretを
-含まないメッセージでfail closedします。profile設計の詳細
-(責務境界、fail closed、runtime output/trace保存先、multi-process
-independence)は[RiichiLab WebSocket Client](docs/riichilab-client.md)の
-「profile(Issue #44)」を参照してください。
+credentialやPolicyへ暗黙fallbackしません。profile設計の詳細
+(責務境界、fail closed、runtime output/trace保存先、independence)は
+[RiichiLab WebSocket Client](docs/riichilab-client.md)の「profile(Issue #44)」を
+参照してください。
 
 ## RiichiLab validation
 
@@ -187,29 +186,43 @@ credential環境変数はrepositoryへcommitせず、実行時に注入してく
 
 ## RiichiLab ranked smoke test
 
-`run_ranked_game(policy, token)`は、activeな検証用botでRiichiLab
-`/ws/ranked`へ1回だけ接続し、matchmaking queueから1 full hanchanの
-`end_game`まで処理して`RankedGameResult`を返します。接続自体がqueue参加であり、
-join payloadは送信しません。`end_game`後の自動再queue・次game・reconnectも
-行いません。
+RiichiLab ranked one-game orchestrationのcanonical implementationとfirst-party CLIは、
+`lisjong-arena` Issue #17でArenaへ移管しました。`lisjong` Issue #86でlegacyな
+`lisjong.riichilab_client.RankedGameResult` / `run_ranked_game()`と
+`python -m lisjong.riichilab_client.ranked`を削除済みです。compatibility re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
+
+現在の公開境界は次です。
+
+```text
+lisjong-arena
+    lisjong_arena.riichilab.ranked.RankedGameResult
+    lisjong_arena.riichilab.ranked.run_ranked_game()
+    first-party ranked CLI
+
+lisjong
+    RankedSession
+    connect_ranked_transport() / drive_ranked_session()
+    protocol trace
+    profile / credential helpers
+    RiichiLab Adapter
+```
+
+lower-level runtimeはまだlisjongに物理的に存在し、Arenaがそのpublic APIをtemporaryに
+利用します。ranked 1半荘の実行は次のArena entry pointから行います。
 
 ```powershell
 $env:LISJONG_DEV_BOT_TOKEN = "<検証用RiichiLab bot token>"
-python -m lisjong.riichilab_client.ranked --profile lisjong-dev
+python -m lisjong_arena.riichilab.ranked --profile lisjong-dev
 ```
 
-本命bot `lisjong`ではなく`lisjong-dev` / `lisjong-baseline`profileの
-検証botを使用し、原則1半荘だけ実行します。順位・score・ratingは成功条件では
-ありません。tokenはstdout/stderr、結果、test、docs、Issue / PRへ保存しません。
-詳しい責務境界とlive確認項目は
-[RiichiLab WebSocket Client](docs/riichilab-client.md)を参照してください。
+本命bot `lisjong`ではなく`lisjong-dev` / `lisjong-baseline`profileの検証botを
+使用し、原則1半荘だけ実行します。順位・score・ratingは成功条件ではありません。
+tokenはstdout/stderr、結果、test、docs、Issue / PRへ保存しません。
 
-`lisjong-dev`と`lisjong-baseline`は別processから同時起動でき、credential
-source・Policy selection・runtime namespace・trace/output pathが混線しない
-ことをtestで確認しています(`tests/test_riichilab_client_ranked.py`の
-`MultiProcessProfileIndependenceTest`)。ただし、RiichiLab側で同一user所有の
-別bot同士が同一ranked matchへ選ばれるかどうかは、lisjong側のprofile分離とは
-独立した外部サービスの挙動であり、現時点では調査・保証していません。
+profileごとのcredential source・Policy selection・runtime namespaceの独立性は
+`tests/test_riichilab_client_profile.py`で直接検証します。ranked process orchestration
+自体のtestはcanonical ownerである`lisjong-arena`側が担当します。
 
 ## RiichiLab protocol trace / runtime output
 
@@ -217,14 +230,17 @@ RiichiLab validation/ranked sessionの送受信protocol eventは、opt-inで
 secret-safeなJSON Lines(JSONL)として保存できます(Issue #45)。既定は
 無効(trace file非生成)です。
 
-- 明示`trace_path`(低レベルAPI)、または`RIICHILAB_TRACE_PATH`環境変数
-  (CLI、後方互換)を指定した場合だけ、指定pathへtraceを保存します
-- profile CLIでは`--trace`を指定すると、OSユーザーローカル領域配下
-  (Windowsは`%LOCALAPPDATA%\lisjong\...`等、repository配下は使いません)の
-  profile別runtime namespace(`.../traces/<profile>/...`)へ、
-  timestamp + UUID4で衝突しないfilenameを自動生成します
+- validationは`run_validation(..., trace_path=...)`、rankedはArenaの
+  `run_ranked_game(..., trace_path=...)`からopt-inする。ranked側もlisjongに残る
+  `JsonlProtocolTraceWriter`と`drive_ranked_session()`をtemporaryに再利用する
+- CLIの`RIICHILAB_TRACE_PATH` / `--trace` / `--trace-path`解決規則は既存helperを
+  共用し、Arena ranked CLIも同じprofile / trace-path semanticsを利用する
+- profile既定pathはOSユーザーローカル領域配下
+  (Windowsは`%LOCALAPPDATA%\lisjong\...`等、repository配下は使わない)の
+  profile別runtime namespace(`.../traces/<profile>/...`)へ、timestamp + UUID4で
+  衝突しないfilenameを自動生成する
 - BOT token、Authorization header、環境変数の値はtrace・runtime summary・
-  filename/directory名のいずれにも含めません
+  filename/directory名のいずれにも含めない
 
 詳細は[RiichiLab WebSocket Client](docs/riichilab-client.md)の
 「protocol trace(Issue #45)」「profile(Issue #44)」を参照してください。
@@ -258,14 +274,14 @@ hashなどを確認し、repository本体とは分離して管理します。
 
 Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
 RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
-`request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで
-実装し、validationを完走しています。RiichiLab ranked接続(`/ws/ranked`)の
-1半荘Clientも実装し、検証用botによるlive smoke testを完走しています。
-`lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profileを導入し、
-credential・Policy・runtime output(protocol trace含む)をprofile単位で
-分離、別processからの同時起動にも対応しています。AI-sideではremaining tile
-inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
-observation-aware heuristic / learned estimatorや学習済みmodelは未導入です。
+`request_action` Adapter、RiichiLab `/ws/validate` WebSocket Clientまで実装し、
+validationを完走しています。RiichiLab rankedのone-game orchestration / first-party
+CLIは`lisjong-arena`へcanonical移管済みで、lisjongにはArenaがtemporaryに利用する
+`RankedSession` / transport / protocol trace / profile helpers / Adapterが残っています。
+`lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profileによりcredential・Policy・
+runtime outputを分離しています。AI-sideではremaining tile inventoryと
+conditional-uniform `HandBelief` baselineまで実装済みで、observation-aware heuristic /
+learned estimatorや学習済みmodelは未導入です。
 
 ## License
 
