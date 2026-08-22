@@ -809,8 +809,10 @@ orchestrationとlower-level runtimeはArenaがcanonical + physical ownerであ�
 `RiichiLabSeatAdapter` / Policy contractをconsumerとして利用する。このrepository間の
 矢印は`lisjong-arena -> lisjong`であり、reverse dependencyは作らない。
 
-AdapterからPolicy contractへの矢印は、Policy入力や内部action等の共通契約へ
-依存し得ることを表し、AdapterがPolicyを呼び出す経路を表すものではない。
+RiichiEnv AdapterからPolicy contractへの矢印は、Policy入力や内部action等の
+共通の型・変換契約への依存を表す。RiichiEnv Adapter自身はPolicyを呼び出さない。
+一方、`RiichiLabSeatAdapter`からPolicy contractへの矢印は、同Adapterが
+`execute_policy()`を通じてPolicy判断まで仲介する経路を表す。
 Policy implementationはPolicy contractを実装する。
 
 Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
