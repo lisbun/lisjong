@@ -239,6 +239,22 @@ class DeterminismTest(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+class WaitBeliefNotProvidedTest(unittest.TestCase):
+    def test_baseline_estimator_leaves_wait_belief_unprovided(self) -> None:
+        # Issue #82のwait beliefは、意味的に誤ったall-zeroを既存estimatorへ
+        # 自動付与せず、未提供（None）のままとする。
+        policy_input = _policy_input(
+            concealed_tiles=(_tile(TileType(TileCategory.MANZU, 3)),)
+        )
+        result = estimate_conditional_uniform_hand_belief(policy_input, (0, 10, 5, 3))
+
+        for wind in Wind:
+            hand = result.hand(wind)
+            self.assertFalse(hand.has_wait_belief)
+            self.assertFalse(hand.has_wait_mechanism_belief)
+            self.assertIsNone(hand.wait_probability(MANZU_5))
+
+
 class NonPlayerMassNotFullyAllocatedTest(unittest.TestCase):
     def test_wall_like_mass_is_not_assigned_to_the_single_opponent(self) -> None:
         # SOUTHだけがconcealed slotを持ち、それ以外のremaining massは

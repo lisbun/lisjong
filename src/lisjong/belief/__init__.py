@@ -21,6 +21,14 @@ exact beliefのままとし、baseline推定の対象にしない。
 Issue #68でphysical tile poolごとのglobal conservation-preserving allocationを
 追加し、Issue #67でremaining inventoryから3 opponentsのbeliefをstrictに
 差し引く`NonPlayerHiddenBelief`とglobal conservation validationを追加した。
+Issue #82「HandBeliefに34牌種canonical axisのwait beliefを追加する」で、
+`HandBelief`へstructural completion waitのcanonical representation
+（`wait_probability`と、tanki / shanpon / kanchan / penchan /
+ryanmen low-side / ryanmen high-side / kokushiのwait mechanism table群）を
+optional featureとして追加した。wait beliefを推定するestimator、完全情報から
+wait ground truthを生成するbuilder、Policyからの利用はscope外であり、
+`estimate_conditional_uniform_hand_belief()` / `exact_self_belief()`等の
+既存estimatorはwait beliefを未提供（`None`）のままとする。
 
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
@@ -52,9 +60,11 @@ from lisjong.belief.conditional_uniform_hand_belief import (
 )
 from lisjong.belief.fixed_point import (
     EXPECTED_COUNT_MAX_RAW,
+    PROBABILITY_MAX_RAW,
     RED_FIVE_PROBABILITY_MAX_RAW,
     SCALE,
     expected_count_to_raw,
+    probability_to_raw,
     raw_to_semantic,
     red_five_probability_to_raw,
     round_half_to_even_ratio,
@@ -88,6 +98,7 @@ from lisjong.belief.tile_inventory import (
 __all__ = [
     "BASE_TILE_COUNT_MAX",
     "EXPECTED_COUNT_MAX_RAW",
+    "PROBABILITY_MAX_RAW",
     "RED_FIVE_AXIS_COUNT",
     "RED_FIVE_COUNT_MAX",
     "RED_FIVE_PROBABILITY_MAX_RAW",
@@ -110,6 +121,7 @@ __all__ = [
     "estimate_conditional_uniform_hand_belief",
     "exact_self_belief",
     "expected_count_to_raw",
+    "probability_to_raw",
     "raw_to_semantic",
     "red_five_index",
     "red_five_offset",

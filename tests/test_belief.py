@@ -14,9 +14,11 @@ from lisjong.belief.canonical_axes import (
 from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
 from lisjong.belief.fixed_point import (
     EXPECTED_COUNT_MAX_RAW,
+    PROBABILITY_MAX_RAW,
     RED_FIVE_PROBABILITY_MAX_RAW,
     SCALE,
     expected_count_to_raw,
+    probability_to_raw,
     raw_to_semantic,
     red_five_probability_to_raw,
     round_half_to_even_ratio,
@@ -210,6 +212,27 @@ class SemanticRangeValidationTest(unittest.TestCase):
     def test_red_five_probability_rejects_above_one(self) -> None:
         with self.assertRaises(ValueError):
             red_five_probability_to_raw(1.0 + 1e-9)
+
+    def test_probability_accepts_lower_and_upper_bound(self) -> None:
+        self.assertEqual(probability_to_raw(0.0), 0)
+        self.assertEqual(probability_to_raw(1.0), PROBABILITY_MAX_RAW)
+
+    def test_probability_rejects_out_of_range_value(self) -> None:
+        with self.assertRaises(ValueError):
+            probability_to_raw(-1e-9)
+        with self.assertRaises(ValueError):
+            probability_to_raw(1.0 + 1e-9)
+
+    def test_probability_rejects_bool(self) -> None:
+        with self.assertRaises(TypeError):
+            probability_to_raw(True)
+
+    def test_probability_shares_the_red_five_probability_scale(self) -> None:
+        self.assertEqual(PROBABILITY_MAX_RAW, RED_FIVE_PROBABILITY_MAX_RAW)
+        for value in (0.0, 0.25, 0.5, 1.0):
+            self.assertEqual(
+                probability_to_raw(value), red_five_probability_to_raw(value)
+            )
 
 
 class RoundingRuleTest(unittest.TestCase):

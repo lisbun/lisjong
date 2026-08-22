@@ -8,16 +8,17 @@ SCALE   = 8192 = 2^13
 raw     = round(semantic_value * SCALE)
 ```
 
-expected-count（0.0..4.0）はraw 0..32768、red-five probability（0.0..1.0）は
-raw 0..8192として表す。0/1/2/3/4枚および0.0/1.0はquantization errorなしで
-exactに表現できる。storage width（uint16）と中間演算幅は分離し、中間演算では
-Pythonの任意精度intをそのまま使う（NumPyのような追加dependencyは導入しない）。
+expected-count（0.0..4.0）はraw 0..32768、probability（0.0..1.0。red-five
+probability、wait probability等）はraw 0..8192として表す。0/1/2/3/4枚および
+0.0/1.0はquantization errorなしでexactに表現できる。storage width（uint16）と
+中間演算幅は分離し、中間演算ではPythonの任意精度intをそのまま使う
+（NumPyのような追加dependencyは導入しない）。
 
-semantic→raw変換（`expected_count_to_raw()` / `red_five_probability_to_raw()`）は、
-quantize（`value * SCALE`のround）する前に、semantic value自体が
-`0.0 <= value <= 4.0`（expected count）または`0.0 <= value <= 1.0`
-（red-five probability）の範囲内かをfail-closedで検証する。round後にraw
-rangeへ収まるかどうかでは判定しない。境界からわずかに外れた値
+semantic→raw変換（`expected_count_to_raw()` / `probability_to_raw()` /
+`red_five_probability_to_raw()`）は、quantize（`value * SCALE`のround）する
+前に、semantic value自体が`0.0 <= value <= 4.0`（expected count）または
+`0.0 <= value <= 1.0`（probability）の範囲内かをfail-closedで検証する。
+round後にraw rangeへ収まるかどうかでは判定しない。境界からわずかに外れた値
 （例: expected countの`-1e-9`や`4.0 + 1e-9`）も、round結果に関わらず拒否する。
 
 丸め規則はPython組み込み`round()`のround-half-to-even（銀行家丸め、
@@ -28,7 +29,8 @@ IEEE 754 roundTiesToEven相当）をそのまま採用する。half-way値
 SCALE = 8192  # 2 ** 13
 
 EXPECTED_COUNT_MAX_RAW = 4 * SCALE  # 32768
-RED_FIVE_PROBABILITY_MAX_RAW = SCALE  # 8192
+PROBABILITY_MAX_RAW = SCALE  # 8192
+RED_FIVE_PROBABILITY_MAX_RAW = PROBABILITY_MAX_RAW  # 8192
 
 _STORAGE_MAX_RAW = 0xFFFF  # unsigned 16-bit integerが表現できる上限
 
@@ -54,6 +56,16 @@ def expected_count_to_raw(value: float) -> int:
     quantize前のsemantic valueが範囲外なら拒否する。
     """
     return _semantic_to_raw(value, 0.0, 4.0, "expected_count")
+
+
+def probability_to_raw(value: float) -> int:
+    """probabilityの意味上の値（0.0..1.0）をraw fixed-point値へ変換する。
+
+    `[0.0, 1.0]`のprobability channel全般（wait belief等）が共有する
+    canonical変換である。量子化前に`value`自体が0.0..1.0の範囲内であることを
+    検証し、丸めは既存のround-half-to-even contractに従う。
+    """
+    return _semantic_to_raw(value, 0.0, 1.0, "probability")
 
 
 def red_five_probability_to_raw(value: float) -> int:
