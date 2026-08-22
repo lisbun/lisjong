@@ -10,13 +10,12 @@ Observation変換・Action mapping・`possible_actions` semantic validationは#3
 `websockets`への依存はこのpackage内だけで使用し、`policy_contract` /
 `policies` / `riichienv_adapter`へは逆流させない。
 
-validation result/runnerはpackage rootから公開するが、`python -m ...validation`で
-対象moduleを事前importしないようにlazy exportする。ranked one-game orchestration /
-CLIはlisjong-arenaへcanonical移管済みであり、このpackageはlower-level
-`RankedSession` / transport / trace等だけをtemporaryに提供する。
+validation one-game orchestration(`ValidationResult` / `run_validation()`) /
+CLI、execution profile / credential / common CLI compositionはいずれも
+`lisjong-arena`へcanonical移管済み(Issue #19、cleanup lisjong#89)であり、
+このpackageは`ValidationSession` / `RankedSession` / transport / protocol
+trace writer等のlower-level runtimeだけをtemporaryに提供する。
 """
-
-from typing import TYPE_CHECKING
 
 from lisjong.riichilab_client.errors import (
     ProtocolError,
@@ -45,26 +44,6 @@ from lisjong.riichilab_client.transport import (
     drive_validation_session,
 )
 
-if TYPE_CHECKING:
-    from lisjong.riichilab_client.validation import ValidationResult, run_validation
-
-
-def __getattr__(name: str) -> object:
-    """validation実行moduleの公開名を、package access時にだけimportする。"""
-    if name in {"ValidationResult", "run_validation"}:
-        from lisjong.riichilab_client.validation import ValidationResult, run_validation
-
-        exports = {
-            "ValidationResult": ValidationResult,
-            "run_validation": run_validation,
-        }
-    else:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-    globals().update(exports)
-    return exports[name]
-
-
 __all__ = [
     "DEFAULT_RANKED_URL",
     "DEFAULT_VALIDATION_URL",
@@ -77,7 +56,6 @@ __all__ = [
     "Transport",
     "TransportError",
     "UnexpectedDisconnectError",
-    "ValidationResult",
     "ValidationSession",
     "connect_ranked_transport",
     "connect_transport",
@@ -85,5 +63,4 @@ __all__ = [
     "drive_ranked_session",
     "drive_session",
     "drive_validation_session",
-    "run_validation",
 ]
