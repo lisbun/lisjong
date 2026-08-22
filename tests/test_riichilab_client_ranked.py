@@ -272,7 +272,7 @@ class RankedFakeTransportTest(unittest.TestCase):
     def test_disconnect_before_end_game_is_failure(self) -> None:
         session = RankedSession(MinimalPolicy())
         transport = _FakeTransport([_event_text({"type": "start_game", "id": 0})])
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self.seat)):
+        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
             with self.assertRaises(UnexpectedDisconnectError):
                 asyncio.run(drive_ranked_session(session, transport))
 
