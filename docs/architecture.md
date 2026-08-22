@@ -698,6 +698,12 @@ HandBelief
   action legality、yaku、点数、riichi状態、Policy action legality、
   remaining tile availabilityとは分離する。場に4枚見えていてremaining
   copiesが0でも、構造上の待ちならwait beliefはnon-zeroになり得る
+- waitはconcealed tilesだけでなく、そのwindについて観測可能なpublic hand
+  state（既知の副露）にも依存する。したがってwait beliefを持つ`HandBelief`は
+  牌種marginalだけでなく、concealed handとpublic meldを条件としたderived
+  hand-state beliefでもある。後続の完全情報ground-truth builderやestimatorも、
+  concealed tilesだけからwaitを判定せず、既知のmeldを含めてstructural waitを
+  決める
 - mechanism tableは、その牌種がどのwait mechanismでhand completionを
   成立させるかを表すauxiliary beliefである。七対子の待ちは`tanki`へ包含し、
   国士の待ちは`tanki`へ包含せず専用の`kokushi` channelで表す。ryanmenは

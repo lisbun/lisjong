@@ -16,9 +16,12 @@ probabilityを34牌種側へ追加加算しない。
 
 Issue #82で、同じ34牌種canonical axisを共有するwait belief（structural
 completion waitのprimary table + wait mechanism table群）をoptional field
-として追加した。wait beliefを推定するestimator、完全情報からwait ground
-truthを生成するbuilder、Policyからのwait belief利用はIssue #82のscope外で
-あり、既存estimatorはwait beliefを未提供（`None`）のままとする。
+として追加した。waitは当該windのconcealed tilesと既知のpublic meldの
+両方に依存するため、wait beliefを持つ`HandBelief`は牌種marginalだけでなく
+derived hand-state beliefでもある。wait beliefを推定するestimator、完全情報
+からwait ground truthを生成するbuilder、Policyからのwait belief利用は
+Issue #82のscope外であり、既存estimatorはwait beliefを未提供（`None`）の
+ままとする。
 """
 
 from dataclasses import dataclass
@@ -149,6 +152,13 @@ class HandBelief:
     action legality、yaku、点数、riichi状態、Policy action legality、
     残り枚数（remaining tile availability）とは分離する。場に4枚見えていて
     remaining copiesが0でも、構造上の待ちならwait beliefはnon-zeroになり得る。
+
+    waitはconcealed tilesだけでなく、そのwindについて観測可能なpublic hand
+    state（既知の副露）にも依存する。したがってwait beliefを持つ
+    `HandBelief`は牌種marginalだけでなく、concealed handとpublic meldを
+    条件としたderived hand-state beliefでもある。後続の完全情報ground-truth
+    builderやestimatorも、concealed tilesだけからwaitを判定せず、既知の
+    meldを含めてstructural waitを決める。
 
     mechanism tableは、その牌種がどのwait mechanismでhand completionを
     成立させるかのauxiliary beliefである。七対子の待ちは`tanki`へ包含し、
