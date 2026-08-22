@@ -29,9 +29,10 @@ class SeatMismatchError(RiichiLabAdapterError):
 
 
 class PossibleActionsValidationError(RiichiLabAdapterError):
-    """送信予定Actionが、server提示`possible_actions`へ一意にsemantic matchしない場合。
+    """送信予定Actionをserver提示`possible_actions`へ安全に照合できない場合。
 
-    0件一致、複数件一致(ambiguous)、比較不能のいずれもこの例外で拒否する。
+    malformed / unknown candidate、比較不能、semantic match 0件を拒否する。
+    同じsemantic Actionへ複数candidateが一致する場合は、1件以上一致として受理する。
     """
 
 
