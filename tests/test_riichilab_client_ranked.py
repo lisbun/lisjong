@@ -15,10 +15,7 @@ from lisjong.policy_contract.seat import Seat
 from lisjong.riichilab_adapter.adapter import SendReadyResponse
 from lisjong.riichilab_client.errors import ProtocolError, UnexpectedDisconnectError
 from lisjong.riichilab_client.session import RankedSession, ValidationSession
-from lisjong.riichilab_client.transport import (
-    TransportClosed,
-    drive_ranked_session,
-)
+from lisjong.riichilab_client.transport import TransportClosed, drive_ranked_session
 
 _PATCH_TARGET = "lisjong.riichilab_client.session.RiichiLabSeatAdapter"
 _FINAL_SCORES = [30000, 25000, 20000, 25000]
@@ -37,6 +34,10 @@ class _FakeAdapter:
                 "pai": "1m",
             },
         )
+
+
+def _fake_adapter_factory(self_seat, policy):
+    return _FakeAdapter(self_seat)
 
 
 class _FakeTransport:
@@ -76,10 +77,7 @@ class RankedSeatBindTest(unittest.TestCase):
         for seat_id in range(4):
             with self.subTest(seat_id=seat_id):
                 session = RankedSession(MinimalPolicy())
-                with patch(
-                    _PATCH_TARGET,
-                    lambda self_seat, policy: _FakeAdapter(self_seat),
-                ):
+                with patch(_PATCH_TARGET, _fake_adapter_factory):
                     session.handle_event({"type": "start_game", "id": seat_id})
                 self.assertEqual(session.status().seat, Seat(seat_id))
 
@@ -114,7 +112,7 @@ class RankedSeatBindTest(unittest.TestCase):
 
     def test_duplicate_different_seat_fails_closed(self) -> None:
         session = RankedSession(MinimalPolicy())
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             session.handle_event({"type": "start_game", "id": 1})
             with self.assertRaises(ProtocolError):
                 session.handle_event({"type": "start_game", "id": 2})
@@ -126,7 +124,7 @@ class RankedSeatBindTest(unittest.TestCase):
 
     def test_ranked_uses_the_common_monotonic_request_id_contract(self) -> None:
         session = RankedSession(MinimalPolicy())
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             session.handle_event({"type": "start_game", "id": 0})
             session.handle_event(_request_action(1))
             session.handle_event(_request_action(37))
@@ -137,7 +135,7 @@ class RankedSeatBindTest(unittest.TestCase):
 class RankedTerminalTest(unittest.TestCase):
     def _started_session(self) -> RankedSession:
         session = RankedSession(MinimalPolicy())
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             session.handle_event({"type": "start_game", "id": 0})
         return session
 
@@ -245,7 +243,7 @@ class RankedFakeTransportTest(unittest.TestCase):
                 _event_text({"type": "start_game", "id": 1}),
             ]
         )
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             asyncio.run(drive_ranked_session(session, transport))
 
         sent = [json.loads(message) for message in transport.sent]
@@ -265,14 +263,14 @@ class RankedFakeTransportTest(unittest.TestCase):
                 _event_text({"type": "end_game"}),
             ]
         )
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             asyncio.run(drive_ranked_session(session, transport))
         self.assertTrue(session.is_complete)
 
     def test_disconnect_before_end_game_is_failure(self) -> None:
         session = RankedSession(MinimalPolicy())
         transport = _FakeTransport([_event_text({"type": "start_game", "id": 0})])
-        with patch(_PATCH_TARGET, lambda self_seat, policy: _FakeAdapter(self_seat)):
+        with patch(_PATCH_TARGET, _fake_adapter_factory):
             with self.assertRaises(UnexpectedDisconnectError):
                 asyncio.run(drive_ranked_session(session, transport))
 
