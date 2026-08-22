@@ -465,7 +465,10 @@ semantic（推定値かexact観測値か）は明確に区別する。Issue #63�
 provenanceとstandard physical inventoryから牌保存則を検証しremaining tile
 inventoryを導出する処理を追加した。Issue #65で、そのremaining inventoryを
 条件付き一様に配分するlisjong初の他家`HandBelief`推定
-（`estimate_conditional_uniform_hand_belief()`）を追加した。
+（`estimate_conditional_uniform_hand_belief()`）を追加した。Issue #82で、
+同じ34牌種canonical axisを共有するstructural completion waitのcanonical
+representation（`wait_probability`とwait mechanism table群）を`HandBelief`の
+optional featureとして追加した。
 
 これらは前述のLong-term AI architectureにおける現在のrepresentation / physical
 accounting / baseline estimatorであり、将来方式をこの具体contractへ固定する
@@ -665,6 +668,82 @@ lisjong初の他家`HandBelief`推定をIssue #65で実装したmoduleである�
 concealed slot counts自体の複雑な導出（discard / meld / riichi等による
 heuristic補正、筋・壁・危険牌推定を含む）、wall / dead wallの牌種別belief
 出力、joint distribution、Policyへの統合はこのmoduleの責務ではない。
+
+#### wait belief (Issue #82)
+
+`HandBelief`は、Issue #82で34牌種canonical axisのwait beliefをoptional
+featureとして保持できる。expected count / red-five probabilityと同じ
+`SCALE = 8192`固定小数点contractを共有し、値は`[0.0, 1.0]`のprobability
+（raw 0..8192）である。
+
+```text
+HandBelief
+├── expected_count_raw                  [34]
+├── red_five_probability_raw            [3]
+│
+├── wait_probability_raw                [34] | None
+│
+├── tanki_wait_probability_raw          [34] | None
+├── shanpon_wait_probability_raw        [34] | None
+├── kanchan_wait_probability_raw        [34] | None
+├── penchan_wait_probability_raw        [34] | None
+├── ryanmen_low_side_probability_raw    [34] | None
+├── ryanmen_high_side_probability_raw   [34] | None
+└── kokushi_wait_probability_raw        [34] | None
+```
+
+- `wait_probability`は**structural completion wait**のprimary beliefで
+  ある。「現在の手牌構造へ牌種tを1枚加えたとき、通常手・七対子・国士無双の
+  いずれかの完成形を構成できる」probabilityを表し、furiten、ron / tsumo
+  action legality、yaku、点数、riichi状態、Policy action legality、
+  remaining tile availabilityとは分離する。場に4枚見えていてremaining
+  copiesが0でも、構造上の待ちならwait beliefはnon-zeroになり得る
+- mechanism tableは、その牌種がどのwait mechanismでhand completionを
+  成立させるかを表すauxiliary beliefである。七対子の待ちは`tanki`へ包含し、
+  国士の待ちは`tanki`へ包含せず専用の`kokushi` channelで表す。ryanmenは
+  待ち牌自身のrankが元taatsuより低い側か高い側かで`ryanmen_low_side` /
+  `ryanmen_high_side`へ分ける（`2m3m -> 1m`がlow side、`-> 4m`がhigh side）。
+  low / highは元taatsuのindexやsequence startを意味しない
+- tableはすべてlength 34であり、待ち形ごとに圧縮しない。各mechanismが構造上
+  占め得ないcanonical slotはcanonical zeroとし、non-zero rawを与えられた
+  場合はfail closedする。`kanchan`は各色rank 2..8、`penchan`は各色rank
+  3 / 7、`ryanmen_low_side`は各色rank 1..6、`ryanmen_high_side`は各色rank
+  4..9、`kokushi`は13幺九牌のみnon-zeroを取り得る。`wait` / `tanki` /
+  `shanpon`は34牌種すべてvalidである
+- mechanismはmulti-labelであり、同一牌種について複数mechanismが同時に
+  non-zeroでもよい。probabilistic beliefでは各channelがmarginal
+  probabilityなので、mechanism間の`sum <= 1.0`や、
+  `wait = sum / max / OR(mechanism)`のような代数制約はconstructorで課さない。
+  多面待ちでは複数slotが同時に1になるため、table sumが1.0を超えることも
+  合法とする。marginal群から単一のjoint distributionを復元できることも
+  保証しない
+- availabilityは3 levelとする。Level 0は`wait_probability`もmechanism
+  groupも未提供、Level 1は`wait_probability`のみ提供、Level 2は
+  `wait_probability` + mechanism group一式を提供する。mechanism group内の
+  partial availabilityと、mechanism groupだけがあって`wait_probability`が
+  `None`の状態は拒否する。`None`は「estimatorがそのfeatureを提供して
+  いない」、all-zeroは「estimatorが全wait probabilityを0と推定している
+  （非聴牌等）」を意味し、両者を混同しない
+- semantic accessor（`wait_probability(tile_type)`、
+  `tanki_wait_probability(tile_type)`等）は、未提供featureに対して`None`を
+  返す。availabilityは`has_wait_belief` / `has_wait_mechanism_belief`で
+  判定する
+- fixed-point変換は既存contractを共有し、`[0.0, 1.0]`のprobability channel
+  共通のsemantic→raw変換として`fixed_point.probability_to_raw()`と
+  `PROBABILITY_MAX_RAW`を追加した。新しいscaleやfloat storage、
+  red-five側の既存public APIの変更は導入していない
+- wait beliefは既存fieldのdefaultを変えないoptional fieldであり、既存の
+  `HandBelief`生成箇所（`exact_self_belief()` /
+  `estimate_conditional_uniform_hand_belief()`等）はwait beliefを未提供
+  （`None`）のままとする。意味的に誤ったall-zero wait beliefを既存
+  estimatorへ自動付与しない
+
+完全情報から0/1 multi-label wait ground truthを生成するbuilder /
+decomposition enumerator、hidden handからのwait推定heuristic、learned
+estimator、training dataset、Policyからのwait belief利用、放銃危険度、
+furiten / yaku / scoring integration、`GameTrace` / `DecisionTrace`への
+追加はIssue #82のscope外であり、このcanonical representationを固定した
+後続Issueで扱う。
 
 ## 依存方向
 
