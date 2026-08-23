@@ -197,17 +197,27 @@ lisjong-arena
     first-party ranked / validation CLI
     execution profile / credential / common CLI composition
     client errors / Session / Transport / protocol trace writer
-
-lisjong
     RiichiLabSeatAdapter / SendReadyResponse
     request_action parsing / MJAI response conversion
     possible_actions semantic validation / Adapter-specific errors
+
+lisjong
     Policy / DecisionContext / InternalAction
+    RiichiEnv Adapter(build_decision() / SeatMaterializedState /
+        RiichiEnvActionMappingSession / RiichiEnvActionMapping /
+        build_policy_input())
 ```
 
-Issue #91 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照し得るため、
-migration全体をphysical duplicate完全解消とは扱いません。Arenaのpost-cleanup pin syncで
-cleanup merge SHAをexact targetとして反映した後に完全解消とします。
+`RiichiLabSeatAdapter` / request_action parsing / MJAI response conversion /
+possible_actions semantic validation / Adapter-specific errorsは、`lisjong-arena`
+Issue #27 / PR #28でArena-local implementation(`lisjong_arena.riichilab.adapter`)へ
+canonical + physical migrationし、`lisjong` Issue #94でlisjong側legacy
+`src/lisjong/riichilab_adapter/`を削除しています。compatibility re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
+
+Issue #91 / #94それぞれのmerge直後はArenaのlisjong dependency pinがcleanup前revisionを
+参照し得るため、migration全体をphysical duplicate完全解消とは扱いません。Arenaの
+post-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に完全解消とします。
 
 ranked 1半荘・validation 1 gameの実行は、いずれも次のArena entry pointから行います。
 
@@ -221,12 +231,12 @@ python -m lisjong_arena.riichilab.validation --profile lisjong-dev
 使用し、原則1半荘・1 gameだけ実行します。順位・score・ratingは成功条件ではありません。
 tokenはstdout/stderr、結果、test、docs、Issue / PRへ保存しません。
 
-profileごとのcredential source・Policy selection・runtime namespaceの独立性、および
-ranked / validation process orchestration、Session / Transport / trace / client errorの
-testは、canonical ownerである`lisjong-arena`側が担当します。lisjong側は
-`tests/test_riichilab_adapter.py`、`tests/test_riichilab_request_action.py`、
-`tests/test_riichilab_possible_action_validation.py`等でAdapter / Policy境界の
-regressionを保持します。
+profileごとのcredential source・Policy selection・runtime namespaceの独立性、
+ranked / validation process orchestration、Session / Transport / trace / client error、
+`RiichiLabSeatAdapter` / request_action parsing / MJAI response conversion /
+possible_actions semantic validationのtestは、canonical ownerである`lisjong-arena`側が
+担当します。lisjong側は`tests/test_policy_execution.py`等でPolicy contract / RiichiEnv
+Adapter境界のregressionを保持します。
 
 ## RiichiLab protocol trace / runtime output
 
@@ -279,14 +289,18 @@ hashなどを確認し、repository本体とは分離して管理します。
 ## 開発状況
 
 Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
-RiichiEnv Adapter、共通Policy実行境界、Local game runner、RiichiLab
-`request_action` Adapterまで実装しています。RiichiLab `/ws/validate` / `/ws/ranked`
-lower-level runtimeとrankedのone-game orchestration /
-first-party CLIは`lisjong-arena` Issue #17で、validationのone-game orchestration /
-first-party CLI / execution profile・credential・common CLI compositionは同Issue #19で
-それぞれcanonical移管済みです。client errors / Session / Transport / protocol trace writerも
-Arena Issue #23 / PR #24でcanonical + physical migrationし、lisjong Issue #91でlegacy
-copyを削除しました。`RiichiLabSeatAdapter`とAdapter / Policy semanticsはlisjongに残ります。
+RiichiEnv Adapter、共通Policy実行境界、Local game runnerまで実装しています。
+RiichiLab `/ws/validate` / `/ws/ranked` lower-level runtimeとrankedのone-game
+orchestration / first-party CLIは`lisjong-arena` Issue #17で、validationの
+one-game orchestration / first-party CLI / execution profile・credential・
+common CLI compositionは同Issue #19でそれぞれcanonical移管済みです。client errors /
+Session / Transport / protocol trace writerもArena Issue #23 / PR #24で
+canonical + physical migrationし、lisjong Issue #91でlegacy copyを削除しました。
+RiichiLab protocol-facing decision bridge(`RiichiLabSeatAdapter` / request_action
+parsing / MJAI response conversion / possible_actions semantic validation)も
+Arena Issue #27 / PR #28でcanonical + physical migrationし、lisjong Issue #94で
+legacy `src/lisjong/riichilab_adapter/`を削除しました。lisjongに残るのはPolicy /
+DecisionContext / InternalAction等のAI-side semanticsと、RiichiEnv Adapterです。
 `lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profile mappingはArena側が
 所有し、mappingが参照するPolicy class自体はlisjongが引き続き所有します。AI-sideでは
 remaining tile inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
