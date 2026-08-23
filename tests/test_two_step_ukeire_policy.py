@@ -4,14 +4,17 @@ import ast
 import inspect
 import itertools
 import unittest
+from dataclasses import FrozenInstanceError, fields
 from unittest.mock import patch
 
 import lisjong.policies.two_step_ukeire as two_step
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import TwoStepUkeirePolicy, UkeirePolicy
 from lisjong.policies.two_step_ukeire import (
+    TwoStepUkeireCandidateEvaluation,
     TwoStepUkeirePolicyError,
     _best_next_ukeire,
+    _evaluate_and_choose_discard,
     _known_counts_after_draw,
     _known_tile_counts,
     _remove_one_matching_tile,
@@ -141,6 +144,156 @@ def _decision(
 
 def _discard(tile: Tile, *, tsumogiri: bool = False) -> DiscardAction:
     return DiscardAction(actor=Seat.SEAT_0, tile=tile, tsumogiri=tsumogiri)
+
+
+class CandidateEvaluationValueTest(unittest.TestCase):
+    def test_value_is_immutable_and_keeps_canonical_action(self) -> None:
+        action = _discard(SOUZU_9)
+        evaluation = TwoStepUkeireCandidateEvaluation(action, 1, 0, None)
+
+        self.assertIs(evaluation.action, action)
+        self.assertEqual(
+            tuple(field.name for field in fields(evaluation)),
+            (
+                "action",
+                "post_discard_shanten",
+                "current_ukeire_count",
+                "second_step_ukeire_score",
+            ),
+        )
+        with self.assertRaises(FrozenInstanceError):
+            evaluation.current_ukeire_count = 1
+
+    def test_none_and_evaluated_zero_are_distinct(self) -> None:
+        action = _discard(SOUZU_9)
+
+        self.assertNotEqual(
+            TwoStepUkeireCandidateEvaluation(action, 1, None, None),
+            TwoStepUkeireCandidateEvaluation(action, 1, 0, None),
+        )
+        self.assertNotEqual(
+            TwoStepUkeireCandidateEvaluation(action, 1, 0, None),
+            TwoStepUkeireCandidateEvaluation(action, 1, 0, 0),
+        )
+
+    def test_value_rejects_wrong_types_without_accepting_bool_as_int(self) -> None:
+        action = _discard(SOUZU_9)
+        invalid_values = (
+            ((object(), 1, None, None), "action"),
+            ((action, True, None, None), "post_discard_shanten"),
+            ((action, 1, False, None), "current_ukeire_count"),
+            ((action, 1, None, True), "second_step_ukeire_score"),
+        )
+
+        for arguments, field_name in invalid_values:
+            with self.subTest(field_name=field_name), self.assertRaises(TypeError):
+                TwoStepUkeireCandidateEvaluation(*arguments)
+
+
+class CandidateEvaluationPipelineTest(unittest.TestCase):
+    def test_shanten_stage_evaluates_all_candidates_but_not_later_loser_stages(
+        self,
+    ) -> None:
+        break_tenpai = _discard(MANZU_4)
+        keep_tenpai = _discard(RED_DRAGON)
+
+        with (
+            patch.object(two_step, "_ukeire_count", return_value=0),
+            patch.object(
+                two_step,
+                "_second_step_score",
+                side_effect=AssertionError("tenpai must not enter second step"),
+            ),
+        ):
+            selected, evaluations = _evaluate_and_choose_discard(
+                _make_input(_TANKI_VERSUS_ONE_SHANTEN_HAND),
+                (keep_tenpai, break_tenpai),
+            )
+
+        by_action = {evaluation.action: evaluation for evaluation in evaluations}
+        self.assertIs(selected, keep_tenpai)
+        self.assertEqual(
+            [evaluation.action for evaluation in evaluations],
+            [break_tenpai, keep_tenpai],
+        )
+        self.assertEqual(by_action[break_tenpai].post_discard_shanten, 1)
+        self.assertIsNone(by_action[break_tenpai].current_ukeire_count)
+        self.assertIsNone(by_action[break_tenpai].second_step_ukeire_score)
+        self.assertEqual(by_action[keep_tenpai].post_discard_shanten, 0)
+        self.assertEqual(by_action[keep_tenpai].current_ukeire_count, 0)
+        self.assertIsNone(by_action[keep_tenpai].second_step_ukeire_score)
+
+    def test_current_ukeire_stage_selects_without_second_step(self) -> None:
+        lower_current_ukeire = _discard(MANZU_2)
+        higher_current_ukeire = _discard(MANZU_4)
+
+        with patch.object(
+            two_step,
+            "_second_step_score",
+            side_effect=AssertionError("unique current ukeire must end evaluation"),
+        ):
+            selected, evaluations = _evaluate_and_choose_discard(
+                _make_input(_NINE_MANZU_HAND),
+                (lower_current_ukeire, higher_current_ukeire),
+            )
+
+        by_action = {evaluation.action: evaluation for evaluation in evaluations}
+        self.assertIs(selected, higher_current_ukeire)
+        self.assertGreater(
+            by_action[higher_current_ukeire].current_ukeire_count,
+            by_action[lower_current_ukeire].current_ukeire_count,
+        )
+        self.assertTrue(
+            all(
+                evaluation.second_step_ukeire_score is None
+                for evaluation in evaluations
+            )
+        )
+
+    def test_second_step_values_are_the_selection_source_of_truth(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+
+        selected, evaluations = _evaluate_and_choose_discard(
+            _make_input(_TWO_STEP_HAND),
+            (discard_9s, discard_white),
+        )
+
+        by_action = {evaluation.action: evaluation for evaluation in evaluations}
+        self.assertIs(selected, discard_white)
+        self.assertEqual(by_action[discard_9s].second_step_ukeire_score, 122)
+        self.assertEqual(by_action[discard_white].second_step_ukeire_score, 126)
+
+    def test_evaluated_zero_second_step_uses_existing_stable_tie_break(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+
+        with patch.object(two_step, "_second_step_score", return_value=0):
+            selected, evaluations = _evaluate_and_choose_discard(
+                _make_input(_TWO_STEP_HAND),
+                (discard_white, discard_9s),
+            )
+
+        self.assertIs(selected, discard_9s)
+        self.assertEqual(
+            [evaluation.second_step_ukeire_score for evaluation in evaluations],
+            [0, 0],
+        )
+
+    def test_all_input_permutations_have_identical_canonical_snapshot(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+        results = tuple(
+            _evaluate_and_choose_discard(_make_input(_TWO_STEP_HAND), actions)
+            for actions in itertools.permutations((discard_9s, discard_white))
+        )
+
+        self.assertTrue(all(selected is discard_white for selected, _ in results))
+        self.assertTrue(all(snapshot == results[0][1] for _, snapshot in results))
+        self.assertEqual(
+            [evaluation.action for evaluation in results[0][1]],
+            [discard_9s, discard_white],
+        )
 
 
 class PolicyPriorityTest(unittest.TestCase):

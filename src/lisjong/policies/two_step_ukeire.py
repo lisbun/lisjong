@@ -25,6 +25,7 @@ Issue #76により、`choose_action()`は次の優先順位でAlways Riichi base
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policy_contract.action import (
@@ -62,6 +63,56 @@ _ALL_TILE_TYPES: tuple[TileType, ...] = tuple(
 
 class TwoStepUkeirePolicyError(Exception):
     """入力不整合または未定義の状況をPolicyがfail closedする場合。"""
+
+
+@dataclass(frozen=True, slots=True)
+class TwoStepUkeireCandidateEvaluation:
+    """TwoStepUkeireが実際に使用した1打牌候補のsemantic評価値。"""
+
+    action: DiscardAction
+    post_discard_shanten: int
+    current_ukeire_count: int | None
+    second_step_ukeire_score: int | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, DiscardAction):
+            raise TypeError("action must be a DiscardAction")
+        if type(self.post_discard_shanten) is not int:
+            raise TypeError("post_discard_shanten must be an int")
+        if self.current_ukeire_count is not None and (
+            type(self.current_ukeire_count) is not int
+        ):
+            raise TypeError("current_ukeire_count must be an int or None")
+        if self.second_step_ukeire_score is not None and (
+            type(self.second_step_ukeire_score) is not int
+        ):
+            raise TypeError("second_step_ukeire_score must be an int or None")
+
+
+@dataclass(slots=True)
+class _DiscardCandidateWork:
+    """1 decision内だけで使う、後続計算用のprivate mutable候補状態。"""
+
+    action: DiscardAction
+    post_discard_hand: list[Tile]
+    post_discard_shanten: int
+    current_ukeire_count: int | None = None
+    second_step_ukeire_score: int | None = None
+
+    def snapshot(self) -> TwoStepUkeireCandidateEvaluation:
+        return TwoStepUkeireCandidateEvaluation(
+            action=self.action,
+            post_discard_shanten=self.post_discard_shanten,
+            current_ukeire_count=self.current_ukeire_count,
+            second_step_ukeire_score=self.second_step_ukeire_score,
+        )
+
+
+def _discard_action_sort_key(
+    action: DiscardAction,
+) -> tuple[tuple[int, int, bool], bool]:
+    """既存stable tie-breakと共通のDiscardAction canonical順。"""
+    return (tile_sort_key(action.tile), action.tsumogiri)
 
 
 def _winning_action_sort_key(action: RonAction | TsumoAction) -> tuple[object, ...]:
@@ -273,68 +324,106 @@ def _second_step_score(
 def _choose_discard(
     policy_input: PolicyInput, discard_actions: tuple[DiscardAction, ...]
 ) -> DiscardAction:
+    selected, _ = _evaluate_and_choose_discard(policy_input, discard_actions)
+    return selected
+
+
+def _evaluate_and_choose_discard(
+    policy_input: PolicyInput, discard_actions: tuple[DiscardAction, ...]
+) -> tuple[DiscardAction, tuple[TwoStepUkeireCandidateEvaluation, ...]]:
     known_counts = _known_tile_counts(policy_input)
     evaluator = _DecisionShantenEvaluator()
     evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
-    minimum_shanten = min(shanten for shanten, _, _ in evaluated)
-    minimum_shanten_candidates = tuple(
-        (action, hand)
-        for shanten, action, hand in evaluated
-        if shanten == minimum_shanten
+    return _evaluate_and_choose_prepared(
+        policy_input,
+        evaluated,
+        evaluator,
+        known_counts=known_counts,
     )
 
-    with_current_ukeire = tuple(
-        (
-            _ukeire_count(hand, known_counts, minimum_shanten, evaluator),
-            action,
-            hand,
-        )
-        for action, hand in minimum_shanten_candidates
+
+def _evaluate_and_choose_prepared(
+    policy_input: PolicyInput,
+    evaluated: tuple[_DiscardCandidateWork, ...],
+    evaluator: _DecisionShantenEvaluator,
+    *,
+    known_counts: Mapping[TileType, int] | None = None,
+) -> tuple[DiscardAction, tuple[TwoStepUkeireCandidateEvaluation, ...]]:
+    """準備済み候補をstagedに評価し、選択とcanonical snapshotを返す。"""
+    if known_counts is None:
+        known_counts = _known_tile_counts(policy_input)
+    minimum_shanten = min(candidate.post_discard_shanten for candidate in evaluated)
+    minimum_shanten_candidates = tuple(
+        candidate
+        for candidate in evaluated
+        if candidate.post_discard_shanten == minimum_shanten
     )
+
+    for candidate in minimum_shanten_candidates:
+        candidate.current_ukeire_count = _ukeire_count(
+            candidate.post_discard_hand,
+            known_counts,
+            minimum_shanten,
+            evaluator,
+        )
     maximum_current_ukeire = max(
-        current_ukeire for current_ukeire, _, _ in with_current_ukeire
+        candidate.current_ukeire_count for candidate in minimum_shanten_candidates
     )
     finalists = tuple(
-        (action, hand)
-        for current_ukeire, action, hand in with_current_ukeire
-        if current_ukeire == maximum_current_ukeire
+        candidate
+        for candidate in minimum_shanten_candidates
+        if candidate.current_ukeire_count == maximum_current_ukeire
     )
 
     if len(finalists) == 1:
-        return finalists[0][0]
-
-    if minimum_shanten == 0:
-        return min(
-            (action for action, _ in finalists),
-            key=lambda action: (tile_sort_key(action.tile), action.tsumogiri),
+        selected = finalists[0].action
+    elif minimum_shanten == 0:
+        selected = min(
+            (candidate.action for candidate in finalists),
+            key=_discard_action_sort_key,
+        )
+    else:
+        for candidate in finalists:
+            candidate.second_step_ukeire_score = _second_step_score(
+                candidate.post_discard_hand,
+                known_counts,
+                minimum_shanten,
+                evaluator,
+            )
+        maximum_second_step = max(
+            candidate.second_step_ukeire_score for candidate in finalists
+        )
+        selected = min(
+            (
+                candidate.action
+                for candidate in finalists
+                if candidate.second_step_ukeire_score == maximum_second_step
+            ),
+            key=_discard_action_sort_key,
         )
 
-    with_second_step = tuple(
-        (
-            _second_step_score(hand, known_counts, minimum_shanten, evaluator),
-            action,
+    snapshots = tuple(
+        candidate.snapshot()
+        for candidate in sorted(
+            evaluated,
+            key=lambda candidate: _discard_action_sort_key(candidate.action),
         )
-        for action, hand in finalists
     )
-    maximum_second_step = max(score for score, _ in with_second_step)
-    return min(
-        (action for score, action in with_second_step if score == maximum_second_step),
-        key=lambda action: (tile_sort_key(action.tile), action.tsumogiri),
-    )
+    return selected, snapshots
 
 
 def _evaluate_post_discard_hands(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
     evaluator: _DecisionShantenEvaluator,
-) -> tuple[tuple[int, DiscardAction, list[Tile]], ...]:
+) -> tuple[_DiscardCandidateWork, ...]:
     """元のlegal discardごとの打牌後向聴数と手牌を評価する。"""
     concealed_tiles = policy_input.own_hand.concealed_tiles
     return tuple(
-        (
-            evaluator.calculate(remaining_hand),
-            action,
-            remaining_hand,
+        _DiscardCandidateWork(
+            action=action,
+            post_discard_hand=remaining_hand,
+            post_discard_shanten=evaluator.calculate(remaining_hand),
         )
         for action in discard_actions
         for remaining_hand in (_remove_one_matching_tile(concealed_tiles, action.tile),)

@@ -363,11 +363,21 @@ class GenbutsuSetTest(unittest.TestCase):
             players=tuple(players),
         )
 
-        with patch.object(genbutsu, "_choose_discard") as filtered_choice:
+        with patch.object(
+            genbutsu,
+            "_evaluate_and_choose_prepared",
+            side_effect=lambda _input, candidates, _evaluator: (
+                candidates[0].action,
+                (),
+            ),
+        ) as filtered_choice:
             selected = self.policy.choose_action(decision)
 
-        filtered_choice.assert_not_called()
-        self.assertEqual(selected, TwoStepUkeirePolicy().choose_action(decision))
+        candidate_actions = tuple(
+            candidate.action for candidate in filtered_choice.call_args.args[1]
+        )
+        self.assertEqual(candidate_actions, decision.legal_actions)
+        self.assertIs(selected, decision.legal_actions[0])
 
     def test_red_and_normal_five_share_safety_but_keep_action_identity(self) -> None:
         normal = _discard(MANZU_5)
@@ -377,14 +387,20 @@ class GenbutsuSetTest(unittest.TestCase):
 
         with patch.object(
             genbutsu,
-            "_choose_discard",
-            side_effect=lambda _policy_input, actions: actions[0],
+            "_evaluate_and_choose_prepared",
+            side_effect=lambda _input, candidates, _evaluator: (
+                candidates[0].action,
+                (),
+            ),
         ) as choose_discard:
             selected = self.policy.choose_action(
                 _decision(concealed, (normal, red), players=players)
             )
 
-        self.assertEqual(choose_discard.call_args.args[1], (normal, red))
+        self.assertEqual(
+            tuple(candidate.action for candidate in choose_discard.call_args.args[1]),
+            (normal, red),
+        )
         self.assertIs(selected, normal)
 
 

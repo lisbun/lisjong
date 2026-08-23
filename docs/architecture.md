@@ -137,6 +137,21 @@ Policyは、環境に依存しない1 seat・1 decision分の`DecisionContext`�
 `Policy.choose_action(decision)`として表し、詳細は
 [Policy契約](policy-contract.md)を正本とする。
 
+#### TwoStepUkeireのtyped intermediate value
+
+`lisjong.policies.two_step_ukeire.TwoStepUkeireCandidateEvaluation`は、
+`TwoStepUkeirePolicy`が実際の段階評価で使用した打牌後向聴数、現在受け入れ、
+2段階受け入れscoreを保持する、lisjong-ownedなimmutable typed semantic valueである。
+現在受け入れと2段階受け入れの`None`は、その候補がlazyな評価stageへ進まず未評価で
+あることを表し、評価結果の`0`とは区別する。候補collectionは既存のDiscardAction
+stable tie-breakに沿うcanonical順で生成する。
+
+このvalueはpost-discard hand、decision-local shanten cache、mutable working state、
+環境runtimeへの参照を持たない。TwoStepUkeireが選択に使う評価値のsemantic snapshotで
+あり、AnalysisTrace専用schema、最終Policy utility、汎用CandidateEvaluation階層、
+learned model向けのflat feature schemaではない。DecisionTrace / AnalysisTraceへの接続は
+本責務に含めない。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする

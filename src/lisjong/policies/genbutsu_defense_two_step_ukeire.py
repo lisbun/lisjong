@@ -2,8 +2,8 @@
 
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeirePolicy,
-    _choose_discard,
     _DecisionShantenEvaluator,
+    _evaluate_and_choose_prepared,
     _evaluate_post_discard_hands,
 )
 from lisjong.policy_contract.action import DiscardAction
@@ -59,8 +59,11 @@ class GenbutsuDefenseTwoStepUkeirePolicy(TwoStepUkeirePolicy):
         evaluated = _evaluate_post_discard_hands(
             policy_input, discard_actions, evaluator
         )
-        if min(shanten for shanten, _, _ in evaluated) < 1:
-            return super()._choose_discard_action(policy_input, discard_actions)
+        if min(candidate.post_discard_shanten for candidate in evaluated) < 1:
+            selected, _ = _evaluate_and_choose_prepared(
+                policy_input, evaluated, evaluator
+            )
+            return selected
 
         common_tile_types = _common_genbutsu_tile_types(riichi_players)
         genbutsu_actions = tuple(
@@ -69,6 +72,15 @@ class GenbutsuDefenseTwoStepUkeirePolicy(TwoStepUkeirePolicy):
             if action.tile.tile_type in common_tile_types
         )
         if genbutsu_actions:
-            return _choose_discard(policy_input, genbutsu_actions)
+            genbutsu_evaluated = tuple(
+                candidate
+                for candidate in evaluated
+                if candidate.action in genbutsu_actions
+            )
+            selected, _ = _evaluate_and_choose_prepared(
+                policy_input, genbutsu_evaluated, evaluator
+            )
+            return selected
 
-        return super()._choose_discard_action(policy_input, discard_actions)
+        selected, _ = _evaluate_and_choose_prepared(policy_input, evaluated, evaluator)
+        return selected
