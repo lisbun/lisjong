@@ -44,8 +44,7 @@ class PolicyContractImportTest(unittest.TestCase):
         # 削除され、`riichienv`はlisjongのruntime dependencyから完全に除去された。
         # `python -m unittest discover`は全test moduleを同一processへimportするため、
         # 独立したsubprocessでlisjong.policy_contractとpoliciesをimportし、
-        # riichienvが道連れでimportされない(そもそもinstallされてもいない)ことを
-        # 確認する。
+        # riichienvが道連れでimportされないことを確認する。
         result = subprocess.run(
             [sys.executable, "-c", _PROBE_SCRIPT],
             capture_output=True,

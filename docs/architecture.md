@@ -302,11 +302,14 @@ trace reproducibility coverageは`lisjong-arena` Issue #35 / PR #36
 Local game runnerのcurrent contractはArena側
 `lisjong_arena.riichienv.local_game_runner.LocalGameRunner` /
 `LocalGameResult`を正本とする。RiichiEnv Adapterは`lisjong` Issue #100で
-lisjong側legacy実装を削除し、Arena-local `lisjong_arena.riichienv.adapter`が
-canonical + soleなphysical implementationである(上記「RiichiEnv Adapter
-physical migration」節を参照)。lisjongはGameTrace(`lisjong.game_trace`)だけを
-TEMPORARY dependencyとして提供し続け、Arena-local `LocalGameRunner`がそれを
-consumeする。
+lisjong main側legacy実装を削除し、Arena-local `lisjong_arena.riichienv.adapter`が
+canonical physical implementationである(上記「RiichiEnv Adapter physical
+migration」節を参照)。ただしIssue #100 merge直後もArenaのexact lisjong
+dependency pinはcleanup前revisionを参照し続け、そのpinned revisionには
+legacy実装が物理的に残るため、Arena post-cleanup pin sync完了前は
+sole physical implementationとは扱わない。lisjongはGameTrace
+(`lisjong.game_trace`)だけをTEMPORARY dependencyとして提供し続け、
+Arena-local `LocalGameRunner`がそれをconsumeする。
 
 `lisjong` Issue #98 / #100 merge直後はArenaのlisjong dependency pinがcleanup前
 revisionを参照し続ける。そのため、この時点をphysical duplicate完全解消とは

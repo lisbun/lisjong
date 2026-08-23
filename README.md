@@ -126,11 +126,15 @@ lisjong
     lisjong.game_trace (GameTrace, TEMPORARY dependency)
 ```
 
-RiichiEnv AdapterのcanonicalかつsoleなphysicalimplementationはArena側
+RiichiEnv Adapterのcanonical physical implementationはArena側
 `lisjong_arena.riichienv.adapter`です(`lisjong-arena` Issue #39 / PR #40)。
-lisjong側legacy `lisjong.riichienv_adapter`とそのAdapter-owned testsは
+lisjong main側legacy `lisjong.riichienv_adapter`とそのAdapter-owned testsは
 `lisbun/lisjong#100`で削除し、`riichienv`をlisjongのruntime dependencyから
-完全に除去しました。compatibility re-exportや`lisjong -> lisjong-arena`の
+完全に除去しました。ただしこのcleanup merge直後もArenaのexact lisjong
+dependency pinはcleanup前revisionを参照し続けるため、そのpinned revisionには
+legacy実装が物理的に残ります。Arena post-cleanup pin syncが完了するまでは
+physical duplicate完全解消とは扱いません。compatibility re-exportや
+`lisjong -> lisjong-arena`の
 reverse dependencyは設けていません。
 
 `GameTraceRecorder` / `GameTraceSink` / `GameTrace`はまだlisjongの物理実装であり、
