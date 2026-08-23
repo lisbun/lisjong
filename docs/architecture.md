@@ -184,6 +184,7 @@ Policy呼び出し境界で`DecisionContext.legal_actions`と照合する。acti
 `lisjong.policy_contract.execute_policy(policy, decision)`として実装し、一意に
 照合できた`legal_actions`側のcanonicalな`InternalAction`を返す。validation失敗は
 `PolicyActionValidationError`とし、Policy自身の例外は変更せず伝播する。
+
 この決定性は最終的なAction選択に対する論理的な再現性であり、内部数値計算の
 bit-exactな再現性を要求しない。RiichiEnv constructorや`reset(seed=...)`の
 seed挙動もPolicy契約へ持ち込まない。
@@ -540,7 +541,8 @@ canonical representationをIssue #59で実装したPython packageである。
   0..8192とし、0/1/2/3/4枚と0.0/1.0はquantization errorなしでexactに
   表現する。34牌種側のexpected countは通常5と赤5を合算した値であり、
   red-five probabilityを34牌種側へ追加加算しない
-- `HandBelief`は1 windの手牌についてのcanonical belief value型であり、  `expected_count()` / `red_five_probability()`のsemantic accessorを公開し、
+- `HandBelief`は1 windの手牌についてのcanonical belief value型であり、
+  `expected_count()` / `red_five_probability()`のsemantic accessorを公開し、
   通常のPolicy/domain codeは`SCALE`等のraw fixed-point表現を直接扱わない。
   boundaryで必要な場合だけ`expected_count_raw` / `red_five_probability_raw`
   のraw fixed-point表現へアクセスする。生成時に、各色について
@@ -629,7 +631,8 @@ Issue #63で導出するmoduleである。
   provenance`をfull recomputationするpure / deterministicなencoderである。
   self concealed handは`OwnHandState.concealed_tiles`を直接exact count
   し、`HandBelief` / `exact_self_belief()`は経由しない（`HandBelief`の
-  red-five companionはprobabilityであり、`OwnHandState`内の不正な同色赤5  重複を隠してしまうおそれがあるため）。discard / meld hand-origin / dora
+  red-five companionはprobabilityであり、`OwnHandState`内の不正な同色赤5
+  重複を隠してしまうおそれがあるため）。discard / meld hand-origin / dora
   indicatorは#61の`encode_public_tile_provenance()`をそのまま再利用する
 - `TileConservationResult`が`exact_accounted_counts` / `exact_accounted_red_five_counts`
   （長さ34 / 3）と`remaining_tile_counts` / `remaining_red_five_counts`
@@ -899,6 +902,7 @@ Arena-local `RiichiLabSeatAdapter`が共有する環境非依存の契約package
 `Policy`、`DecisionContext`、`PolicyInput`、`InternalAction`各variant、および
 それらを構成するvalue型に加え、`execute_policy()`と
 `PolicyActionValidationError`を公開する。
+
 - `policy.py`は最小のstructural `Policy(Protocol)`を定義する
 - `policy_execution.py`は1 seat × 1 decisionのPolicy呼び出しと返却値の
   runtime validationを担い、semantic identity上一意に一致した合法候補を返す
