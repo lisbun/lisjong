@@ -19,7 +19,7 @@ lisjongは、日本式立直麻雀AIを自作し、ローカル対局からオ�
 
 lisjong ecosystem全体のrepository責務、repository間依存方向、長期ロードマップは
 [`lisjong-project`](https://github.com/lisbun/lisjong-project) を正本とします。
-本repositoryでは `lisjong` 内部のPolicy、AI戦略、Adapter、integrationのarchitectureと実装を管理します。
+本repositoryでは、環境非依存のAI decision coreとして、Policy、AI-side contract、牌効率・belief・value / risk等のAI semanticsと実装を管理します。RiichiEnv / RiichiLabへのexternal execution / observationは`lisjong-arena`がcanonical + physical ownerです。
 
 ## AI vision
 
@@ -48,7 +48,8 @@ accuracy / calibration等のcomponent-specific evaluationは`lisjong`が扱い�
 
 | 対象 | 役割 |
 | --- | --- |
-| lisjong | 自作麻雀AI、Policy、学習・推論、接続Adapter、AI component評価 |
+| lisjong | 自作麻雀AI decision core、Policy、学習・推論、AI component評価 |
+| [lisjong-arena](https://github.com/lisbun/lisjong-arena) | RiichiEnv / RiichiLab integration、execution / observation、Policy比較・評価 |
 | [RiichiEnv](https://riichi.dev/docs/local-testing) | ローカル対局・開発・回帰評価環境 |
 | [RiichiLab](https://riichi.dev/) | オンライン接続先 |
 | Mortal | 比較対象・互換性確認用の外部AI |
@@ -107,6 +108,11 @@ testではPolicy契約を単体確認します。lisjongはRiichiEnvへdirect de
 持たず(`lisbun/lisjong#100`)、RiichiEnv Adapterと、RiichiEnv 0.4.8を使う固定seed
 半荘のintegration testはいずれもArena側(`lisjong-arena`)にあります。
 
+ADR 0002に基づくexternal execution / observationのphysical migrationは完了しており、
+Arenaのcurrent exact lisjong pinは
+`376f69088a134b5a9bcc33a69b95e3f779eb2b0e`です。lisjongはexternal execution用の
+runtime dependencyを持たず、AI decision coreとして成立します。
+
 ## Local game runner
 
 `LocalGameRunner` / `LocalGameResult`のcanonical implementationとcanonical
@@ -127,13 +133,11 @@ lisjong-arena
 RiichiEnv Adapterのcanonical physical implementationはArena側
 `lisjong_arena.riichienv.adapter`です(`lisjong-arena` Issue #39 / PR #40)。
 lisjong main側legacy `lisjong.riichienv_adapter`とそのAdapter-owned testsは
-`lisbun/lisjong#100`で削除し、`riichienv`をlisjongのruntime dependencyから
-完全に除去しました。ただしこのcleanup merge直後もArenaのexact lisjong
-dependency pinはcleanup前revisionを参照し続けるため、そのpinned revisionには
-legacy実装が物理的に残ります。Arena post-cleanup pin syncが完了するまでは
-physical duplicate完全解消とは扱いません。compatibility re-exportや
-`lisjong -> lisjong-arena`の
-reverse dependencyは設けていません。
+`lisbun/lisjong#100` / PR #101で削除し、`riichienv`をlisjongのruntime dependencyから
+完全に除去しました。その後Arena Issue #41 / PR #42でexact lisjong dependency pinを
+cleanup merge commit `3505321b62e7a2be204cc555924b485a898c8f31`へ同期したため、
+RiichiEnv Adapter pillarのphysical duplicateは完全解消済みです。compatibility
+re-exportや`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
 
 `GameTraceRecorder` / `GameTraceSink` / `GameTrace`のcanonical ownerとphysical
 implementationは、`lisjong-arena` Issue #43 / PR #44でArena側
@@ -147,11 +151,12 @@ JSON文字列です。途中失敗時はpartial traceを公開せず、sinkの�
 失敗として伝播します。GameTraceはprivileged observer outputであり、Policy input
 にはなりません。
 
-Issue #102のcleanup後もArenaのexact lisjong dependency pinはcleanup前revision
-`3505321b62e7a2be204cc555924b485a898c8f31`を参照します。installed Arena dependency
-にはlegacy copyが残り得るため、GameTraceのphysical duplicate完全解消およびpillar
-完了とはまだ扱いません。Arenaのpost-cleanup pin syncでIssue #102のactual merge SHAを
-exact targetとして反映した後に完全解消とします。
+lisjong Issue #102 / PR #103でlegacy GameTraceを削除した後、Arena Issue #45 /
+PR #46でexact lisjong dependency pinをcleanup merge commit
+`376f69088a134b5a9bcc33a69b95e3f779eb2b0e`へ同期しました。fresh installed dependencyでも
+`lisjong.game_trace`が存在せず、`lisjong_arena.game_trace`がimport可能であることを確認済みです。
+これにより`lisjong_arena.game_trace`がcanonicalかつsole physical implementationとなり、
+GameTrace pillarのphysical duplicateは完全解消済みです。
 
 ## RiichiLab execution profile / credential / CLI composition
 
@@ -230,9 +235,10 @@ canonical + physical migrationし、`lisjong` Issue #94でlisjong側legacy
 `src/lisjong/riichilab_adapter/`を削除しています。compatibility re-exportや
 `lisjong -> lisjong-arena`のreverse dependencyは設けていません。
 
-Issue #91 / #94それぞれのmerge直後はArenaのlisjong dependency pinがcleanup前revisionを
-参照し得るため、migration全体をphysical duplicate完全解消とは扱いません。Arenaの
-post-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に完全解消とします。
+Issue #91 / #94それぞれのcleanup merge直後はArenaのlisjong dependency pinがcleanup前revisionを
+参照していましたが、その後Arena Issue #25 / #29で各cleanup merge SHAへexact pin syncを
+完了しています。RiichiLab lower-level runtimeとprotocol-facing decision bridgeのlegacy
+physical duplicateは現在いずれも解消済みです。
 
 ranked 1半荘・validation 1 gameの実行は、いずれも次のArena entry pointから行います。
 
@@ -318,7 +324,10 @@ Arena Issue #27 / PR #28でcanonical + physical migrationし、lisjong Issue #94
 legacy `src/lisjong/riichilab_adapter/`を削除しました。lisjongに残るのはPolicy /
 DecisionContext / InternalAction等のAI-side semanticsです。RiichiEnv Adapterは
 Arena Issue #39 / PR #40でcanonical + physical migrationし、lisjong Issue #100で
-legacy `src/lisjong/riichienv_adapter/`を削除しました。
+legacy `src/lisjong/riichienv_adapter/`を削除し、Arena Issue #41でpost-cleanup
+exact pin syncまで完了しました。GameTraceもArena Issue #43 / PR #44でcanonical +
+physical migrationし、lisjong Issue #102 / PR #103でlegacy copyを削除、Arena Issue #45 /
+PR #46でexact pinを`376f69088a134b5a9bcc33a69b95e3f779eb2b0e`へ同期済みです。
 `lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profile mappingはArena側が
 所有し、mappingが参照するPolicy class自体はlisjongが引き続き所有します。AI-sideでは
 remaining tile inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
