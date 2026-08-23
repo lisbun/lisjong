@@ -165,6 +165,78 @@ Issue #97で、この既存valueをsource of truthとして直接再利用する
 再計算しない。`None = stage未評価` / `0 = 評価済み結果0`の区別と、DiscardAction
 stable tie-breakに沿うcanonical候補順も、元のvalue側の意味をそのまま引き継ぐ。
 
+#### ValueAwareTwoStepUkeire (Issue #107)
+
+`lisjong.policies.value_aware_two_step_ukeire.ValueAwareTwoStepUkeirePolicy`は、
+`TwoStepUkeirePolicy`のselection semanticsを変更せずoffense baselineとして維持した
+まま、打点価値の最小世代を打牌比較へ追加するPolicy世代である。既存TwoStepの
+selection順序、
+
+```text
+shanten > current ukeire > second-step ukeire > stable tie-break
+```
+
+は変更しない。ValueAware側は次を使う。
+
+```text
+shanten
+> current ukeire
+> retained concealed dora count
+> second-step ukeire
+> stable tie-break
+```
+
+`retained_concealed_dora_count`は、打牌候補ごとに打牌後concealed handへ残る、
+
+```text
+公開済みdora indicator由来のdora count + 赤ドラcount
+```
+
+だけを数えるcandidate-dependent featureであり、`actual han` / `total hand han` /
+`expected score` / `expected value`のいずれでもない。`PolicyInput.round.dora_indicators`
+（PolicyInput上すでに公開済みのindicatorすべて。未公開槓ドラや裏ドラは含まない）
+だけを使い、`lisjong.policies.value_aware_two_step_ukeire._dora_tile_type()`という
+最小限のpure / deterministic helperでindicatorから実ドラの`TileType`を導出する。
+`lisjong-engine`に同等semanticが存在していても、この導出のために
+`lisjong -> lisjong-engine`のruntime dependencyは追加しない。
+
+`ValueAwareTwoStepUkeirePolicy`は`TwoStepUkeirePolicy`のsubclassであり、
+`_decide_discard()` extension pointだけをoverrideする。`_decide()` /
+`choose_action()` / `choose_action_with_analysis()`、winning action / Always
+Riichi / pass / 既存fallbackのorchestrationは基底classからそのまま継承し、
+複製しない。
+
+selection stagingは既存TwoStepと同じ「不要なstageを計算しない」原則に従う。
+
+```text
+Stage 1 (全candidate)          -> post_discard_shanten
+Stage 2 (最小shanten候補)       -> current_ukeire_count
+Stage 3 (最大現在受け入れ候補)   -> retained_concealed_dora_count
+Stage 4 (最大dora候補;
+         minimum_shanten > 0のみ) -> second_step_ukeire_score
+Stage 5                        -> stable tie-break
+```
+
+前段がすでに候補を1件へ絞った場合、既存TwoStepと同様に後続stageを評価せず
+`None`のまま残す。`minimum_shanten == 0`（tenpai）でもdora countは評価する
+(second-stepだけは評価しない)。value-aware化は**現在decisionのreal legal
+discard比較だけ**に限定し、既存TwoStepの第2段仮想branch（`_best_next_ukeire()`
+等のhypothetical future draw / discard選択）へdora valueを伝播しない。
+
+`lisjong.policies.value_aware_two_step_ukeire.ValueAwareTwoStepUkeireCandidateEvaluation` /
+`ValueAwareTwoStepUkeireAnalysis`は、`TwoStepUkeireCandidateEvaluation` /
+`TwoStepUkeireAnalysis`と同じ設計（source of truthの直接再利用、trace用の
+再計算をしない、`None = stage未評価` / `0 = 評価済み結果0`の区別、winning /
+riichi / pass / fallback branchではanalysisを生成しない）をそのまま踏襲する、
+独立したPolicy-specific typed valueである。汎用`CandidateEvaluation` /
+汎用feature schemaへは一般化しない。
+
+`lisjong.policies`は`ValueAwareTwoStepUkeirePolicy`をmodule-levelなclassとして
+公開する。Windows `spawn` + `ProcessPoolExecutor`を使う後続`lisjong-arena`の
+ABBB parallel evaluationが`PolicySpec(factory=ValueAwareTwoStepUkeirePolicy)`と
+して利用できる、top-level importable factoryである。Arena側の評価・統合は
+本Issueの範囲外とする。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
