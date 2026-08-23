@@ -101,45 +101,40 @@ python -m ruff check .
 python -m unittest discover -s tests -v
 ```
 
-testではPolicy契約、RiichiEnv Adapter、共通Policy実行境界、Local game runnerを
-単体確認し、RiichiEnv 0.4.8を使う固定seed半荘のintegration testも実行します。
+testではPolicy契約、RiichiEnv Adapterを単体確認します。RiichiEnv 0.4.8を使う
+固定seed半荘のintegration testはArena側で実行します。
 
 ## Local game runner
 
-`LocalGameRunner`は4 seatそれぞれのPolicyをRiichiEnvへ接続し、`env.done()`まで
-1半荘を進行します。再現性のためseedは`RiichiEnv`のconstructorへ渡します。
+`LocalGameRunner` / `LocalGameResult`のcanonical implementationとcanonical
+physical implementationは`lisjong-arena` Issue #31 / PR #32で
+`lisjong_arena.riichienv.local_game_runner`へ移管しました。`lisjong` Issue #98で
+lisjong側legacy `src/lisjong/local_game_runner.py`と、そのrunner-owned /
+Policy-specific integration testsを削除済みです。compatibility re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
 
-```python
-from lisjong.game_trace import GameTraceRecorder
-from lisjong.local_game_runner import LocalGameRunner
-from lisjong.policies import MinimalPolicy
-from lisjong.policy_contract import Seat
+```text
+lisjong-arena
+    lisjong_arena.riichienv.local_game_runner.LocalGameRunner
+    lisjong_arena.riichienv.local_game_runner.LocalGameResult
 
-policies = {seat: MinimalPolicy() for seat in Seat}
-recorder = GameTraceRecorder()
-result = LocalGameRunner(
-    policies,
-    seed=12345,
-    game_mode="4p-red-half",
-    max_steps=10_000,
-    trace_sink=recorder,
-).run()
-trace = recorder.snapshot()
-
-print(result.scores, result.ranks)
-print(len(trace.events), trace.events[-1].event)
+lisjong
+    lisjong.riichienv_adapter (RiichiEnv Adapter, TEMPORARY dependency)
+    lisjong.game_trace (GameTrace, TEMPORARY dependency)
 ```
 
-返却される`LocalGameResult`にはseed、game mode、最終scores / ranks、step数、
-Policy判断数が含まれます。`max_steps`はhang防止用の安全上限であり、対局終了前に
-到達した場合は正常結果を返さず`StepLimitExceededError`で失敗します。
+`GameTraceRecorder` / `GameTraceSink` / `GameTrace`はまだlisjongの物理実装であり、
+Arena-local `LocalGameRunner`がTEMPORARYに`lisjong.game_trace`をconsumeします。
+標準`GameTraceRecorder`は、RiichiEnvが生成したMJAI eventを対局中に0-basedの
+連続順で受け取り、正常な対局結果の構築後だけimmutableなcompleted `GameTrace`を
+返します。各`GameTraceEvent.event`はruntimeのmutable `dict`から切り離したMJAI
+JSON文字列です。途中失敗時はpartial traceを公開せず、sinkの例外も無視せず対局
+失敗として伝播します。GameTraceはprivileged observer outputであり、Policy input
+にはなりません。
 
-`trace_sink`はopt-inです。標準`GameTraceRecorder`は、RiichiEnvが生成したMJAI
-eventを対局中に0-basedの連続順で受け取り、正常な`LocalGameResult`の構築後だけ
-immutableなcompleted `GameTrace`を返します。各`GameTraceEvent.event`はruntimeの
-mutable `dict`から切り離したMJAI JSON文字列です。途中失敗時はpartial traceを公開せず、
-sinkの例外も無視せず対局失敗として伝播します。GameTraceはprivileged observer outputで
-あり、Policy inputにはなりません。
+`lisjong` Issue #98のmerge直後はArenaのlisjong dependency pinがcleanup前revisionを
+参照し続けるため、migration全体をphysical duplicate完全解消とは扱いません。Arenaの
+post-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に完全解消とします。
 
 ## RiichiLab execution profile / credential / CLI composition
 

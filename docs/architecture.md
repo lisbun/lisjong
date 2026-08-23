@@ -267,41 +267,41 @@ legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で�
 
 ### Local game runner
 
-`src/lisjong/local_game_runner.py`は、RiichiEnvを使用するローカル対局の
-ライフサイクルを管理する実装である。`LocalGameRunner`はone-shotとし、4 seat
-すべてのPolicy、`SeatMaterializedState`、`RiichiEnvActionMappingSession`を
-seatごとに独立して所有する。
+`LocalGameRunner` / `LocalGameResult`のcanonical implementationとcanonical
+physical implementationは、RiichiEnvを使用するローカル対局のライフサイクル管理
+（`RiichiEnv`のseed付き生成・初期化、`reset()` / `step()` / `done()`の呼び出し、
+seatごとのObservation処理、RiichiEnv Adapter経由のPolicy入力/合法手変換、Policy
+contractを通じたseatごとの判断実行と返却値照合、`env.done()`を正本とする終了判定、
+`max_steps`到達時のfail closed、opt-inの`GameTraceSink`通知を含む）ごと、
+`lisjong-arena` Issue #31 / PR #32
+(actual merge commit `f1ea7e04efe11a9b0046984e0977b78d94bc72d4`)で
+`lisjong_arena.riichienv.local_game_runner`へ移管した。`lisjong` Issue #98で、
+lisjong側legacy `src/lisjong/local_game_runner.py`と、runner-owned /
+Policy-specific(`UkeirePolicy` / `TwoStepUkeirePolicy`) real-RiichiEnv
+integration testsを削除した。削除前に、これらPolicy-specific real-RiichiEnv
+half-game completion coverageは`lisjong-arena` Issue #33 / PR #34
+(`tests/test_policy_riichienv_compatibility.py`)へ、fixed-seed real-RiichiEnv
+trace reproducibility coverageは`lisjong-arena` Issue #35 / PR #36
+(`tests/test_riichienv_local_game_runner_integration.py`)へ、それぞれre-home
+済みであることを確認している。compatibility wrapper / deprecated re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていない。
 
-- 再現可能性のためseedをconstructorへ渡して`RiichiEnv`を生成・初期化する
-- `reset()`、`step()`、`done()`を呼び出し、対局loopを進行する
-- `reset()`または`step()`が返した、Action選択を要求されているplayerから
-  seat別`Observation`へのmapを処理する
-- 各seatのObservationと合法なRiichiEnv `Action`をRiichiEnv Adapterへ渡し、
-  Policy入力と合法な内部action候補へ変換する
-- Policy contractを通じて、seatごとに独立したPolicy判断を実行し、共通の
-  Policy呼び出し境界で返却値を内部合法手候補へ照合する
-- Policyの選択結果をRiichiEnv Adapterへ戻し、同じseatの合法なRiichiEnv
-  `Action`へ対応付けて再検証する
-- 複数playerへ同時にActionが要求された場合、各seatのObservationと合法手を
-  混同せず、検証済みのAction集合を組み立てて`step()`へ返す
-- `env.done()`を対局終了判定の正本とし、局情報から独自に終了を推測しない
-- 対局終了後のscores、ranks、step数、Policy判断数を`LocalGameResult`で返す
-- 任意の`max_steps`へ終了前に到達した場合は、正常結果にせず明示的に失敗する
-- opt-inの`GameTraceSink`が指定された場合だけ、`reset()`直後と各`step()`後の
-  `env.mjai_log`新規entryを順序どおり同期通知する
+Local game runnerのcurrent contractはArena側
+`lisjong_arena.riichienv.local_game_runner.LocalGameRunner` /
+`LocalGameResult`を正本とする。lisjongはRiichiEnv Adapter
+(`lisjong.riichienv_adapter`)とGameTrace(`lisjong.game_trace`)をTEMPORARY
+dependencyとして提供し続け、Arena-local `LocalGameRunner`がそれらをconsumeする。
 
-Local game runnerはRiichiEnv外部型からPolicy内部型への変換やPolicy固有の判断を
-所有しない。あるstepで1 seatでもAdapter変換、Policy実行、返却値検証、paired
-mappingによるresolveに失敗した場合は、部分的なAction集合やfallbackで
-`env.step()`を呼び出さず、元の例外を伝播する。完全対局ログを取得できる場合も、
-Policy入力を生成する経路とは分離する。ログの永続化先や評価componentの具体的な
-構成は本書では確定しない。
+`lisjong` Issue #98 merge直後はArenaのlisjong dependency pinがcleanup前revisionを
+参照し続ける。そのため、この時点をphysical duplicate完全解消とは記録しない。
+cleanup merge SHAをexact targetとするArena post-cleanup pin syncが完了した時点で
+完全解消とする。
 
 #### GameTrace observability boundary
 
 `src/lisjong/game_trace.py`の`GameTrace`は、1回の正常終了したlocal game executionを
-表すimmutable valueである。`LocalGameRunner`だけがseed / game modeの正本をsinkへ
-供給し、各source entryをexecution全体で0-basedかつ連続する
+表すimmutable valueである。Arena-local `LocalGameRunner`だけがseed / game modeの
+正本をsinkへ供給し、各source entryをexecution全体で0-basedかつ連続する
 `GameTraceEvent.sequence`へ対応付ける。payloadはRiichiEnv 0.4.8のMJAI event `dict`を
 一度JSON文字列へserializeした値とし、RiichiEnv / runnerが所有するmutable objectと
 参照共有しない。
