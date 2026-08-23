@@ -67,7 +67,7 @@ class GameTrace:
 
 
 class GameTraceSink(Protocol):
-    """LocalGameRunnerから同期的にGameTrace通知を受け取る境界。"""
+    """Arena-local LocalGameRunnerから同期的にGameTrace通知を受け取る境界。"""
 
     def on_start(self, *, seed: int, game_mode: str) -> None: ...
 
