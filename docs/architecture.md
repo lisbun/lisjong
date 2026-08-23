@@ -155,7 +155,7 @@ Policyは、環境に依存しない1 seat・1 decision分の`DecisionContext`�
 - `RiichiEnv`の生成、`reset()`、`step()`、`done()`、対局loop、
   通信sessionを所有しない
 
-Policyの返却値は、Local game runnerまたは`RiichiLabSeatAdapter`が利用する共通の
+Policyの返却値は、Local game runnerまたはArena-local `RiichiLabSeatAdapter`が利用する共通の
 Policy呼び出し境界で`DecisionContext.legal_actions`と照合する。action identity上
 ちょうど1件に一致しない場合は、未検証Actionを外部環境へ送信しない。Policy実装
 自身へこの検証を重複実装させない。共通境界は
@@ -201,8 +201,9 @@ Adapterの変換・検証はseat単位で行い、単一の「現在手番player
 Local game runnerがRiichiEnv AdapterとPolicy contractをそれぞれ利用して
 Policy判断を実行し、選択結果をAdapterへ戻して対応付け・再検証する。
 RiichiEnv Adapter自身はPolicy呼び出しを仲介しない。一方、online実行経路の
-`RiichiLabSeatAdapter`は同じPolicy contractを利用し、Policy判断からMJAI応答変換までを
-Adapter境界内で行う。
+Arena-local `RiichiLabSeatAdapter`(`lisjong_arena.riichilab.adapter`)は
+lisjongの同じPolicy contractをconsumerとして利用し、Policy判断からMJAI応答変換までを
+Arena側Adapter境界内で行う。`RiichiLabSeatAdapter`自体の実装はlisjongに存在しない。
 
 materialized stateはPolicyのhidden stateではなく、seat-visibleな外部表現を
 現在のPolicy入力へ正規化するための境界側stateである。具体的なPolicy入力は
@@ -306,12 +307,19 @@ represents one successfully completed execution. Arena固有metricやAI内部ana
 
 ### RiichiLab execution / Adapter boundary
 
-RiichiLabのexternal execution / observationはproject-wideに`lisjong-arena`が所有する。
+RiichiLabのexternal execution / observation、および protocol-facing decision bridge
+(request_action parsing / Policy呼び出し / MJAI response構築 / possible_actions
+semantic validation)は、project-wideに`lisjong-arena`が所有する。
 Issue #17 / PR #18でranked one-game orchestrationを、Issue #19 / PR #20でvalidation
 one-game orchestrationとprofile / credential / CLI compositionを、Issue #23 / PR #24で
-client errors / Session / Transport / protocol trace writerをArena-local implementationへ
-canonical + physical migrationした。lisjong側legacy orchestrationはIssue #86 / #89で、
-legacy lower-level runtime packageはIssue #91で除去した。
+client errors / Session / Transport / protocol trace writerを、Arena Issue #27 / PR #28
+(actual merge commit `14cdd80cd3035c46c9d3f7bad034dda6c3b69f8c`)でprotocol-facing
+decision bridge(`RiichiLabSeatAdapter` / request_action parsing / MJAI response
+conversion / possible_actions semantic validation / Adapter-specific error
+hierarchy)を、それぞれArena-local implementationへcanonical + physical migrationした。
+lisjong側legacy orchestrationはIssue #86 / #89で、legacy lower-level runtime
+packageはIssue #91で、legacy protocol-facing decision bridge package
+(`src/lisjong/riichilab_adapter/`)はIssue #94で、それぞれ除去した。
 
 現在の責務境界は次のとおりである。
 
@@ -320,59 +328,58 @@ lisjong-arena
     ranked / validation orchestration
     profile / credential / CLI composition
     client errors / Session / Transport / protocol trace writer
+    RiichiLabSeatAdapter (lisjong_arena.riichilab.adapter)
+    request_action parsing / MJAI response conversion
+    possible_actions semantic validation / Adapter-specific errors
         |
         v
 lisjong
-    RiichiLabSeatAdapter
-    request_action parsing / MJAI response conversion
-    possible_actions semantic validation
     Policy contract / Policy implementation
+    RiichiEnv Adapter (build_decision() / SeatMaterializedState /
+        RiichiEnvActionMappingSession / RiichiEnvActionMapping /
+        build_policy_input())
 ```
 
 Arena executionは認証付き接続、送受信、time metadata、ack、terminal event、disconnect、
-secret-safe trace等のprotocol lifecycleを扱う。lisjongの`RiichiLabSeatAdapter`は、
-serialized Observationの復元、seat-visible materialized state、Policy入力と合法な内部Action
-候補への変換、Policy実行、RiichiEnv Actionへのmapping / revalidation、MJAI response構築、
-`possible_actions` semantic validationを扱う。
+secret-safe trace等のprotocol lifecycleに加え、serialized Observationの復元、
+seat-visible materialized state、Policy入力と合法な内部Action候補への変換、Policy実行、
+RiichiEnv Actionへのmapping / revalidation、MJAI response構築、`possible_actions`
+semantic validationを、Arena-local `RiichiLabSeatAdapter`として扱う。この
+`RiichiLabSeatAdapter`はlisjongの`policy_contract.execute_policy()`とRiichiEnv Adapter
+(`build_decision()`等)をconsumerとして呼び出すが、それらのsemantics・実装自体は
+引き続きlisjongが所有する。
 
 Adapterが保持してよいmaterialized stateは、Policy入力に必要なseat-visibleな現在状態の
 正規化に限る。Policyの過去判断、AI内部memory、非公開情報を含めず、requestやtransport
 固有情報をPolicy入力へ混入させない。ArenaはPolicy固有の判断や学習処理を所有せず、
 lisjongはWebSocket lifecycleやArena orchestrationを再実装しない。
 
-#### `riichilab_adapter` package (Issue #38)
+#### legacy `riichilab_adapter` package cleanup (Issue #94)
 
-`src/lisjong/riichilab_adapter/`は、RiichiLab online execution boundaryのうち、
-「parsed済み`request_action`からPolicy判断を経て送信前validation済み
-payloadを構築する、1 request x 1 decisionの変換境界」をIssue #38で実装した
-Python packageである。WebSocket接続そのもの、token、`start_game` /
-`action_ack` / `validation_result` / `end_game`、`request_id`のgame内
-lifecycle管理、timeout schedulerは対象外であり、Arena runtimeが扱う。
+`src/lisjong/riichilab_adapter/`は、Issue #38でRiichiLab online execution boundaryの
+うち「parsed済み`request_action`からPolicy判断を経て送信前validation済み
+payloadを構築する、1 request x 1 decisionの変換境界」として実装したPython packageで
+あったが、Arena Issue #27 / PR #28(actual merge commit
+`14cdd80cd3035c46c9d3f7bad034dda6c3b69f8c`)によるcanonical + physical migration後は
+legacy copyとなったため、Issue #94でpackage全体
+(`adapter.py` / `request_action.py` / `mjai_response.py` /
+`possible_action_validation.py` / `errors.py` / `__init__.py`)と、対応する
+protocol-facing legacy tests(`tests/test_riichilab_adapter.py` /
+`tests/test_riichilab_request_action.py` /
+`tests/test_riichilab_mjai_response.py` /
+`tests/test_riichilab_possible_action_validation.py`)を削除した。
+compatibility wrapper / deprecated re-export / empty compatibility packageは
+残していない。
 
-- `RiichiLabSeatAdapter`は1 game x 1 seatへ明示的にbindされたstateful
-  runtimeであり、`SeatMaterializedState`と`RiichiEnvActionMappingSession`を
-  requestごとに作り直さず継続保持する
-- `process_request_action()`は、parsed済み`request_action`相当dataを受け取り、
-  `riichienv.Observation.deserialize_from_base64()`でObservationを復元した
-  うえで、既存`riichienv_adapter.build_decision()`と
-  `policy_contract.execute_policy()`をそのまま再利用し、paired mappingの
-  `resolve()`で得たRiichiEnv Actionから送信可能なMJAI response相当を構築する
-- MJAI response構築は`riichienv.Action.to_mjai()`を基底とし、実測で判明した
-  欠落field(hora の`pai`、call系/ronの`target`、dahaiの`tsumogiri`)だけを
-  resolve済みcanonical `InternalAction`から補う
-- 送信直前に、server提示`possible_actions`との送信前semantic validationを
-  行う。raw dict完全一致やlist indexに依存せず、送信予定のBot responseと
-  各candidateの双方を、公式candidate schemaのsemantic identityへ
-  projectionしてから比較する。0件一致・複数件一致(ambiguous)に加えて、
-  malformed candidateと未知Action typeのcandidateが1件でも含まれる場合も
-  validation全体をfail closedする(forward compatibilityとして許容するのは
-  既知typeのunknown追加fieldまで)
-- `request_id`はcurrent requestの値をそのままresponseへechoするだけで、
-  Adapter内部で生成せず、Policyへも渡さない。`time`は保持のみでPolicy入力へ
-  含めない
+`RiichiLabSeatAdapter`のcurrent contract(request_action parsing、MJAI response
+normalization、possible_actions semantic validation)はArena側
+[RiichiLab protocol-facing decision bridge](https://github.com/lisbun/lisjong-arena/blob/main/docs/riichilab-protocol-bridge.md)
+を正本とする。lisjong側[RiichiLab request_action Adapter](riichilab-adapter.md)は
+current contractの記述をやめ、historical migration recordへ縮退した。
 
-具体的なnormalization規則、`to_mjai()`実測結果、公式仕様との既知の未確認
-事項は[RiichiLab request_action Adapter](riichilab-adapter.md)を正本とする。
+Issue #94 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照し得る。
+そのため、この時点をphysical duplicate完全解消とは記録しない。cleanup merge SHAを
+exact targetとするArena post-cleanup pin syncが完了した時点で完全解消とする。
 
 #### legacy `riichilab_client` cleanup (Issue #91)
 
@@ -390,8 +397,11 @@ optional / `TYPE_CHECKING` dependencyは追加せず、dependency directionは�
 lower-level runtimeのcurrent contractはArena側
 [RiichiLab client runtime contract](https://github.com/lisbun/lisjong-arena/blob/main/docs/riichilab-client.md)
 を正本とする。lisjong側[RiichiLab client文書](riichilab-client.md)はhistorical migration
-pointerへ縮退し、Adapter固有contractだけを
-[RiichiLab request_action Adapter](riichilab-adapter.md)で維持する。
+pointerへ縮退した。Adapter固有contract(request_action parsing / MJAI response
+conversion / possible_actions semantic validation)も、Issue #94でArena側
+[RiichiLab protocol-facing decision bridge](https://github.com/lisbun/lisjong-arena/blob/main/docs/riichilab-protocol-bridge.md)
+へ同様に一本化しており、lisjong側[RiichiLab request_action Adapter](riichilab-adapter.md)
+もhistorical migration recordへ縮退している。
 
 Issue #91 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照し得る。
 そのため、この時点をphysical duplicate完全解消とは記録しない。cleanup merge SHAを
@@ -793,7 +803,7 @@ flowchart TD
     Runner --> Contract["Policy contract"]
     Runner --> Trace["GameTrace observer output"]
     Arena["lisjong-arena RiichiLab runtime"] --> LabAPI["RiichiLab API"]
-    Arena --> LabAdapter["lisjong RiichiLabSeatAdapter"]
+    Arena --> LabAdapter["lisjong-arena RiichiLabSeatAdapter"]
     LabAdapter --> SDK
     LabAdapter --> EnvAdapter
     LabAdapter --> Contract
@@ -805,19 +815,20 @@ flowchart TD
 ```
 
 Local game runnerはlisjong内でローカル対局をオーケストレーションする。RiichiLab
-orchestrationとlower-level runtimeはArenaがcanonical + physical ownerであり、lisjongの
-`RiichiLabSeatAdapter` / Policy contractをconsumerとして利用する。このrepository間の
+orchestration、lower-level runtime、protocol-facing decision bridge
+(`RiichiLabSeatAdapter`)はArenaがcanonical + physical ownerであり、lisjongの
+Policy contract / RiichiEnv Adapterをconsumerとして利用する。このrepository間の
 矢印は`lisjong-arena -> lisjong`であり、reverse dependencyは作らない。
 
 RiichiEnv AdapterからPolicy contractへの矢印は、Policy入力や内部action等の
 共通の型・変換契約への依存を表す。RiichiEnv Adapter自身はPolicyを呼び出さない。
-一方、`RiichiLabSeatAdapter`からPolicy contractへの矢印は、同Adapterが
+一方、Arena-local `RiichiLabSeatAdapter`からPolicy contractへの矢印は、同Adapterが
 `execute_policy()`を通じてPolicy判断まで仲介する経路を表す。
 Policy implementationはPolicy contractを実装する。
 
 Policy contractとPolicy implementationはRiichiEnv SDK、RiichiLab API、
 mjai、WebSocketへ依存しない。外部環境の仕様変更はLocal game runner、
-RiichiEnv Adapter、lisjong `RiichiLabSeatAdapter`、またはArena側execution /
+RiichiEnv Adapter、Arena `RiichiLabSeatAdapter`、またはArena側execution /
 observation layerで吸収し、Policyへ直接伝播させない。
 
 Hand evaluationはPolicy contractのvalue型だけへ依存し、Policy implementationが
@@ -843,7 +854,7 @@ contract側からは依存されない。Issue #59時点では`PolicyInput` /
 ### 共通Policy契約package
 
 `lisjong.policy_contract`は、Policy実装、RiichiEnv Adapter、Local game runner、
-RiichiLabSeatAdapterが共有する環境非依存の契約packageである。package rootから
+Arena-local `RiichiLabSeatAdapter`が共有する環境非依存の契約packageである。package rootから
 `Policy`、`DecisionContext`、`PolicyInput`、`InternalAction`各variant、および
 それらを構成するvalue型に加え、`execute_policy()`と
 `PolicyActionValidationError`を公開する。
