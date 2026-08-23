@@ -11,6 +11,7 @@ import lisjong.policies.two_step_ukeire as two_step
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import TwoStepUkeirePolicy, UkeirePolicy
 from lisjong.policies.two_step_ukeire import (
+    TwoStepUkeireAnalysis,
     TwoStepUkeireCandidateEvaluation,
     TwoStepUkeirePolicyError,
     _best_next_ukeire,
@@ -29,11 +30,15 @@ from lisjong.policy_contract.action import (
     RonAction,
     TsumoAction,
 )
+from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.decision_context import DecisionContext
+from lisjong.policy_contract.decision_trace import DecisionTraceRecorder
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
+from lisjong.policy_contract.policy_decision import PolicyDecision
+from lisjong.policy_contract.policy_execution import execute_policy_with_trace
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.round_state import RoundState
@@ -805,6 +810,263 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
 
         self.assertFalse(issubclass(TwoStepUkeirePolicyError, UkeirePolicyError))
         self.assertFalse(issubclass(UkeirePolicyError, TwoStepUkeirePolicyError))
+
+
+class TwoStepUkeireAnalysisValueTest(unittest.TestCase):
+    def test_analysis_is_an_immutable_typed_payload(self) -> None:
+        evaluations = (TwoStepUkeireCandidateEvaluation(_discard(SOUZU_9), 1, 0, None),)
+        analysis = TwoStepUkeireAnalysis(candidate_evaluations=evaluations)
+
+        self.assertIsInstance(analysis, AnalysisTrace)
+        self.assertEqual(
+            tuple(field.name for field in fields(analysis)),
+            ("candidate_evaluations",),
+        )
+        self.assertIs(analysis.candidate_evaluations[0], evaluations[0])
+        self.assertFalse(hasattr(analysis, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            analysis.candidate_evaluations = ()
+
+    def test_analysis_normalizes_to_a_detached_tuple(self) -> None:
+        evaluations = [TwoStepUkeireCandidateEvaluation(_discard(SOUZU_9), 1, 0, None)]
+
+        analysis = TwoStepUkeireAnalysis(candidate_evaluations=evaluations)
+        evaluations.clear()
+
+        self.assertIsInstance(analysis.candidate_evaluations, tuple)
+        self.assertEqual(len(analysis.candidate_evaluations), 1)
+
+    def test_analysis_rejects_free_form_and_empty_payloads(self) -> None:
+        with self.assertRaisesRegex(TypeError, "must be an iterable"):
+            TwoStepUkeireAnalysis(candidate_evaluations=7)
+        with self.assertRaisesRegex(TypeError, "TwoStepUkeireCandidateEvaluation"):
+            TwoStepUkeireAnalysis(candidate_evaluations=({"ukeire": 4},))
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            TwoStepUkeireAnalysis(candidate_evaluations=())
+
+
+class TwoStepUkeireDecisionAnalysisTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = TwoStepUkeirePolicy()
+
+    def _traced(self, decision: DecisionContext):
+        recorder = DecisionTraceRecorder()
+        selected = execute_policy_with_trace(self.policy, decision, recorder)
+        (trace,) = recorder.snapshot()
+        return selected, trace
+
+    def test_discard_branch_reuses_the_existing_candidate_evaluations(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+        decision = _decision(_TWO_STEP_HAND, (discard_9s, discard_white))
+        expected_selected, expected_evaluations = _evaluate_and_choose_discard(
+            _make_input(_TWO_STEP_HAND), (discard_9s, discard_white)
+        )
+
+        selected, trace = self._traced(decision)
+
+        self.assertIs(selected, expected_selected)
+        self.assertIsInstance(trace.analysis, TwoStepUkeireAnalysis)
+        self.assertEqual(trace.analysis.candidate_evaluations, expected_evaluations)
+        self.assertEqual(
+            [evaluation.action for evaluation in trace.analysis.candidate_evaluations],
+            [discard_9s, discard_white],
+        )
+
+    def test_discard_evaluation_runs_exactly_once_for_a_traced_decision(self) -> None:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+        decision = _decision(_TWO_STEP_HAND, (discard_9s, discard_white))
+
+        with patch.object(
+            two_step,
+            "_evaluate_and_choose_discard",
+            wraps=two_step._evaluate_and_choose_discard,
+        ) as evaluate:
+            self._traced(decision)
+
+        self.assertEqual(evaluate.call_count, 1)
+
+    def test_winning_branch_runs_no_discard_evaluation_and_reports_no_analysis(
+        self,
+    ) -> None:
+        ron = RonAction(actor=Seat.SEAT_0, target=Seat.SEAT_1, winning_tile=MANZU_1)
+        decision = _decision(_TWO_STEP_HAND, (_discard(SOUZU_9), ron))
+
+        with patch.object(
+            two_step,
+            "_evaluate_and_choose_discard",
+            side_effect=AssertionError("winning branch must not evaluate discards"),
+        ):
+            selected, trace = self._traced(decision)
+
+        self.assertIs(selected, ron)
+        self.assertIsNone(trace.analysis)
+
+    def test_riichi_branch_runs_no_discard_evaluation_and_reports_no_analysis(
+        self,
+    ) -> None:
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        decision = _decision(_TWO_STEP_HAND, (_discard(SOUZU_9), riichi))
+
+        with patch.object(
+            two_step,
+            "_evaluate_and_choose_discard",
+            side_effect=AssertionError("Always Riichi must not evaluate discards"),
+        ):
+            selected, trace = self._traced(decision)
+
+        self.assertIs(selected, riichi)
+        self.assertIsNone(trace.analysis)
+
+    def test_pass_and_fallback_branches_report_no_analysis(self) -> None:
+        pass_action = PassAction(actor=Seat.SEAT_0)
+        kyuushu = KyuushuKyuuhaiAction(actor=Seat.SEAT_0)
+
+        for actions, expected in (
+            ((pass_action, kyuushu), pass_action),
+            ((kyuushu,), kyuushu),
+        ):
+            with self.subTest(actions=actions):
+                selected, trace = self._traced(_decision(_TWO_STEP_HAND, actions))
+
+                self.assertIs(selected, expected)
+                self.assertIsNone(trace.analysis)
+
+    def test_none_and_evaluated_zero_stage_semantics_survive_the_analysis(self) -> None:
+        break_tenpai = _discard(MANZU_4)
+        keep_tenpai = _discard(RED_DRAGON)
+        decision = _decision(
+            _TANKI_VERSUS_ONE_SHANTEN_HAND, (keep_tenpai, break_tenpai)
+        )
+
+        with (
+            patch.object(two_step, "_ukeire_count", return_value=0),
+            patch.object(
+                two_step,
+                "_second_step_score",
+                side_effect=AssertionError("tenpai must not enter second step"),
+            ),
+        ):
+            selected, trace = self._traced(decision)
+
+        by_action = {
+            evaluation.action: evaluation
+            for evaluation in trace.analysis.candidate_evaluations
+        }
+        self.assertIs(selected, keep_tenpai)
+        self.assertIsNone(by_action[break_tenpai].current_ukeire_count)
+        self.assertEqual(by_action[keep_tenpai].current_ukeire_count, 0)
+        self.assertIsNone(by_action[keep_tenpai].second_step_ukeire_score)
+
+    def test_analysis_holds_no_mutable_working_state(self) -> None:
+        decision = _decision(
+            _TWO_STEP_HAND, (_discard(SOUZU_9), _discard(WHITE_DRAGON))
+        )
+
+        _, trace = self._traced(decision)
+
+        for evaluation in trace.analysis.candidate_evaluations:
+            self.assertEqual(
+                tuple(field.name for field in fields(evaluation)),
+                (
+                    "action",
+                    "post_discard_shanten",
+                    "current_ukeire_count",
+                    "second_step_ukeire_score",
+                ),
+            )
+            self.assertNotIsInstance(evaluation, two_step._DiscardCandidateWork)
+
+
+class TwoStepUkeireTraceNonInterferenceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.policy = TwoStepUkeirePolicy()
+
+    def _assert_same_selection(self, decision: DecisionContext) -> None:
+        untraced = self.policy.choose_action(decision)
+        recorder = DecisionTraceRecorder()
+        traced = execute_policy_with_trace(self.policy, decision, recorder)
+
+        self.assertEqual(untraced, traced)
+        self.assertIs(traced, recorder.snapshot()[0].selected_action)
+
+    def test_every_staged_scenario_selects_the_same_action_with_and_without_trace(
+        self,
+    ) -> None:
+        scenarios = {
+            "shanten stage": (
+                _TANKI_VERSUS_ONE_SHANTEN_HAND,
+                (_discard(MANZU_4), _discard(RED_DRAGON)),
+            ),
+            "current ukeire stage": (
+                _NINE_MANZU_HAND,
+                (_discard(MANZU_2), _discard(MANZU_4)),
+            ),
+            "second step stage": (
+                _TWO_STEP_HAND,
+                (_discard(SOUZU_9), _discard(WHITE_DRAGON)),
+            ),
+            "tenpai special case": (
+                (MANZU_1, MANZU_1, MANZU_1, EAST, SOUTH),
+                (_discard(EAST), _discard(SOUTH)),
+            ),
+            "winning branch": (
+                _TWO_STEP_HAND,
+                (
+                    _discard(SOUZU_9),
+                    RonAction(
+                        actor=Seat.SEAT_0, target=Seat.SEAT_1, winning_tile=MANZU_1
+                    ),
+                ),
+            ),
+            "riichi branch": (
+                _TWO_STEP_HAND,
+                (_discard(SOUZU_9), RiichiAction(actor=Seat.SEAT_0)),
+            ),
+            "pass branch": (
+                _TWO_STEP_HAND,
+                (
+                    PassAction(actor=Seat.SEAT_0),
+                    KyuushuKyuuhaiAction(actor=Seat.SEAT_0),
+                ),
+            ),
+        }
+
+        for name, (hand, actions) in scenarios.items():
+            for ordered_actions in itertools.permutations(actions):
+                with self.subTest(scenario=name, actions=ordered_actions):
+                    self._assert_same_selection(_decision(hand, ordered_actions))
+
+    def test_stable_tie_break_is_unchanged_by_tracing(self) -> None:
+        actions = (_discard(SOUZU_9), _discard(WHITE_DRAGON))
+
+        with patch.object(two_step, "_second_step_score", return_value=100):
+            for ordered_actions in itertools.permutations(actions):
+                with self.subTest(actions=ordered_actions):
+                    self._assert_same_selection(
+                        _decision(_TWO_STEP_HAND, ordered_actions)
+                    )
+
+    def test_analysis_capability_shares_the_single_decision_algorithm(self) -> None:
+        decision = _decision(
+            _TWO_STEP_HAND, (_discard(SOUZU_9), _discard(WHITE_DRAGON))
+        )
+
+        proposed = self.policy.choose_action_with_analysis(decision)
+
+        self.assertIsInstance(proposed, PolicyDecision)
+        self.assertEqual(proposed.action, self.policy.choose_action(decision))
+
+    def test_policy_keeps_no_cross_decision_analysis_state(self) -> None:
+        decision = _decision(
+            _TWO_STEP_HAND, (_discard(SOUZU_9), _discard(WHITE_DRAGON))
+        )
+
+        execute_policy_with_trace(self.policy, decision, DecisionTraceRecorder())
+
+        self.assertFalse(hasattr(self.policy, "last_analysis"))
+        self.assertEqual(vars(self.policy), {})
 
 
 if __name__ == "__main__":

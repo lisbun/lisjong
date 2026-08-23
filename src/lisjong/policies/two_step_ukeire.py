@@ -22,6 +22,17 @@ Issue #76により、`choose_action()`は次の優先順位でAlways Riichi base
 面前・聴牌・持ち点等のリーチ条件はここで再計算しない。この判定は通常打牌
 評価ロジック（上記2段階受け入れ）とは独立したprivate helperに置き、将来
 リーチ / ダマ判断へ差し替えられる責務分離を保つ。
+
+Issue #97により、この優先順位判定は`_decide()`という単一のdecision
+orchestrationへまとめ、`choose_action()`と`choose_action_with_analysis()`は
+どちらも同じ算法を**1回だけ**実行する。打牌評価branchだけが
+`TwoStepUkeireAnalysis`をtyped observation payloadとして返し、和了、リーチ、
+pass、既存fallbackでは`analysis`を`None`にする。trace表示のためだけに打牌
+評価を追加実行しない。
+
+analysisはIssue #87の`TwoStepUkeireCandidateEvaluation`をsource of truthとして
+そのまま再利用し、shanten、現在受け入れ、2段階受け入れscoreをtrace用に
+再計算しない。`policy.last_analysis`のようなdecision間mutable stateも持たない。
 """
 
 from collections.abc import Mapping, Sequence
@@ -36,7 +47,9 @@ from lisjong.policy_contract.action import (
     RonAction,
     TsumoAction,
 )
+from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.decision_context import DecisionContext
+from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import (
     Tile,
@@ -87,6 +100,45 @@ class TwoStepUkeireCandidateEvaluation:
             type(self.second_step_ukeire_score) is not int
         ):
             raise TypeError("second_step_ukeire_score must be an int or None")
+
+
+@dataclass(frozen=True, slots=True)
+class TwoStepUkeireAnalysis(AnalysisTrace):
+    """TwoStepUkeireが実際に実行した打牌評価のtyped observation payload。
+
+    `candidate_evaluations`は、その1 decisionで実際に生成された
+    `TwoStepUkeireCandidateEvaluation`をsource of truthとしてそのまま保持する。
+    trace目的でshanten、現在受け入れ、2段階受け入れscoreを再計算しない。
+    `None = stage未評価`と`0 = 評価済み結果0`の区別も、元のcandidate
+    evaluation側のsemanticsをそのまま引き継ぐ。
+
+    このpayloadはpost-discard hand、decision-local shanten cache、mutable
+    working state、Policy instance、環境runtimeへの参照を持たない。打牌評価を
+    実際に行わなかったdecision（和了、リーチ、pass、既存fallback）では、
+    このanalysis自体を生成しない。
+    """
+
+    candidate_evaluations: tuple[TwoStepUkeireCandidateEvaluation, ...]
+
+    def __post_init__(self) -> None:
+        try:
+            evaluations = tuple(self.candidate_evaluations)
+        except TypeError:
+            raise TypeError("candidate_evaluations must be an iterable") from None
+
+        if any(
+            not isinstance(evaluation, TwoStepUkeireCandidateEvaluation)
+            for evaluation in evaluations
+        ):
+            raise TypeError(
+                "candidate_evaluations must contain only "
+                "TwoStepUkeireCandidateEvaluation values"
+            )
+
+        if not evaluations:
+            raise ValueError("candidate_evaluations must not be empty")
+
+        object.__setattr__(self, "candidate_evaluations", evaluations)
 
 
 @dataclass(slots=True)
@@ -448,26 +500,47 @@ def _choose_riichi(
 class TwoStepUkeirePolicy:
     """同向聴・同現在受け入れ候補だけを2段階受け入れで比較するPolicy。"""
 
-    def _choose_discard_action(
+    def _decide_discard(
         self,
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
-    ) -> DiscardAction:
-        """このPolicy世代がlegal discard集合から選ぶprivate extension point。"""
-        return _choose_discard(policy_input, discard_actions)
+    ) -> PolicyDecision:
+        """このPolicy世代がlegal discard集合から選ぶprivate extension point。
 
-    def choose_action(self, decision: DecisionContext) -> InternalAction:
+        通常実行とtraced実行で共有するsingle-source評価pathであり、trace用の
+        別evaluation pathは作らない。subclassはこのmethodをoverrideすることで、
+        選択とanalysis公開の両方を同時に引き継ぐ。`_decide()`側にanalysis生成を
+        置かないため、subclassが基底classのanalysis pathを偶然inheritして
+        自分のdecision pathを迂回することがない。
+        """
+        selected, evaluations = _evaluate_and_choose_discard(
+            policy_input, discard_actions
+        )
+        return PolicyDecision(
+            action=selected,
+            analysis=TwoStepUkeireAnalysis(candidate_evaluations=evaluations),
+        )
+
+    def _decide(self, decision: DecisionContext) -> PolicyDecision:
+        """1回のdecision計算からactionとoptional analysisを同時に得る。
+
+        analysisを持つのは実際に打牌評価を実行したbranchだけである。和了、
+        リーチ、pass、既存fallbackでは、trace表示のためだけの打牌評価を
+        追加実行しない。
+        """
         winning_actions = tuple(
             action
             for action in decision.legal_actions
             if isinstance(action, _WINNING_ACTION_TYPES)
         )
         if winning_actions:
-            return min(winning_actions, key=_winning_action_sort_key)
+            return PolicyDecision(
+                action=min(winning_actions, key=_winning_action_sort_key)
+            )
 
         riichi_action = _choose_riichi(decision.legal_actions)
         if riichi_action is not None:
-            return riichi_action
+            return PolicyDecision(action=riichi_action)
 
         discard_actions = tuple(
             action
@@ -475,7 +548,7 @@ class TwoStepUkeirePolicy:
             if isinstance(action, DiscardAction)
         )
         if discard_actions:
-            return self._choose_discard_action(decision.input, discard_actions)
+            return self._decide_discard(decision.input, discard_actions)
 
         pass_actions = tuple(
             action
@@ -483,12 +556,19 @@ class TwoStepUkeirePolicy:
             if isinstance(action, PassAction)
         )
         if pass_actions:
-            return pass_actions[0]
+            return PolicyDecision(action=pass_actions[0])
 
         if len(decision.legal_actions) == 1:
-            return decision.legal_actions[0]
+            return PolicyDecision(action=decision.legal_actions[0])
 
         raise TwoStepUkeirePolicyError(
             "no winning action, discard, or pass is available and multiple "
             "non-discard candidates remain without a defined conservative rule"
         )
+
+    def choose_action(self, decision: DecisionContext) -> InternalAction:
+        return self._decide(decision).action
+
+    def choose_action_with_analysis(self, decision: DecisionContext) -> PolicyDecision:
+        """`choose_action()`と同じdecision算法を1回だけ実行して返す。"""
+        return self._decide(decision)

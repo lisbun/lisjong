@@ -142,6 +142,191 @@ semantic identityと共通の照合原則は
 `possible_actions`との具体的なtranslation、serialization、照合規則には
 未実測事項があるため、引き続き確定しない。
 
+## DecisionTrace / AnalysisTrace
+
+Issue #97で、1回のPolicy decisionをone-wayで観測するcontractを追加した。
+observability契約であり、Policy契約の入力側は一切拡張しない。
+
+責務差は次のとおりで、相互にschemaを混ぜない。
+
+```text
+GameTrace
+    = what happened in execution
+
+DecisionTrace
+    = what canonical action lisjong selected for one Policy decision
+
+AnalysisTrace
+    = which typed lisjong intermediate values were actually produced / used
+      in that Policy decision
+```
+
+ADR 0002以降のcurrent ownershipでは、objective `GameTrace`は`lisjong-arena`、
+`DecisionTrace` / `AnalysisTrace`は`lisjong`が所有する。
+
+```text
+AnalysisTrace is output / observation, not Policy input.
+AnalysisTrace does not own the semantics of AI intermediate values.
+```
+
+`AnalysisTrace`はfree-form telemetryではなく、immutableでtypedな
+lisjong-owned semantic payloadとする。`dict[str, object]`、
+`dict[str, float]`、`Mapping[str, object]`、`reason: str`のような表現、および
+free-form natural-language reasoningをcanonical schemaにしない。向聴数、
+受け入れ、belief、value / riskといったintermediate valueのsemanticsは、各AI
+domain value側（例: `TwoStepUkeireCandidateEvaluation`）を正本とし、
+`AnalysisTrace`側へ複製しない。
+
+`DecisionTrace`は1 decisionを表すimmutable valueで、次だけを持つ。
+
+- `legal_actions`: Policyへ提示された`decision.legal_actions`のimmutable snapshot
+- `selected_action`: 既存validation後のcanonicalな合法`InternalAction`
+- `analysis`: 許可されたtyped analysis、またはanalysis未生成を表す`None`
+
+value自身は、`legal_actions`が非空でsemantic重複を持たないこと、全要素が
+`InternalAction`であること、`selected_action`が`legal_actions`へちょうど1件
+semantic matchすること、`analysis`が許可されたtyped payloadまたは`None`である
+ことだけを構造的に検証する。麻雀ルール上の合法性は再検証せず、
+`DecisionContext`や実行境界の責務を重複実装しない。
+
+`analysis`の`None`は「analysisを生成していない」ことを表す。評価結果の`0`、
+empty evaluation、neutral scoreの意味へ流用しない。
+
+`DecisionTrace`が保持してよいのは次の3つだけである。
+
+1. `DecisionContext`としてPolicyへ合法的に提示された情報
+2. Policy自身がそこから実際に導出したtyped intermediate value
+3. validation後のcanonical selected action
+
+他家の実手牌、山 / 王牌の実状態、環境のprivileged state、GameTraceの
+privileged observer data、未来のevent、offline ground truth、Arena固有の
+state / metricを混入しない。`DecisionContext`へtrace、sink、GameTrace、observer、
+privileged stateを追加しない。DecisionTrace導入を理由にPolicy-visible
+informationを拡張しない。
+
+`DecisionTrace`はgame-global sequence、GameTrace sequence、GameTrace join ID、
+environment event IDを持たない。保証するのは同一`DecisionTraceRecorder`内の
+notification orderだけであり、Action equalityやtuple indexを暗黙のjoin keyとして
+契約化しない。
+
+## trace付きexecutionと analysis capability
+
+既存の`execute_policy(policy, decision)`は変更しない。名前、2引数signature、
+例外semantics、canonical legal-action validationをすべて維持し、trace用引数も
+追加しない。traceを利用しない既存caller、既存Policyは一切変更不要である。
+
+trace付きexecutionは別のopt-in APIとして追加する。
+
+```python
+execute_policy_with_trace(
+    policy: Policy,
+    decision: DecisionContext,
+    sink: DecisionTraceSink,
+) -> InternalAction
+```
+
+両APIはlegal-action validation logicを二重実装せず、共通のprivate validation
+pathだけを使う。
+
+```text
+execute_policy()
+        \
+         +--> common private validation --> canonical action
+        /
+execute_policy_with_trace()
+```
+
+`Policy.choose_action()`の契約も変更しない。analysisを提供できるPolicyは、
+optional capability methodを追加してよい。
+
+```python
+class AnalysisCapablePolicy(Protocol):
+    def choose_action(
+        self,
+        decision: DecisionContext,
+    ) -> InternalAction: ...
+
+    def choose_action_with_analysis(
+        self,
+        decision: DecisionContext,
+    ) -> PolicyDecision: ...
+```
+
+`PolicyDecision`は、Policyが提案したActionとoptional typed analysisを持つ
+immutable valueである。
+
+```text
+PolicyDecision.action
+    = Policyが提案したAction
+
+DecisionTrace.selected_action
+    = validation後のcanonical legal Action
+```
+
+この2つを同一視しない。
+
+analysis-capable Policyは次を守る。
+
+- trace取得のためにPolicyを2回実行しない
+- `choose_action()`とanalysis-capable pathへdecision algorithmを二重実装しない
+- analysis生成のために向聴数、受け入れ等のintermediate valueを再計算しない
+- `policy.last_analysis`等のdecision間mutable stateをcanonical transportにしない
+- trace有効 / 無効でsemantic selected actionを変えない
+- subclassが基底classのanalysis pathを偶然inheritした結果、自分のdecision
+  semanticsが変わる設計にしない
+
+1回のdecision計算からactionとimmutable analysisの両方を得る。
+
+### traced executionの順序と失敗時の扱い
+
+```text
+Policy decision once
+        ↓
+Policy result validation
+        ↓
+canonical legal action
+        ↓
+DecisionTrace construction
+        ↓
+sink.on_decision(trace)
+        ↓
+return canonical selected action
+```
+
+Policy自身の例外、またはPolicy返却値のvalidation失敗では、DecisionTraceを
+emitしない。`DecisionTraceSink.on_decision()`が例外を送出した場合は、その例外を
+黙って握り潰さず、原則として変更せず伝播する。このときfallback Actionを返さず、
+sink失敗をtrace成功として扱わず、Policyも再実行しない。generic sink内部の
+atomicityまでは実行境界が保証しない。
+
+### DecisionTraceSinkとDecisionTraceRecorder
+
+`DecisionTrace`は1 decisionごとに完成済みvalueとして生成されるため、GameTraceの
+start / event / completeのlifecycleは持ち込まない。
+
+```python
+class DecisionTraceSink(Protocol):
+    def on_decision(
+        self,
+        trace: DecisionTrace,
+    ) -> None: ...
+```
+
+標準in-memory recorderは次を保証する。
+
+- record 0件では`snapshot() == ()`
+- `snapshot()`はimmutable tupleを返す
+- 同一recorderへのnotification orderを保持する
+- snapshot取得後にrecordが追加されても、取得済みsnapshotは変化しない
+- 正常な1回の`on_decision()`につき1件だけrecordする
+
+### non-interference
+
+同じPolicy、同じ意味内容の`DecisionContext`について、`execute_policy(...)`と
+標準recorderを渡した`execute_policy_with_trace(...)`は、semantic selected action
+を一致させる。trace有無をPolicy input、decisionへ影響するfeature flag、
+tie-break input、hidden mutable stateとして使用しない。
+
 ## Policyが所有してよい状態
 
 Policyを完全なstateless objectには限定しない。次は保持してよい。
@@ -243,6 +428,15 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
   一意に一致した`legal_actions`側の`InternalAction`を返す
 - Policy返却値を検証できない場合は`PolicyActionValidationError`でfail closedし、
   Policy自身の例外は変更せず伝播する
+- `analysis_trace.py`の`AnalysisTrace`はtyped analysis payloadのroot contract
+  とし、concrete analysis型は`lisjong.policies`側が所有する。`policy_contract`
+  から具体Policy実装へ逆依存しない
+- `decision_trace.py`の`DecisionTrace`、`DecisionTraceSink`、
+  `DecisionTraceRecorder`と、`policy_decision.py`の`PolicyDecision`、
+  `AnalysisCapablePolicy`は、いずれもimmutable value / structural Protocolとし、
+  Policy runtimeのmutable stateを保持しない
+- `execute_policy_with_trace()`はopt-in APIとし、`execute_policy()`と同じprivate
+  validation pathだけを共有する
 
 ## 引き続き未確定の項目
 

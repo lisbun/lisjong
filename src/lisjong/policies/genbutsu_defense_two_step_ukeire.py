@@ -1,13 +1,30 @@
-"""他家リーチ時に共通現物を優先するTwoStepUkeire Policy。"""
+"""他家リーチ時に共通現物を優先するTwoStepUkeire Policy。
+
+Issue #97のDecisionTrace / AnalysisTrace基盤に対して、このPolicyは
+**explicit override**でanalysis非公開を選択する。基底`TwoStepUkeirePolicy`が
+持つanalysis付き打牌評価pathを偶然inheritして、defense decision pathを迂回する
+ことがないよう、single decision extension pointである`_decide_discard()`自身を
+overrideする。
+
+本Issueの範囲ではGenbutsuDefense固有analysisを追加しない。したがって、
+
+    selected action = 既存のGenbutsuDefense decision
+    analysis        = None
+
+をtrace有効時の期待behaviorとする。trace有無でselected Actionは一致し、
+defense activationの順序も変わらない。Policyも1回しか実行しない。
+"""
 
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeirePolicy,
+    _choose_discard,
     _DecisionShantenEvaluator,
     _evaluate_and_choose_prepared,
     _evaluate_post_discard_hands,
 )
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.player_state import PlayerPublicState
+from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
@@ -46,14 +63,32 @@ def _common_genbutsu_tile_types(
 class GenbutsuDefenseTwoStepUkeirePolicy(TwoStepUkeirePolicy):
     """非聴牌なら全リーチ者への共通現物を優先するstateless baseline。"""
 
-    def _choose_discard_action(
+    def _decide_discard(
+        self,
+        policy_input: PolicyInput,
+        discard_actions: tuple[DiscardAction, ...],
+    ) -> PolicyDecision:
+        """defense decision pathの結果を、analysis非公開のまま返す。
+
+        基底classのanalysis付き打牌評価pathへ委譲しない。本Issueでは
+        GenbutsuDefense固有analysisを追加しないため、`analysis`は常に`None`と
+        する。`None`は「analysisを生成していない」ことを表し、評価結果0や
+        empty evaluationの意味には流用しない。
+        """
+        return PolicyDecision(
+            action=self._choose_defense_discard(policy_input, discard_actions),
+            analysis=None,
+        )
+
+    def _choose_defense_discard(
         self,
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
     ) -> DiscardAction:
+        """既存のdefense decision pathそのもの。判定順序を変更しない。"""
         riichi_players = _opponent_riichi_players(policy_input)
         if not riichi_players:
-            return super()._choose_discard_action(policy_input, discard_actions)
+            return _choose_discard(policy_input, discard_actions)
 
         evaluator = _DecisionShantenEvaluator()
         evaluated = _evaluate_post_discard_hands(
