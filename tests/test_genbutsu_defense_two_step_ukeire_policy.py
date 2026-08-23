@@ -20,10 +20,13 @@ from lisjong.policy_contract.action import (
     TsumoAction,
 )
 from lisjong.policy_contract.decision_context import DecisionContext
+from lisjong.policy_contract.decision_trace import DecisionTraceRecorder
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
+from lisjong.policy_contract.policy_decision import PolicyDecision
+from lisjong.policy_contract.policy_execution import execute_policy_with_trace
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.round_state import RoundState
@@ -538,6 +541,167 @@ class PublicGenerationAndScopeTest(unittest.TestCase):
                 )
             )
         )
+
+
+class GenbutsuDefenseTraceBehaviorTest(unittest.TestCase):
+    """Issue #97: trace on/offでdefense behaviorが完全に一致することを固定する。"""
+
+    def setUp(self) -> None:
+        self.policy = GenbutsuDefenseTwoStepUkeirePolicy()
+
+    def _scenarios(self) -> dict[str, DecisionContext]:
+        discard_9s = _discard(SOUZU_9)
+        discard_white = _discard(WHITE_DRAGON)
+        multiple_riichi_players = _players(
+            (
+                Seat.SEAT_1,
+                RiichiState.DECLARED,
+                (_history(SOUZU_9), _history(WHITE_DRAGON, order=1)),
+            ),
+            (Seat.SEAT_2, RiichiState.ACCEPTED, (_history(SOUZU_9),)),
+        )
+        return {
+            "no opponent riichi": _decision(
+                _TWO_STEP_HAND, (discard_9s, discard_white)
+            ),
+            "non-tenpai with common genbutsu": _decision(
+                _TWO_STEP_HAND,
+                (_discard(MANZU_5), _discard(MANZU_4)),
+                players=_single_threat(MANZU_4),
+            ),
+            "non-tenpai without common genbutsu": _decision(
+                _TWO_STEP_HAND,
+                (discard_9s, discard_white),
+                players=_single_threat(EAST),
+            ),
+            "tenpai stays available": _decision(
+                _TANKI_VERSUS_ONE_SHANTEN_HAND,
+                (_discard(MANZU_4), _discard(RED_DRAGON)),
+                players=_single_threat(MANZU_4),
+            ),
+            "multiple genbutsu": _decision(
+                _TWO_STEP_HAND,
+                (discard_9s, discard_white),
+                players=_single_threat(SOUZU_9, WHITE_DRAGON),
+            ),
+            "multiple riichi need common genbutsu": _decision(
+                _TWO_STEP_HAND,
+                (discard_white, discard_9s),
+                players=multiple_riichi_players,
+            ),
+            "two or more shanten": _decision(
+                _FAR_HAND,
+                (_discard(EAST), _discard(MANZU_8)),
+                players=_single_threat(MANZU_8),
+            ),
+        }
+
+    def test_selected_action_is_identical_with_and_without_trace(self) -> None:
+        for name, decision in self._scenarios().items():
+            with self.subTest(scenario=name):
+                untraced = self.policy.choose_action(decision)
+                recorder = DecisionTraceRecorder()
+
+                traced = execute_policy_with_trace(self.policy, decision, recorder)
+
+                (trace,) = recorder.snapshot()
+                self.assertIs(traced, untraced)
+                self.assertIs(trace.selected_action, untraced)
+
+    def test_defense_decisions_report_no_analysis_in_this_issue(self) -> None:
+        for name, decision in self._scenarios().items():
+            with self.subTest(scenario=name):
+                recorder = DecisionTraceRecorder()
+
+                execute_policy_with_trace(self.policy, decision, recorder)
+
+                self.assertIsNone(recorder.snapshot()[0].analysis)
+
+    def test_traced_defense_does_not_degrade_to_the_pure_two_step_path(self) -> None:
+        safe = _discard(MANZU_4)
+        efficient = _discard(MANZU_5)
+        decision = _decision(
+            _TWO_STEP_HAND,
+            (efficient, safe),
+            players=_single_threat(MANZU_4),
+        )
+        base_recorder = DecisionTraceRecorder()
+        defense_recorder = DecisionTraceRecorder()
+
+        base_selected = execute_policy_with_trace(
+            TwoStepUkeirePolicy(), decision, base_recorder
+        )
+        defense_selected = execute_policy_with_trace(
+            self.policy, decision, defense_recorder
+        )
+
+        self.assertIs(base_selected, efficient)
+        self.assertIs(defense_selected, safe)
+        self.assertIsNotNone(base_recorder.snapshot()[0].analysis)
+        self.assertIsNone(defense_recorder.snapshot()[0].analysis)
+
+    def test_analysis_capability_is_explicitly_overridden_not_inherited(self) -> None:
+        self.assertIsNot(
+            GenbutsuDefenseTwoStepUkeirePolicy._decide_discard,
+            TwoStepUkeirePolicy._decide_discard,
+        )
+        self.assertIn(
+            "_decide_discard",
+            vars(GenbutsuDefenseTwoStepUkeirePolicy),
+        )
+
+    def test_defense_decision_path_runs_exactly_once_per_traced_decision(self) -> None:
+        decision = _decision(
+            _TWO_STEP_HAND,
+            (_discard(MANZU_5), _discard(MANZU_4)),
+            players=_single_threat(MANZU_4),
+        )
+
+        with patch.object(
+            GenbutsuDefenseTwoStepUkeirePolicy,
+            "_choose_defense_discard",
+            autospec=True,
+            side_effect=GenbutsuDefenseTwoStepUkeirePolicy._choose_defense_discard,
+        ) as defense_path:
+            execute_policy_with_trace(self.policy, decision, DecisionTraceRecorder())
+
+        self.assertEqual(defense_path.call_count, 1)
+
+    def test_analysis_capable_decision_returns_the_defense_action(self) -> None:
+        safe = _discard(MANZU_4)
+        efficient = _discard(MANZU_5)
+        decision = _decision(
+            _TWO_STEP_HAND,
+            (efficient, safe),
+            players=_single_threat(MANZU_4),
+        )
+
+        proposed = self.policy.choose_action_with_analysis(decision)
+
+        self.assertIsInstance(proposed, PolicyDecision)
+        self.assertIs(proposed.action, safe)
+        self.assertIsNone(proposed.analysis)
+
+    def test_defense_policy_keeps_the_inherited_analysis_capability(self) -> None:
+        # GenbutsuDefenseは`choose_action()`をoverrideしないため、traced
+        # executionはinheritしたanalysis capabilityを通り、そこから
+        # override済みのdefense decision pathへdispatchされる。
+        decision = _decision(
+            _TWO_STEP_HAND,
+            (_discard(MANZU_5), _discard(MANZU_4)),
+            players=_single_threat(MANZU_4),
+        )
+        recorder = DecisionTraceRecorder()
+
+        with patch.object(
+            TwoStepUkeirePolicy,
+            "choose_action",
+            side_effect=AssertionError("analysis capability must be used"),
+        ):
+            traced = execute_policy_with_trace(self.policy, decision, recorder)
+
+        self.assertIs(traced, decision.legal_actions[1])
+        self.assertIsNone(recorder.snapshot()[0].analysis)
 
 
 if __name__ == "__main__":

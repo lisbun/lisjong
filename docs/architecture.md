@@ -156,8 +156,14 @@ stable tie-breakに沿うcanonical順で生成する。
 このvalueはpost-discard hand、decision-local shanten cache、mutable working state、
 環境runtimeへの参照を持たない。TwoStepUkeireが選択に使う評価値のsemantic snapshotで
 あり、AnalysisTrace専用schema、最終Policy utility、汎用CandidateEvaluation階層、
-learned model向けのflat feature schemaではない。DecisionTrace / AnalysisTraceへの接続は
-本責務に含めない。
+learned model向けのflat feature schemaではない。
+
+Issue #97で、この既存valueをsource of truthとして直接再利用する
+`lisjong.policies.two_step_ukeire.TwoStepUkeireAnalysis`を追加した。AnalysisTrace側は
+`TwoStepUkeireCandidateEvaluation`のsemanticsを複製せず、observation payloadとして
+束ねるだけである。trace目的で打牌後向聴数、現在受け入れ、2段階受け入れscoreを
+再計算しない。`None = stage未評価` / `0 = 評価済み結果0`の区別と、DiscardAction
+stable tie-breakに沿うcanonical候補順も、元のvalue側の意味をそのまま引き継ぐ。
 
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
@@ -194,6 +200,98 @@ Policy入力の具体的な許可field、raw event履歴を初期入力へ含め
 [Policy入力の最小スキーマ](policy-input-schema.md)で確定する。内部Actionの
 variantとfieldは[内部Actionモデル](internal-action-model.md)で確定する。
 action identityの規則は[Action identity](action-identity.md)で確定する。
+
+#### DecisionTrace / AnalysisTrace observability boundary (Issue #97)
+
+ADR 0002以降のcurrent ownershipでは、objective execution observationは
+`lisjong-arena`、AI-side decision observationは`lisjong`が所有する。責務差は
+次のとおりで、相互にschemaを混ぜない。
+
+```text
+GameTrace       (lisjong-arena)
+    = what happened in execution
+
+DecisionTrace   (lisjong)
+    = what canonical action lisjong selected
+      for one Policy decision
+
+AnalysisTrace   (lisjong)
+    = which typed lisjong intermediate values
+      were actually produced / used
+      in that Policy decision
+```
+
+`AnalysisTrace is output / observation, not Policy input.`
+`AnalysisTrace does not own the semantics of AI intermediate values.`
+
+semanticsの正本は常に各AI domain value側（`TwoStepUkeireCandidateEvaluation`、
+`HandBelief`、将来のtenpai / wait belief、value / risk evaluation等）に置き、
+`AnalysisTrace`はそれをone-wayなobservation payloadとして束ねるだけである。
+`dict[str, object]`、`dict[str, float]`、`Mapping[str, object]`、`reason: str`
+のようなfree-form telemetryやnatural-language reasoningをcanonical schemaに
+しない。root contractがruntime検証するのは、`AnalysisTrace` subclassかつfrozen
+dataclassであるという最低限の構造条件だけで、deep immutabilityまでは保証しない。
+field値まで含めたimmutabilityとdetachmentは各concrete analysis payload側の
+責務とする。
+
+`lisjong.policy_contract.decision_trace.DecisionTrace`は、1回のPolicy decisionを
+表すimmutable valueであり、Policyへ提示された`legal_actions`、既存validation後の
+canonicalな`selected_action`、typed `analysis`または`None`だけを持つ。`None`は
+「analysisを生成していない」ことを表し、評価結果`0`やempty evaluationの意味へ
+流用しない。
+
+trace付きexecutionは
+`lisjong.policy_contract.execute_policy_with_trace(policy, decision, sink)`という
+opt-in APIとして追加し、既存の`execute_policy(policy, decision)`の名前、2引数
+signature、例外semanticsは変更しない。両APIはlegal-action validationを二重実装
+せず、同じprivate validation pathだけを共有する。したがって
+`DecisionTrace.selected_action`は、Policyが返したequalだが別のobjectではなく、
+常に`decision.legal_actions`側のcanonical `InternalAction`である。
+
+analysisを提供できるPolicyはoptional capability
+（`PolicyDecision`を返すanalysis-capable decision path）を追加してよい。
+`PolicyDecision.action`はPolicyが提案したActionであり、validation後の
+`DecisionTrace.selected_action`とは区別する。capabilityを実装しないPolicyは一切
+変更せずtraced executionから利用でき、その場合`analysis`は`None`になる。
+
+capabilityのdispatchはmethod名の有無だけで決めず、MRO上のmethod ownerも見る。
+subclassが`choose_action()`だけをoverrideし、capabilityを基底classから偶然
+inheritしているだけの場合はcapabilityを使わず、そのsubclass自身の
+`choose_action()`へfallbackする（`analysis`は`None`）。これにより、偶然の
+inheritによってtrace有無で異なるdecision algorithmを通ることがない。
+
+trace取得のためにPolicyを2回実行しない。`policy.last_analysis`のようなdecision間
+mutable stateもanalysisのtransport mechanismにしない。1回のdecision計算から
+actionとimmutable analysisの両方を得る。trace有無でsemantic selected actionは
+変わらず、trace有無をPolicy input、decision feature、tie-break input、hidden
+mutable stateとして使わない。
+
+traced executionの順序は、Policy decision once -> Policy result validation ->
+canonical legal action -> DecisionTrace construction -> `sink.on_decision(trace)`
+-> canonical actionのreturnで固定する。Policy例外またはvalidation失敗では
+DecisionTraceをemitしない。sink例外は握り潰さずそのまま伝播し、fallback Actionを
+返さず、Policyも再実行しない。標準`DecisionTraceRecorder`は正常な1回の
+`on_decision()`につき1件だけrecordし、`snapshot()`はnotification順のimmutable
+tupleを返す。取得済みsnapshotは以後の追加recordで変化しない。
+
+DecisionTraceは、`DecisionContext`としてPolicyへ提示された情報、Policyがそこから
+実際に生成・利用したtyped intermediate value、validation後のcanonical selected
+actionだけを保持する。他家の実手牌、山 / 王牌の実状態、RiichiEnv privileged
+state、GameTraceのprivileged observer state、未来のevent、offline ground truth、
+Arena固有のmetric / stateを混入しない。`DecisionContext`へtrace、sink、GameTrace、
+observer、privileged stateを追加しない。
+
+本Issueの範囲では、GameTrace schema変更、GameTraceへのAI analysis埋め込み、
+correlation ID、global sequence、JSONL persistence、Arena integration、
+viewer / replay、DB / network transportを扱わない。DecisionTraceへGameTrace
+sequenceやjoin IDも持たせず、保証するのは同一`DecisionTraceRecorder`内の
+notification orderだけである。
+
+`GenbutsuDefenseTwoStepUkeirePolicy`は`TwoStepUkeirePolicy`のsubclassだが、
+本Issueではdefense固有analysisを追加しない。基底classのanalysis付き打牌評価path
+を偶然inheritしてdefense decision pathを迂回しないよう、single decision extension
+point自体をexplicit overrideし、`selected action = 既存のGenbutsuDefense
+decision` / `analysis = None`をtrace有効時の期待behaviorとする。
 
 ### RiichiEnv Adapter
 
@@ -895,6 +993,20 @@ contract側からは依存されない。Issue #59時点では`PolicyInput` /
 `DecisionContext`、Policy implementation、Adapter、Runner / Arena runtimeのいずれも
 `belief`を参照しない。
 
+Issue #97のDecisionTrace / AnalysisTraceも同じ依存方向を守る。`policy_contract`が
+所有するのはroot contract（`AnalysisTrace`、`DecisionTrace`、`PolicyDecision`、
+`DecisionTraceSink`、`DecisionTraceRecorder`）だけであり、concrete analysis型
+（`TwoStepUkeireAnalysis`等）は`policies`側が所有する。
+
+```text
+policy_contract
+      ↑
+policies (concrete AnalysisTrace payload)
+```
+
+`policy_contract -> policies.two_step_ukeire`という直接依存は導入しない。
+`TwoStepUkeireCandidateEvaluation`のsemanticsを`policy_contract`側へ複製もしない。
+
 ### 共通Policy契約package
 
 `lisjong.policy_contract`は、Policy実装、RiichiEnv Adapter、Local game runner、
@@ -905,7 +1017,16 @@ Arena-local `RiichiLabSeatAdapter`が共有する環境非依存の契約package
 
 - `policy.py`は最小のstructural `Policy(Protocol)`を定義する
 - `policy_execution.py`は1 seat × 1 decisionのPolicy呼び出しと返却値の
-  runtime validationを担い、semantic identity上一意に一致した合法候補を返す
+  runtime validationを担い、semantic identity上一意に一致した合法候補を返す。
+  opt-inの`execute_policy_with_trace()`も同じprivate validation pathを共有する
+- `analysis_trace.py`はtyped analysis payloadのroot contract`AnalysisTrace`を
+  定義する。concrete analysis型は各Policy実装側のpackageが所有し、
+  `policy_contract`から`lisjong.policies`へ逆依存しない
+- `policy_decision.py`はanalysis-capable Policyのoptional capabilityと、
+  提案action + optional analysisを表す`PolicyDecision`を定義する
+- `decision_trace.py`は1 Policy decisionのimmutable observation value
+  `DecisionTrace`、one-way observer contract`DecisionTraceSink`、標準
+  in-memory `DecisionTraceRecorder`を定義する
 - `decision_context.py`と`policy_input.py`は1 decision分の入力境界を定義する
 - `action.py`は11個の独立したfrozen dataclassと、そのunionである
   `InternalAction`を定義する

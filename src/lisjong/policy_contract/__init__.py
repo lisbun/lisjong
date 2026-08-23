@@ -21,15 +21,26 @@ from lisjong.policy_contract.action import (
     RonAction,
     TsumoAction,
 )
+from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.decision_context import DecisionContext
+from lisjong.policy_contract.decision_trace import (
+    DecisionTrace,
+    DecisionTraceRecorder,
+    DecisionTraceSink,
+)
 from lisjong.policy_contract.discard import Discard
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy import Policy
+from lisjong.policy_contract.policy_decision import (
+    AnalysisCapablePolicy,
+    PolicyDecision,
+)
 from lisjong.policy_contract.policy_execution import (
     PolicyActionValidationError,
     execute_policy,
+    execute_policy_with_trace,
 )
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
@@ -57,10 +68,15 @@ __all__ = [
     "SOUTH_WIND",
     "WEST_WIND",
     "WHITE_DRAGON",
+    "AnalysisCapablePolicy",
+    "AnalysisTrace",
     "AnkanAction",
     "ChiAction",
     "DaiminkanAction",
     "DecisionContext",
+    "DecisionTrace",
+    "DecisionTraceRecorder",
+    "DecisionTraceSink",
     "Discard",
     "DiscardAction",
     "InternalAction",
@@ -72,6 +88,7 @@ __all__ = [
     "PlayerPublicState",
     "Policy",
     "PolicyActionValidationError",
+    "PolicyDecision",
     "PolicyInput",
     "PonAction",
     "PublicMeld",
@@ -86,4 +103,5 @@ __all__ = [
     "TsumoAction",
     "Wind",
     "execute_policy",
+    "execute_policy_with_trace",
 ]
