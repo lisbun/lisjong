@@ -121,9 +121,7 @@ lisjong-arena
     lisjong_arena.riichienv.local_game_runner.LocalGameRunner
     lisjong_arena.riichienv.local_game_runner.LocalGameResult
     lisjong_arena.riichienv.adapter (RiichiEnv Adapter, canonical + physical)
-
-lisjong
-    lisjong.game_trace (GameTrace, TEMPORARY dependency)
+    lisjong_arena.game_trace (GameTrace, canonical + physical)
 ```
 
 RiichiEnv Adapterのcanonical physical implementationはArena側
@@ -137,8 +135,11 @@ physical duplicate完全解消とは扱いません。compatibility re-exportや
 `lisjong -> lisjong-arena`の
 reverse dependencyは設けていません。
 
-`GameTraceRecorder` / `GameTraceSink` / `GameTrace`はまだlisjongの物理実装であり、
-Arena-local `LocalGameRunner`がTEMPORARYに`lisjong.game_trace`をconsumeします。
+`GameTraceRecorder` / `GameTraceSink` / `GameTrace`のcanonical ownerとphysical
+implementationは、`lisjong-arena` Issue #43 / PR #44でArena側
+`lisjong_arena.game_trace`へ移管済みです。lisjong側legacy `lisjong.game_trace`と
+そのowned testはIssue #102で削除し、compatibility re-exportや
+`lisjong -> lisjong-arena`のreverse dependencyは設けていません。
 標準`GameTraceRecorder`は、RiichiEnvが生成したMJAI eventを対局中に0-basedの
 連続順で受け取り、正常な対局結果の構築後だけimmutableなcompleted `GameTrace`を
 返します。各`GameTraceEvent.event`はruntimeのmutable `dict`から切り離したMJAI
@@ -146,10 +147,11 @@ JSON文字列です。途中失敗時はpartial traceを公開せず、sinkの�
 失敗として伝播します。GameTraceはprivileged observer outputであり、Policy input
 にはなりません。
 
-`lisjong` Issue #98 / #100のmerge直後はArenaのlisjong dependency pinがcleanup前
-revisionを参照し続けるため、migration全体をphysical duplicate完全解消とは扱いません。
-Arenaのpost-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に
-完全解消とします。
+Issue #102のcleanup後もArenaのexact lisjong dependency pinはcleanup前revision
+`3505321b62e7a2be204cc555924b485a898c8f31`を参照します。installed Arena dependency
+にはlegacy copyが残り得るため、GameTraceのphysical duplicate完全解消およびpillar
+完了とはまだ扱いません。Arenaのpost-cleanup pin syncでIssue #102のactual merge SHAを
+exact targetとして反映した後に完全解消とします。
 
 ## RiichiLab execution profile / credential / CLI composition
 
