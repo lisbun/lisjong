@@ -446,7 +446,9 @@ physical copy差だけの教師ラベルは同じsemantic identityへ正規化�
 
 RiichiEnv Adapterのdecision-local mappingとseat-localな所有境界
 （`RiichiEnvActionMapping` / `RiichiEnvActionMappingSession`）はIssue #29で
-`src/lisjong/riichienv_adapter/action_mapping.py`として実装済みである。
+`src/lisjong/riichienv_adapter/action_mapping.py`として実装済みであった
+（現在は`lisjong-arena`の`lisjong_arena.riichienv.adapter.action_mapping`が
+canonical + physical implementation、`lisjong` Issue #100）。
 `PolicyInput`生成・materialized stateはIssue #28で実装済みであり、両者を同じ
 seat・同じObservationについて束ねる`DecisionContext`の最終組み立てはIssue #23の
 `build_decision()`として実装済みである。この統合境界は別のdecision identityを

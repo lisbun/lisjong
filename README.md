@@ -72,8 +72,10 @@ Mortalやpython-studyのコード・modelをlisjongの内部実装として取�
 ## 開発環境
 
 初期基準は通常版CPython 3.14です。[RiichiLabの公式Local Testing要件](https://riichi.dev/docs/local-testing)
-であるPython 3.12以上を満たし、[RiichiEnvの配布package](https://pypi.org/project/riichienv/#files)
-に含まれるCPython 3.14向けwheelを利用します。
+であるPython 3.12以上を満たします。lisjong自体は`riichienv`へdirect dependencyを
+持たないため(`lisbun/lisjong#100`)、`pip install -e ".[dev]"`は[RiichiEnvの配布
+package](https://pypi.org/project/riichienv/#files)をinstallしません。RiichiEnv
+integrationの開発・実行は`lisjong-arena`側の開発環境で行います。
 free-threaded build（3.14t）は、依存libraryを含む互換性を個別に検証するまで
 対象外とします。
 
@@ -101,8 +103,9 @@ python -m ruff check .
 python -m unittest discover -s tests -v
 ```
 
-testではPolicy契約、RiichiEnv Adapterを単体確認します。RiichiEnv 0.4.8を使う
-固定seed半荘のintegration testはArena側で実行します。
+testではPolicy契約を単体確認します。lisjongはRiichiEnvへdirect dependencyを
+持たず(`lisbun/lisjong#100`)、RiichiEnv Adapterと、RiichiEnv 0.4.8を使う固定seed
+半荘のintegration testはいずれもArena側(`lisjong-arena`)にあります。
 
 ## Local game runner
 
@@ -117,11 +120,22 @@ Policy-specific integration testsを削除済みです。compatibility re-export
 lisjong-arena
     lisjong_arena.riichienv.local_game_runner.LocalGameRunner
     lisjong_arena.riichienv.local_game_runner.LocalGameResult
+    lisjong_arena.riichienv.adapter (RiichiEnv Adapter, canonical + physical)
 
 lisjong
-    lisjong.riichienv_adapter (RiichiEnv Adapter, TEMPORARY dependency)
     lisjong.game_trace (GameTrace, TEMPORARY dependency)
 ```
+
+RiichiEnv Adapterのcanonical physical implementationはArena側
+`lisjong_arena.riichienv.adapter`です(`lisjong-arena` Issue #39 / PR #40)。
+lisjong main側legacy `lisjong.riichienv_adapter`とそのAdapter-owned testsは
+`lisbun/lisjong#100`で削除し、`riichienv`をlisjongのruntime dependencyから
+完全に除去しました。ただしこのcleanup merge直後もArenaのexact lisjong
+dependency pinはcleanup前revisionを参照し続けるため、そのpinned revisionには
+legacy実装が物理的に残ります。Arena post-cleanup pin syncが完了するまでは
+physical duplicate完全解消とは扱いません。compatibility re-exportや
+`lisjong -> lisjong-arena`の
+reverse dependencyは設けていません。
 
 `GameTraceRecorder` / `GameTraceSink` / `GameTrace`はまだlisjongの物理実装であり、
 Arena-local `LocalGameRunner`がTEMPORARYに`lisjong.game_trace`をconsumeします。
@@ -132,9 +146,10 @@ JSON文字列です。途中失敗時はpartial traceを公開せず、sinkの�
 失敗として伝播します。GameTraceはprivileged observer outputであり、Policy input
 にはなりません。
 
-`lisjong` Issue #98のmerge直後はArenaのlisjong dependency pinがcleanup前revisionを
-参照し続けるため、migration全体をphysical duplicate完全解消とは扱いません。Arenaの
-post-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に完全解消とします。
+`lisjong` Issue #98 / #100のmerge直後はArenaのlisjong dependency pinがcleanup前
+revisionを参照し続けるため、migration全体をphysical duplicate完全解消とは扱いません。
+Arenaのpost-cleanup pin syncでcleanup merge SHAをexact targetとして反映した後に
+完全解消とします。
 
 ## RiichiLab execution profile / credential / CLI composition
 
@@ -197,11 +212,14 @@ lisjong-arena
     possible_actions semantic validation / Adapter-specific errors
 
 lisjong
-    Policy / DecisionContext / InternalAction
-    RiichiEnv Adapter(build_decision() / SeatMaterializedState /
-        RiichiEnvActionMappingSession / RiichiEnvActionMapping /
-        build_policy_input())
+    Policy / DecisionContext / InternalAction / semantic contracts
 ```
+
+RiichiEnv Adapter(`build_decision()` / `SeatMaterializedState` /
+`RiichiEnvActionMappingSession` / `RiichiEnvActionMapping` / `build_policy_input()`)
+はcanonical + physical implementationとして`lisjong_arena.riichienv.adapter`に
+あります(`lisjong-arena` Issue #39 / PR #40)。lisjong側は`lisbun/lisjong#100`で
+legacy実装を削除し、`riichienv`へのdirect dependencyを持ちません。
 
 `RiichiLabSeatAdapter` / request_action parsing / MJAI response conversion /
 possible_actions semantic validation / Adapter-specific errorsは、`lisjong-arena`
@@ -230,8 +248,8 @@ profileごとのcredential source・Policy selection・runtime namespaceの独�
 ranked / validation process orchestration、Session / Transport / trace / client error、
 `RiichiLabSeatAdapter` / request_action parsing / MJAI response conversion /
 possible_actions semantic validationのtestは、canonical ownerである`lisjong-arena`側が
-担当します。lisjong側は`tests/test_policy_execution.py`等でPolicy contract / RiichiEnv
-Adapter境界のregressionを保持します。
+担当します。lisjong側は`tests/test_policy_execution.py`等でPolicy contractの
+regressionを保持します。
 
 ## RiichiLab protocol trace / runtime output
 
@@ -284,7 +302,8 @@ hashなどを確認し、repository本体とは分離して管理します。
 ## 開発状況
 
 Python 3.14、Ruff、GitHub Actions CIを開発基盤とし、共通Policy契約、最小Policy、
-RiichiEnv Adapter、共通Policy実行境界、Local game runnerまで実装しています。
+共通Policy実行境界まで実装しています。RiichiEnv Adapter / Local game runnerの
+canonical + physical implementationはいずれも`lisjong-arena`にあります。
 RiichiLab `/ws/validate` / `/ws/ranked` lower-level runtimeとrankedのone-game
 orchestration / first-party CLIは`lisjong-arena` Issue #17で、validationの
 one-game orchestration / first-party CLI / execution profile・credential・
@@ -295,7 +314,9 @@ RiichiLab protocol-facing decision bridge(`RiichiLabSeatAdapter` / request_actio
 parsing / MJAI response conversion / possible_actions semantic validation)も
 Arena Issue #27 / PR #28でcanonical + physical migrationし、lisjong Issue #94で
 legacy `src/lisjong/riichilab_adapter/`を削除しました。lisjongに残るのはPolicy /
-DecisionContext / InternalAction等のAI-side semanticsと、RiichiEnv Adapterです。
+DecisionContext / InternalAction等のAI-side semanticsです。RiichiEnv Adapterは
+Arena Issue #39 / PR #40でcanonical + physical migrationし、lisjong Issue #100で
+legacy `src/lisjong/riichienv_adapter/`を削除しました。
 `lisjong-dev` / `lisjong-baseline` / `lisjong`のbot実行profile mappingはArena側が
 所有し、mappingが参照するPolicy class自体はlisjongが引き続き所有します。AI-sideでは
 remaining tile inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
