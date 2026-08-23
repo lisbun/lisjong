@@ -9,7 +9,7 @@ lisjongは、同じAI PolicyをRiichiEnvでのローカル対局とRiichiLabで�
 
 lisjong ecosystem全体のrepository責務とrepository間依存方向は、
 [`lisjong-project` のArchitecture](https://github.com/lisbun/lisjong-project/blob/main/docs/architecture.md)を正本とする。
-本書は、その横断境界の内側にある `lisjong` 固有のPolicy、Adapter、integration architectureを正本として扱う。
+本書は、その横断境界の内側にある`lisjong`固有のPolicy、AI-side contract、牌効率・belief・value / risk等のAI decision core architectureを正本として扱う。external execution / observationのcurrent contractはcanonical ownerである`lisjong-arena`側を正本とする。
 
 本書は、Issue #3のRiichiEnv 0.4.8に対する調査結果、Issue #11の設計、
 Issue #20で具体化した共通Policy契約型を受けて、初期段階の責務と依存方向を
@@ -129,6 +129,13 @@ reference / evaluator / backendをその内側で差し替え可能にする。�
 adapter仕様、native化やcacheの採否は個別Issueで決定する。
 
 ## 責務境界
+
+ADR 0002に基づくexternal execution / observationのphysical migrationは完了している。
+RiichiLab runtime / Adapter / profile / protocol trace、RiichiEnv Adapter、
+`LocalGameRunner` / `LocalGameResult`、`GameTrace`のcanonical + physical ownerは
+`lisjong-arena`であり、lisjong側legacy copyは削除済みである。Arenaのcurrent exact
+lisjong dependency pinは`376f69088a134b5a9bcc33a69b95e3f779eb2b0e`で、lisjongは
+external execution用runtime dependencyを持たずAI decision coreとして成立する。
 
 ### Policy
 
@@ -270,10 +277,10 @@ wrapper / re-exportや`lisjong -> lisjong-arena`のreverse dependencyは設け�
 いない。RiichiEnv Adapterのcurrent contractはArena側
 `lisjong_arena.riichienv.adapter`を正本とする。
 
-`lisjong` Issue #100 merge直後はArenaのlisjong dependency pinがcleanup前
-revisionを参照し続けるため、この時点をphysical duplicate完全解消とは記録
-しない。cleanup merge SHAをexact targetとするArena post-cleanup pin syncが
-完了した時点で完全解消とする。
+`lisjong` Issue #100 / PR #101のcleanup merge直後はArenaのlisjong dependency
+pinがcleanup前revisionを参照していたが、その後Arena Issue #41 / PR #42でcleanup
+merge commit `3505321b62e7a2be204cc555924b485a898c8f31`へexact pin syncを完了した。
+これによりRiichiEnv Adapter pillarのphysical duplicateは完全解消済みである。
 
 このpackageは`lisjong.policy_contract`とは別packageであり、後述の
 「共通Policy契約package」がRiichiEnv非依存を維持する境界を壊さない。
@@ -301,29 +308,26 @@ trace reproducibility coverageは`lisjong-arena` Issue #35 / PR #36
 
 Local game runnerのcurrent contractはArena側
 `lisjong_arena.riichienv.local_game_runner.LocalGameRunner` /
-`LocalGameResult`を正本とする。RiichiEnv Adapterは`lisjong` Issue #100で
-lisjong main側legacy実装を削除し、Arena-local `lisjong_arena.riichienv.adapter`が
-canonical physical implementationである(上記「RiichiEnv Adapter physical
-migration」節を参照)。ただしIssue #100 merge直後もArenaのexact lisjong
-dependency pinはcleanup前revisionを参照し続け、そのpinned revisionには
-legacy実装が物理的に残るため、Arena post-cleanup pin sync完了前は
-sole physical implementationとは扱わない。GameTraceのcanonical physical
-implementationは、Arena Issue #43 / PR #44で`lisjong_arena.game_trace`へ移管済みで、
-Arena-local `LocalGameRunner`もこのArena-local implementationをconsumeする。
-lisjong側legacy `lisjong.game_trace`とowned testはIssue #102で削除した。
+`LocalGameResult`を正本とする。RiichiEnv Adapterは`lisjong` Issue #100 / PR #101で
+lisjong main側legacy実装を削除し、Arena Issue #41 / PR #42でcleanup merge SHAへの
+exact pin syncまで完了したため、Arena-local `lisjong_arena.riichienv.adapter`が
+canonicalかつsole physical implementationである(上記「RiichiEnv Adapter physical
+migration」節を参照)。
 
-Issue #102のcleanup後もArenaのexact lisjong dependency pinはcleanup前revision
-`3505321b62e7a2be204cc555924b485a898c8f31`を参照し、そのinstalled dependencyには
-legacy copyが残り得る。そのためGameTraceのphysical duplicate完全解消、GameTrace
-pillar完了、ADR 0002完了とはまだ記録しない。Issue #102のactual cleanup merge SHAを
-exact targetとするArena post-cleanup pin syncが完了した時点で完全解消とする。
+GameTraceのcanonical physical implementationはArena Issue #43 / PR #44で
+`lisjong_arena.game_trace`へ移管し、Arena-local `LocalGameRunner`もこのArena-local
+implementationをconsumeする。lisjong側legacy `lisjong.game_trace`とowned testは
+Issue #102 / PR #103で削除し、Arena Issue #45 / PR #46でexact lisjong dependency
+pinをcleanup merge commit `376f69088a134b5a9bcc33a69b95e3f779eb2b0e`へ同期した。
+これによりGameTrace pillarのphysical duplicateも完全解消済みである。
 
 #### GameTrace observability boundary
 
 canonical implementation `lisjong_arena.game_trace`の`GameTrace`は、1回の正常終了した
 local game executionを表すimmutable valueである。Arena takeoverはIssue #43 / PR #44で、
-lisjong legacy implementationのcleanupはIssue #102で完了した。Arena exact lisjong pin
-syncはpendingである。Arena-local `LocalGameRunner`だけがseed / game modeの正本をsinkへ
+lisjong legacy implementationのcleanupはIssue #102 / PR #103で、Arena exact lisjong
+pin syncはIssue #45 / PR #46で完了した。`lisjong_arena.game_trace`がcanonicalかつ
+sole physical implementationである。Arena-local `LocalGameRunner`だけがseed / game modeの正本をsinkへ
 供給し、各source entryをexecution全体で0-basedかつ連続する
 `GameTraceEvent.sequence`へ対応付ける。payloadはRiichiEnv 0.4.8のMJAI event `dict`を
 一度JSON文字列へserializeした値とし、RiichiEnv / runnerが所有するmutable objectと
@@ -417,9 +421,9 @@ normalization、possible_actions semantic validation)はArena側
 を正本とする。lisjong側[RiichiLab request_action Adapter](riichilab-adapter.md)は
 current contractの記述をやめ、historical migration recordへ縮退した。
 
-Issue #94 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照し得る。
-そのため、この時点をphysical duplicate完全解消とは記録しない。cleanup merge SHAを
-exact targetとするArena post-cleanup pin syncが完了した時点で完全解消とする。
+Issue #94 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照していた。
+その後Arena Issue #29でcleanup merge SHAへのexact pin syncを完了し、RiichiLab
+protocol-facing decision bridgeのphysical duplicateは解消済みである。
 
 #### legacy `riichilab_client` cleanup (Issue #91)
 
@@ -443,9 +447,9 @@ conversion / possible_actions semantic validation)も、Issue #94でArena側
 へ同様に一本化しており、lisjong側[RiichiLab request_action Adapter](riichilab-adapter.md)
 もhistorical migration recordへ縮退している。
 
-Issue #91 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照し得る。
-そのため、この時点をphysical duplicate完全解消とは記録しない。cleanup merge SHAを
-exact targetとするArena post-cleanup pin syncが完了した時点で完全解消とする。
+Issue #91 merge直後はArenaのlisjong dependency pinがcleanup前revisionを参照していた。
+その後Arena Issue #25でcleanup merge SHAへのexact pin syncを完了し、RiichiLab
+lower-level runtimeのphysical duplicateは解消済みである。
 
 ### 牌姿評価
 
@@ -909,9 +913,9 @@ Arena-local `RiichiLabSeatAdapter`が共有する環境非依存の契約package
   自席手牌stateは`round_state.py`、`player_state.py`、`own_hand_state.py`へ分離する
 
 このpackageはPython標準libraryとpackage内の型だけへ依存し、RiichiEnv、
-RiichiLab、mjai、WebSocketその他の外部protocol固有型をimportしない。Policy実装と
-Adapterはこのpackageへ依存し、RunnerはAdapterとこのpackageを利用する。
-逆向きの依存は作らない。
+RiichiLab、mjai、WebSocketその他の外部protocol固有型をimportしない。Policy実装は
+このpackageへ依存し、Arena-local Adapter / Runnerはrepository外からこのpackageを
+consumerとして利用する。逆向きの依存は作らない。
 
 ## 情報境界
 
