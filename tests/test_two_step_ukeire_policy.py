@@ -38,7 +38,10 @@ from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy_decision import PolicyDecision
-from lisjong.policy_contract.policy_execution import execute_policy_with_trace
+from lisjong.policy_contract.policy_execution import (
+    execute_policy,
+    execute_policy_with_trace,
+)
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.round_state import RoundState
@@ -1067,6 +1070,78 @@ class TwoStepUkeireTraceNonInterferenceTest(unittest.TestCase):
 
         self.assertFalse(hasattr(self.policy, "last_analysis"))
         self.assertEqual(vars(self.policy), {})
+
+
+class _ChooseActionOverrideOnlyPolicy(TwoStepUkeirePolicy):
+    """`choose_action()`だけをoverrideし、analysis capabilityを継承するsubclass。"""
+
+    def __init__(self, selected: object) -> None:
+        self.selected = selected
+        self.calls = 0
+
+    def choose_action(self, decision: DecisionContext) -> object:
+        self.calls += 1
+        return self.selected
+
+
+class InheritedAnalysisCapabilityRegressionTest(unittest.TestCase):
+    """基底classのanalysis pathを偶然inheritしてもdecision semanticsを変えない。"""
+
+    def setUp(self) -> None:
+        self.efficient = _discard(WHITE_DRAGON)
+        self.custom = _discard(SOUZU_9)
+        self.decision = _decision(_TWO_STEP_HAND, (self.custom, self.efficient))
+
+    def test_choose_action_override_only_subclass_is_not_routed_to_the_base_path(
+        self,
+    ) -> None:
+        # 基底`TwoStepUkeirePolicy`は9s切りではなく5z切りを選ぶ。traced execution
+        # がinheritしたanalysis pathを呼ぶと、この差がそのまま表面化する。
+        self.assertIs(
+            TwoStepUkeirePolicy().choose_action(self.decision), self.efficient
+        )
+        policy = _ChooseActionOverrideOnlyPolicy(self.custom)
+        recorder = DecisionTraceRecorder()
+
+        with patch.object(
+            TwoStepUkeirePolicy,
+            "_decide",
+            side_effect=AssertionError("inherited analysis path must not run"),
+        ):
+            traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, self.custom)
+        self.assertIs(trace.selected_action, self.custom)
+        self.assertIsNone(trace.analysis)
+        self.assertEqual(policy.calls, 1)
+
+    def test_choose_action_override_only_subclass_agrees_with_untraced_execution(
+        self,
+    ) -> None:
+        untraced_policy = _ChooseActionOverrideOnlyPolicy(self.custom)
+        traced_policy = _ChooseActionOverrideOnlyPolicy(self.custom)
+
+        untraced = execute_policy(untraced_policy, self.decision)
+        traced = execute_policy_with_trace(
+            traced_policy, self.decision, DecisionTraceRecorder()
+        )
+
+        self.assertIs(untraced, traced)
+        self.assertEqual(untraced_policy.calls, 1)
+        self.assertEqual(traced_policy.calls, 1)
+
+    def test_base_policy_itself_still_uses_its_analysis_capability(self) -> None:
+        recorder = DecisionTraceRecorder()
+
+        with patch.object(
+            TwoStepUkeirePolicy,
+            "choose_action",
+            side_effect=AssertionError("analysis capability must be used"),
+        ):
+            execute_policy_with_trace(TwoStepUkeirePolicy(), self.decision, recorder)
+
+        self.assertIsInstance(recorder.snapshot()[0].analysis, TwoStepUkeireAnalysis)
 
 
 if __name__ == "__main__":

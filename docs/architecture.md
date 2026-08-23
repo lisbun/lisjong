@@ -229,7 +229,10 @@ semanticsの正本は常に各AI domain value側（`TwoStepUkeireCandidateEvalua
 `AnalysisTrace`はそれをone-wayなobservation payloadとして束ねるだけである。
 `dict[str, object]`、`dict[str, float]`、`Mapping[str, object]`、`reason: str`
 のようなfree-form telemetryやnatural-language reasoningをcanonical schemaに
-しない。
+しない。root contractがruntime検証するのは、`AnalysisTrace` subclassかつfrozen
+dataclassであるという最低限の構造条件だけで、deep immutabilityまでは保証しない。
+field値まで含めたimmutabilityとdetachmentは各concrete analysis payload側の
+責務とする。
 
 `lisjong.policy_contract.decision_trace.DecisionTrace`は、1回のPolicy decisionを
 表すimmutable valueであり、Policyへ提示された`legal_actions`、既存validation後の
@@ -250,6 +253,12 @@ analysisを提供できるPolicyはoptional capability
 `PolicyDecision.action`はPolicyが提案したActionであり、validation後の
 `DecisionTrace.selected_action`とは区別する。capabilityを実装しないPolicyは一切
 変更せずtraced executionから利用でき、その場合`analysis`は`None`になる。
+
+capabilityのdispatchはmethod名の有無だけで決めず、MRO上のmethod ownerも見る。
+subclassが`choose_action()`だけをoverrideし、capabilityを基底classから偶然
+inheritしているだけの場合はcapabilityを使わず、そのsubclass自身の
+`choose_action()`へfallbackする（`analysis`は`None`）。これにより、偶然の
+inheritによってtrace有無で異なるdecision algorithmを通ることがない。
 
 trace取得のためにPolicyを2回実行しない。`policy.last_analysis`のようなdecision間
 mutable stateもanalysisのtransport mechanismにしない。1回のdecision計算から

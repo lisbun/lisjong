@@ -177,6 +177,12 @@ free-form natural-language reasoningをcanonical schemaにしない。向聴数�
 domain value側（例: `TwoStepUkeireCandidateEvaluation`）を正本とし、
 `AnalysisTrace`側へ複製しない。
 
+root contractがruntime検証するのは、`AnalysisTrace` subclassかつfrozen
+dataclassであるという最低限の構造条件だけである。これはfree-form dict /
+string / mutable payloadを排除するための境界であり、deep immutabilityまでは
+保証しない。field値まで含めたimmutabilityとdetachmentは、各concrete analysis
+payload側の責務とする。
+
 `DecisionTrace`は1 decisionを表すimmutable valueで、次だけを持つ。
 
 - `legal_actions`: Policyへ提示された`decision.legal_actions`のimmutable snapshot
@@ -264,6 +270,28 @@ DecisionTrace.selected_action
 ```
 
 この2つを同一視しない。
+
+traced execution境界は、capabilityのdispatchをmethod名の有無だけで決めない。
+MRO上のmethod ownerを見て、次のとおり扱う。
+
+```text
+同じclassが両方を定義している
+    -> analysis capabilityを使う
+
+subclassがanalysis pathの内側だけをoverrideしている
+    -> analysis capabilityを使う
+
+subclassが`choose_action()`だけをoverrideし、
+analysis capabilityを基底classからinheritしているだけ
+    -> analysis capabilityを使わない
+    -> subclass自身の`choose_action()`へfallbackし、analysisは`None`
+
+subclassがanalysis capabilityを明示overrideしている
+    -> analysis capabilityを使う
+```
+
+これにより、subclassが基底classのanalysis methodを偶然inheritした結果、trace
+有無で異なるdecision algorithmを通ることがない。
 
 analysis-capable Policyは次を守る。
 

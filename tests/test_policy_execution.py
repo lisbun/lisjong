@@ -151,6 +151,69 @@ class _BrokenAnalysisPolicy:
         return self.result
 
 
+class _AnalysisCapableBasePolicy:
+    """analysis capabilityを定義する基底Policy。"""
+
+    def __init__(self, base_action: object, analysis: object = None) -> None:
+        self.base_action = base_action
+        self.analysis = analysis
+        self.base_decide_calls = 0
+
+    def _decide(self, decision: DecisionContext) -> PolicyDecision:
+        self.base_decide_calls += 1
+        return PolicyDecision(action=self.base_action, analysis=self.analysis)
+
+    def choose_action(self, decision: DecisionContext) -> object:
+        return self._decide(decision).action
+
+    def choose_action_with_analysis(self, decision: DecisionContext) -> PolicyDecision:
+        return self._decide(decision)
+
+
+class _ChooseActionOverrideOnlySubPolicy(_AnalysisCapableBasePolicy):
+    """`choose_action()`だけをoverrideし、analysis capabilityを継承するsubclass。"""
+
+    def __init__(
+        self, base_action: object, own_action: object, analysis: object = None
+    ) -> None:
+        super().__init__(base_action, analysis)
+        self.own_action = own_action
+        self.own_calls = 0
+
+    def choose_action(self, decision: DecisionContext) -> object:
+        self.own_calls += 1
+        return self.own_action
+
+
+class _ExplicitAnalysisOverrideSubPolicy(_AnalysisCapableBasePolicy):
+    """analysis capabilityを明示overrideするsubclass。"""
+
+    def __init__(
+        self, base_action: object, own_action: object, analysis: object = None
+    ) -> None:
+        super().__init__(base_action, analysis)
+        self.own_action = own_action
+        self.own_analysis_calls = 0
+
+    def choose_action_with_analysis(self, decision: DecisionContext) -> PolicyDecision:
+        self.own_analysis_calls += 1
+        return PolicyDecision(action=self.own_action, analysis=self.analysis)
+
+
+class _InnerPathOverrideSubPolicy(_AnalysisCapableBasePolicy):
+    """analysis pathの内側だけをoverrideするsubclass。"""
+
+    def __init__(
+        self, base_action: object, own_action: object, analysis: object = None
+    ) -> None:
+        super().__init__(base_action, analysis)
+        self.own_action = own_action
+
+    def _decide(self, decision: DecisionContext) -> PolicyDecision:
+        self.base_decide_calls += 1
+        return PolicyDecision(action=self.own_action, analysis=self.analysis)
+
+
 class _RecordingSink:
     def __init__(self) -> None:
         self.traces: list[DecisionTrace] = []
@@ -513,6 +576,106 @@ class TraceNonInterferenceTest(unittest.TestCase):
         self.assertEqual(decision.legal_actions, (legal,))
         with self.assertRaises(FrozenInstanceError):
             decision.legal_actions = ()
+
+
+class InheritedAnalysisCapabilityDispatchTest(unittest.TestCase):
+    """Issue #97: 偶然inheritしたanalysis pathがdecision semanticsを変えないこと。"""
+
+    def setUp(self) -> None:
+        self.base_action = PassAction(actor=Seat.SEAT_0)
+        self.own_action = RiichiAction(actor=Seat.SEAT_0)
+        self.analysis = _StubAnalysis(label="base")
+        self.decision = _decision(self.base_action, self.own_action)
+
+    def test_choose_action_override_only_subclass_bypasses_inherited_capability(
+        self,
+    ) -> None:
+        policy = _ChooseActionOverrideOnlySubPolicy(
+            self.base_action, self.own_action, self.analysis
+        )
+        recorder = DecisionTraceRecorder()
+
+        traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, self.own_action)
+        self.assertIs(trace.selected_action, self.own_action)
+        self.assertIsNone(trace.analysis)
+        self.assertEqual(policy.own_calls, 1)
+        self.assertEqual(policy.base_decide_calls, 0)
+
+    def test_choose_action_override_only_subclass_agrees_with_untraced_execution(
+        self,
+    ) -> None:
+        untraced_policy = _ChooseActionOverrideOnlySubPolicy(
+            self.base_action, self.own_action, self.analysis
+        )
+        traced_policy = _ChooseActionOverrideOnlySubPolicy(
+            self.base_action, self.own_action, self.analysis
+        )
+
+        untraced = execute_policy(untraced_policy, self.decision)
+        traced = execute_policy_with_trace(
+            traced_policy, self.decision, DecisionTraceRecorder()
+        )
+
+        self.assertIs(untraced, traced)
+        self.assertEqual(untraced_policy.own_calls, 1)
+        self.assertEqual(traced_policy.own_calls, 1)
+
+    def test_base_policy_still_uses_its_own_analysis_capability(self) -> None:
+        policy = _AnalysisCapableBasePolicy(self.base_action, self.analysis)
+        recorder = DecisionTraceRecorder()
+
+        traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, self.base_action)
+        self.assertIs(trace.analysis, self.analysis)
+        self.assertEqual(policy.base_decide_calls, 1)
+
+    def test_subclass_overriding_the_inner_analysis_path_keeps_the_capability(
+        self,
+    ) -> None:
+        policy = _InnerPathOverrideSubPolicy(
+            self.base_action, self.own_action, self.analysis
+        )
+        recorder = DecisionTraceRecorder()
+
+        traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, self.own_action)
+        self.assertIs(trace.analysis, self.analysis)
+        self.assertIs(execute_policy(policy, self.decision), self.own_action)
+
+    def test_subclass_explicitly_overriding_the_capability_keeps_it(self) -> None:
+        policy = _ExplicitAnalysisOverrideSubPolicy(
+            self.base_action, self.own_action, self.analysis
+        )
+        recorder = DecisionTraceRecorder()
+
+        traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, self.own_action)
+        self.assertIs(trace.analysis, self.analysis)
+        self.assertEqual(policy.own_analysis_calls, 1)
+
+    def test_instance_level_choose_action_override_also_bypasses_the_capability(
+        self,
+    ) -> None:
+        policy = _AnalysisCapableBasePolicy(self.base_action, self.analysis)
+        own_action = self.own_action
+        policy.choose_action = lambda decision: own_action
+        recorder = DecisionTraceRecorder()
+
+        traced = execute_policy_with_trace(policy, self.decision, recorder)
+
+        (trace,) = recorder.snapshot()
+        self.assertIs(traced, own_action)
+        self.assertIsNone(trace.analysis)
+        self.assertEqual(policy.base_decide_calls, 0)
 
 
 if __name__ == "__main__":

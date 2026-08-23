@@ -682,6 +682,27 @@ class GenbutsuDefenseTraceBehaviorTest(unittest.TestCase):
         self.assertIs(proposed.action, safe)
         self.assertIsNone(proposed.analysis)
 
+    def test_defense_policy_keeps_the_inherited_analysis_capability(self) -> None:
+        # GenbutsuDefenseは`choose_action()`をoverrideしないため、traced
+        # executionはinheritしたanalysis capabilityを通り、そこから
+        # override済みのdefense decision pathへdispatchされる。
+        decision = _decision(
+            _TWO_STEP_HAND,
+            (_discard(MANZU_5), _discard(MANZU_4)),
+            players=_single_threat(MANZU_4),
+        )
+        recorder = DecisionTraceRecorder()
+
+        with patch.object(
+            TwoStepUkeirePolicy,
+            "choose_action",
+            side_effect=AssertionError("analysis capability must be used"),
+        ):
+            traced = execute_policy_with_trace(self.policy, decision, recorder)
+
+        self.assertIs(traced, decision.legal_actions[1])
+        self.assertIsNone(recorder.snapshot()[0].analysis)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,8 +15,15 @@ AI intermediate valueのsemanticsを新しく定義しない。semanticsの正�
 
 concrete analysisは`dict[str, object]`、`dict[str, float]`、
 `Mapping[str, object]`、`reason: str`のようなfree-form telemetryではなく、
-immutableでtypedなsemantic payloadとする。この最低限の構造条件を、
-`AnalysisTrace`のsubclassかつfrozen dataclassであることとしてruntime検証する。
+immutableでtypedなsemantic payloadとする。
+
+root contractがruntime検証するのは、`AnalysisTrace`のsubclassかつfrozen
+dataclassであるという**最低限の構造条件**だけである。これはfree-form dict /
+string / mutable payloadをcanonical representationから排除するための境界であり、
+deep immutabilityまでは保証しない。frozen dataclassでもfieldに`list`等の
+mutable objectを持てば、その中身は変更可能である。field値まで含めた
+immutabilityとdetachmentは、各concrete analysis payload側の責務とする
+（例: `TwoStepUkeireAnalysis`はimmutableなcandidate valueのtupleだけを持つ）。
 
 `policy_contract`は具体Policy実装へ逆依存しないため、concrete analysis型は
 各Policy実装側のpackage（例: `lisjong.policies`）が所有する。

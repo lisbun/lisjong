@@ -19,6 +19,12 @@ capability methodは、`choose_action()`とdecision algorithmを二重実装せ�
 1回のdecision calculationからactionとanalysisの両方を得ること。
 `policy.last_analysis`のようなdecision間mutable stateをanalysisの
 transport mechanismにしない。
+
+traced execution境界は、capabilityのdispatchをmethod名の有無だけで決めない。
+subclassが`choose_action()`だけをoverrideし、capabilityを基底classから偶然
+inheritしているだけの場合、そのcapabilityはsubclassのdecision semanticsを
+表さないためdispatch対象にしない。詳細は`policy_execution.py`の
+`_analysis_capability_is_shadowed()`を参照する。
 """
 
 from dataclasses import dataclass
