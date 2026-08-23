@@ -187,9 +187,10 @@ live_wall_tiles_remaining = 84 - (そのkyokuのstart_kyoku以降に発生した
 存在しないため、seat-visible `new_events()`中の`"tsumo"` event数を数える
 方式を実装の正本とする。この式は`docs/riichienv-investigation.md`の
 「`live_wall_tiles_remaining`のcounter algorithm」で10,579 + 3,569ステップ・
-不一致0件まで検証済みであり、`src/lisjong/riichienv_adapter/`の実装と
-testでも踏襲する。3人麻雀および実際のRiichiLabオンライン経路での同値性は
-未確認のまま引き継ぐ。
+不一致0件まで検証済みであり、当時の`src/lisjong/riichienv_adapter/`実装と
+testでも踏襲していた。同実装は`lisjong-arena`の`lisjong_arena.riichienv.adapter`
+へcanonical + physical migration済みである(`lisjong` Issue #100)。3人麻雀
+および実際のRiichiLabオンライン経路での同値性は未確認のまま引き継ぐ。
 
 ## PlayerPublicState
 
@@ -479,7 +480,9 @@ legal_actions
 ```
 
 `materialized state`と`Observation`の機械的な検証方法は、Issue #28で
-`src/lisjong/riichienv_adapter/`として実装した。`SeatMaterializedState`が
+`src/lisjong/riichienv_adapter/`として実装した(現在は`lisjong-arena`の
+`lisjong_arena.riichienv.adapter`がcanonical + physical implementation、
+`lisjong` Issue #100)。`SeatMaterializedState`が
 seat-visible eventから同期したkyoku identity(場風・局・本場・親)、discard
 multiset、dora indicator数、riichi段階を、`build_policy_input()`が現在の
 `Observation`と突き合わせ、一致しない場合は`PolicyInput`を生成せず

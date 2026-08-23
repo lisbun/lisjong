@@ -4,6 +4,13 @@
 
 調査用コードは再現性を確保するために保存してよい。ただし、`src/lisjong` の Policy 正式実装には含めず、Policy からも import しない。
 
+> **Current-state note**: この文書が記録する実測に基づいて実装された RiichiEnv Adapter は、
+> `src/lisjong/riichienv_adapter/` として lisjong 側に実装されていたが、
+> `lisbun/lisjong-arena#39` / PR #40 で `lisjong-arena` の `lisjong_arena.riichienv.adapter`
+> へ canonical + physical migration し、`lisjong` [Issue #100](https://github.com/lisbun/lisjong/issues/100)
+> で lisjong 側 legacy 実装と `riichienv` runtime dependency を削除した。本文書自体は
+> historical investigation record として書き換えず、そのまま維持する。
+
 ## 記録方針
 
 各項目には、次のいずれかの区分を付ける。

@@ -226,13 +226,13 @@ materialized stateはPolicyのhidden stateではなく、seat-visibleな外部�
 variantとfieldは[内部Actionモデル](internal-action-model.md)、semantic
 identityと外部候補との対応は[Action identity](action-identity.md)を参照する。
 
-#### `riichienv_adapter` package (Issues #28, #29, and #23)
+#### RiichiEnv Adapter physical migration (Issues #28, #29, #23, and Arena #39 / lisjong #100)
 
 `src/lisjong/riichienv_adapter/`は、上記責務のうち「seat-visible
 materialized stateの同期」と「`PolicyInput`生成」をIssue #28で、RiichiEnv
 legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で実装し、
 両者から`DecisionContext`を組み立てる1 decision分の最終接続をIssue #23で
-実装したPython packageである。Policy呼び出しとLocal game runnerは対象外である。
+実装したPython packageであった。Policy呼び出しとLocal game runnerは対象外である。
 
 - `SeatMaterializedState`は1つのself_seat視点について、
   `Observation.new_events()`から discard順序・tsumogiri・`called_by`、
@@ -259,8 +259,21 @@ legal Actionのsemantic変換・集約とdecision-local mappingをIssue #29で�
   seatは処理前に照合し、別のdecision IDやgenerationは追加しない
 - tile変換はIssue #28の`tile_conversion.py`を共用し、Issue #29固有のplayer
   indexから`Seat`への薄い変換だけを`seat_conversion.py`へ分離する
-- `policy_contract` / `policies`とは異なり、このpackageは`riichienv`へ
-  runtime dependencyとして依存する。依存の逆流はさせない
+
+上記実装は、`lisjong-arena` Issue #39 / PR #40
+(actual merge commit `e0695937d5abad3fb620347f0290cf06d0931eff`)で、8 module
+すべてbehavior-preservingに`lisjong_arena.riichienv.adapter`へcanonical +
+physical migrationした。lisjong側legacy `src/lisjong/riichienv_adapter/`と
+そのAdapter-owned regression testsは`lisjong` Issue #100で削除し、`riichienv`
+へのruntime dependency自体もこのIssueで完全に除去した。compatibility
+wrapper / re-exportや`lisjong -> lisjong-arena`のreverse dependencyは設けて
+いない。RiichiEnv Adapterのcurrent contractはArena側
+`lisjong_arena.riichienv.adapter`を正本とする。
+
+`lisjong` Issue #100 merge直後はArenaのlisjong dependency pinがcleanup前
+revisionを参照し続けるため、この時点をphysical duplicate完全解消とは記録
+しない。cleanup merge SHAをexact targetとするArena post-cleanup pin syncが
+完了した時点で完全解消とする。
 
 このpackageは`lisjong.policy_contract`とは別packageであり、後述の
 「共通Policy契約package」がRiichiEnv非依存を維持する境界を壊さない。
@@ -288,14 +301,17 @@ trace reproducibility coverageは`lisjong-arena` Issue #35 / PR #36
 
 Local game runnerのcurrent contractはArena側
 `lisjong_arena.riichienv.local_game_runner.LocalGameRunner` /
-`LocalGameResult`を正本とする。lisjongはRiichiEnv Adapter
-(`lisjong.riichienv_adapter`)とGameTrace(`lisjong.game_trace`)をTEMPORARY
-dependencyとして提供し続け、Arena-local `LocalGameRunner`がそれらをconsumeする。
+`LocalGameResult`を正本とする。RiichiEnv Adapterは`lisjong` Issue #100で
+lisjong側legacy実装を削除し、Arena-local `lisjong_arena.riichienv.adapter`が
+canonical + soleなphysical implementationである(上記「RiichiEnv Adapter
+physical migration」節を参照)。lisjongはGameTrace(`lisjong.game_trace`)だけを
+TEMPORARY dependencyとして提供し続け、Arena-local `LocalGameRunner`がそれを
+consumeする。
 
-`lisjong` Issue #98 merge直後はArenaのlisjong dependency pinがcleanup前revisionを
-参照し続ける。そのため、この時点をphysical duplicate完全解消とは記録しない。
-cleanup merge SHAをexact targetとするArena post-cleanup pin syncが完了した時点で
-完全解消とする。
+`lisjong` Issue #98 / #100 merge直後はArenaのlisjong dependency pinがcleanup前
+revisionを参照し続ける。そのため、この時点をphysical duplicate完全解消とは
+記録しない。cleanup merge SHAをexact targetとするArena post-cleanup pin syncが
+完了した時点で完全解消とする。
 
 #### GameTrace observability boundary
 
@@ -346,13 +362,13 @@ lisjong-arena
     RiichiLabSeatAdapter (lisjong_arena.riichilab.adapter)
     request_action parsing / MJAI response conversion
     possible_actions semantic validation / Adapter-specific errors
+    RiichiEnv Adapter (lisjong_arena.riichienv.adapter: build_decision() /
+        SeatMaterializedState / RiichiEnvActionMappingSession /
+        RiichiEnvActionMapping / build_policy_input())
         |
         v
 lisjong
     Policy contract / Policy implementation
-    RiichiEnv Adapter (build_decision() / SeatMaterializedState /
-        RiichiEnvActionMappingSession / RiichiEnvActionMapping /
-        build_policy_input())
 ```
 
 Arena executionは認証付き接続、送受信、time metadata、ack、terminal event、disconnect、
@@ -360,9 +376,11 @@ secret-safe trace等のprotocol lifecycleに加え、serialized Observationの�
 seat-visible materialized state、Policy入力と合法な内部Action候補への変換、Policy実行、
 RiichiEnv Actionへのmapping / revalidation、MJAI response構築、`possible_actions`
 semantic validationを、Arena-local `RiichiLabSeatAdapter`として扱う。この
-`RiichiLabSeatAdapter`はlisjongの`policy_contract.execute_policy()`とRiichiEnv Adapter
-(`build_decision()`等)をconsumerとして呼び出すが、それらのsemantics・実装自体は
-引き続きlisjongが所有する。
+`RiichiLabSeatAdapter`はlisjongの`policy_contract.execute_policy()`と、Arena-local
+RiichiEnv Adapter(`lisjong_arena.riichienv.adapter`の`build_decision()`等)を
+consumerとして呼び出す。`execute_policy()` / `DecisionContext` / `InternalAction`
+等のPolicy semanticsは引き続きlisjongが所有するが、RiichiEnv Adapter自体の
+canonical + physical implementationはArena側にある(`lisjong` Issue #100)。
 
 Adapterが保持してよいmaterialized stateは、Policy入力に必要なseat-visibleな現在状態の
 正規化に限る。Policyの過去判断、AI内部memory、非公開情報を含めず、requestやtransport
@@ -829,11 +847,11 @@ flowchart TD
     Belief["belief"] --> Contract
 ```
 
-Local game runnerはlisjong内でローカル対局をオーケストレーションする。RiichiLab
-orchestration、lower-level runtime、protocol-facing decision bridge
-(`RiichiLabSeatAdapter`)はArenaがcanonical + physical ownerであり、lisjongの
-Policy contract / RiichiEnv Adapterをconsumerとして利用する。このrepository間の
-矢印は`lisjong-arena -> lisjong`であり、reverse dependencyは作らない。
+Local game runner、RiichiLab orchestration、lower-level runtime、
+protocol-facing decision bridge(`RiichiLabSeatAdapter`)、RiichiEnv Adapterは
+いずれも`lisjong-arena`がcanonical + physical ownerであり、lisjongのPolicy
+contractをconsumerとして利用する。このrepository間の矢印は
+`lisjong-arena -> lisjong`であり、reverse dependencyは作らない。
 
 RiichiEnv AdapterからPolicy contractへの矢印は、Policy入力や内部action等の
 共通の型・変換契約への依存を表す。RiichiEnv Adapter自身はPolicyを呼び出さない。

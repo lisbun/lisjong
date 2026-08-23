@@ -39,11 +39,13 @@ _PROBE_SCRIPT = (
 
 class PolicyContractImportTest(unittest.TestCase):
     def test_policy_contract_and_policies_import_without_riichienv(self) -> None:
-        # `python -m unittest discover`は全test moduleを同一processへimportする
-        # ため、riichienvへ正当に依存するtest(tests/test_riichienv_adapter_*.py)が
-        # 同じ実行に含まれると、共有sys.modulesではこのpackage自体の依存を
-        # 検証できない。独立したsubprocessでlisjong.policy_contractとpoliciesを
-        # importし、riichienvが道連れでimportされないことを確認する。
+        # legacy RiichiEnv Adapter(`lisjong.riichienv_adapter`)とそのtestsは
+        # `lisbun/lisjong-arena`へのcanonical physical migration後、lisbun/lisjong#100で
+        # 削除され、`riichienv`はlisjongのruntime dependencyから完全に除去された。
+        # `python -m unittest discover`は全test moduleを同一processへimportするため、
+        # 独立したsubprocessでlisjong.policy_contractとpoliciesをimportし、
+        # riichienvが道連れでimportされない(そもそもinstallされてもいない)ことを
+        # 確認する。
         result = subprocess.run(
             [sys.executable, "-c", _PROBE_SCRIPT],
             capture_output=True,
