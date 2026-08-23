@@ -203,6 +203,22 @@ class DoraTileTypeCycleTest(unittest.TestCase):
                 # `_dora_tile_type()`はTileType(赤区分を含まない)だけを受け取るため、
                 # 赤5 indicatorも通常5と全く同じ入力になる。
 
+    def test_red_five_indicator_tile_derives_the_same_dora_end_to_end(self) -> None:
+        # `_dora_tile_type()`単体ではなく、赤5の`Tile` indicatorを実際に
+        # `_retained_concealed_dora_count()`へ通し、通常5 indicatorと同じ
+        # actual dora(この場合pinzu6)を導出することをend-to-endで固定する。
+        held_pinzu_6 = _tile(TileCategory.PINZU, 6)
+        normal_five_indicator = _tile(TileCategory.PINZU, 5)
+        red_five_indicator = _tile(TileCategory.PINZU, 5, red=True)
+
+        self.assertEqual(
+            _retained_concealed_dora_count((held_pinzu_6,), (normal_five_indicator,)),
+            _retained_concealed_dora_count((held_pinzu_6,), (red_five_indicator,)),
+        )
+        self.assertEqual(
+            _retained_concealed_dora_count((held_pinzu_6,), (red_five_indicator,)), 1
+        )
+
 
 class RetainedConcealedDoraCountTest(unittest.TestCase):
     def test_no_indicators_and_no_red_tiles_is_zero(self) -> None:
@@ -554,16 +570,33 @@ class BaselinePreservationTest(unittest.TestCase):
     """`TwoStepUkeirePolicy`のselectionはValueAware追加後も変化しない。"""
 
     def test_two_step_policy_is_unaffected_by_the_new_generation(self) -> None:
+        # Fixed expected actions, not a self-comparison: this pins TwoStep's
+        # own pre-existing selection (already covered by
+        # tests/test_two_step_ukeire_policy.py) so a future edit that changes
+        # `TwoStepUkeirePolicy`'s behavior fails here too, alongside the
+        # unmodified TwoStep test suite.
         scenarios = (
-            (_TANKI_VERSUS_ONE_SHANTEN_HAND, (_discard(MANZU_4), _discard(RED_DRAGON))),
-            (_NINE_MANZU_HAND, (_discard(MANZU_2), _discard(MANZU_4))),
-            (_TWO_STEP_HAND, (_discard(SOUZU_9), _discard(WHITE_DRAGON))),
+            (
+                _TANKI_VERSUS_ONE_SHANTEN_HAND,
+                (_discard(MANZU_4), _discard(RED_DRAGON)),
+                _discard(RED_DRAGON),
+            ),
+            (
+                _NINE_MANZU_HAND,
+                (_discard(MANZU_2), _discard(MANZU_4)),
+                _discard(MANZU_4),
+            ),
+            (
+                _TWO_STEP_HAND,
+                (_discard(SOUZU_9), _discard(WHITE_DRAGON)),
+                _discard(WHITE_DRAGON),
+            ),
         )
-        for hand, actions in scenarios:
+        for hand, actions, expected in scenarios:
             with self.subTest(actions=actions):
                 self.assertEqual(
                     TwoStepUkeirePolicy().choose_action(_decision(hand, actions)),
-                    TwoStepUkeirePolicy().choose_action(_decision(hand, actions)),
+                    expected,
                 )
 
     def test_value_aware_degenerates_to_two_step_without_dora_information(
