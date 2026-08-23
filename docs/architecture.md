@@ -307,20 +307,24 @@ canonical physical implementationである(上記「RiichiEnv Adapter physical
 migration」節を参照)。ただしIssue #100 merge直後もArenaのexact lisjong
 dependency pinはcleanup前revisionを参照し続け、そのpinned revisionには
 legacy実装が物理的に残るため、Arena post-cleanup pin sync完了前は
-sole physical implementationとは扱わない。lisjongはGameTrace
-(`lisjong.game_trace`)だけをTEMPORARY dependencyとして提供し続け、
-Arena-local `LocalGameRunner`がそれをconsumeする。
+sole physical implementationとは扱わない。GameTraceのcanonical physical
+implementationは、Arena Issue #43 / PR #44で`lisjong_arena.game_trace`へ移管済みで、
+Arena-local `LocalGameRunner`もこのArena-local implementationをconsumeする。
+lisjong側legacy `lisjong.game_trace`とowned testはIssue #102で削除した。
 
-`lisjong` Issue #98 / #100 merge直後はArenaのlisjong dependency pinがcleanup前
-revisionを参照し続ける。そのため、この時点をphysical duplicate完全解消とは
-記録しない。cleanup merge SHAをexact targetとするArena post-cleanup pin syncが
-完了した時点で完全解消とする。
+Issue #102のcleanup後もArenaのexact lisjong dependency pinはcleanup前revision
+`3505321b62e7a2be204cc555924b485a898c8f31`を参照し、そのinstalled dependencyには
+legacy copyが残り得る。そのためGameTraceのphysical duplicate完全解消、GameTrace
+pillar完了、ADR 0002完了とはまだ記録しない。Issue #102のactual cleanup merge SHAを
+exact targetとするArena post-cleanup pin syncが完了した時点で完全解消とする。
 
 #### GameTrace observability boundary
 
-`src/lisjong/game_trace.py`の`GameTrace`は、1回の正常終了したlocal game executionを
-表すimmutable valueである。Arena-local `LocalGameRunner`だけがseed / game modeの
-正本をsinkへ供給し、各source entryをexecution全体で0-basedかつ連続する
+canonical implementation `lisjong_arena.game_trace`の`GameTrace`は、1回の正常終了した
+local game executionを表すimmutable valueである。Arena takeoverはIssue #43 / PR #44で、
+lisjong legacy implementationのcleanupはIssue #102で完了した。Arena exact lisjong pin
+syncはpendingである。Arena-local `LocalGameRunner`だけがseed / game modeの正本をsinkへ
+供給し、各source entryをexecution全体で0-basedかつ連続する
 `GameTraceEvent.sequence`へ対応付ける。payloadはRiichiEnv 0.4.8のMJAI event `dict`を
 一度JSON文字列へserializeした値とし、RiichiEnv / runnerが所有するmutable objectと
 参照共有しない。
