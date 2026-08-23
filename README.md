@@ -182,6 +182,26 @@ lisjongが引き続き所有するのは、profile mappingが参照するPolicy 
 `GenbutsuDefenseTwoStepUkeirePolicy`を公開する。後者は比較用の独立したPolicy世代で
 あり、上記runtime profileへは自動的に割り当てない。
 
+`lisjong.policies`はさらに、`TwoStepUkeirePolicy`のselection semanticsを変更せず
+offense baselineとして維持したまま、打点価値の最小世代を打牌比較へ追加する
+`ValueAwareTwoStepUkeirePolicy`を公開する。
+
+```text
+TwoStepUkeirePolicy:
+shanten > current ukeire > second-step ukeire > stable tie-break
+
+ValueAwareTwoStepUkeirePolicy:
+shanten > current ukeire > retained concealed dora count > second-step ukeire > stable tie-break
+```
+
+`retained_concealed_dora_count`は、打牌候補ごとに打牌後concealed handへ残る
+「公開済みdora indicator由来のdora count + 赤ドラcount」だけを数える
+candidate-dependent featureであり、`actual han` / `total hand han` /
+`expected score` / `expected value`のいずれでもない。`PolicyInput.round.dora_indicators`
+（PolicyInput上すでに公開済みのindicatorのみ。未公開槓ドラ・裏ドラは含まない）
+だけを使う。こちらも比較用の独立したPolicy世代であり、上記runtime profileへは
+自動的に割り当てない。詳細は[Architecture](docs/architecture.md)を参照。
+
 各profileは自分専用のcredential環境変数だけを参照し、他profileの
 credentialやPolicyへ暗黙fallbackしません。profile / credential compositionの詳細は
 `lisjong-arena`側の文書を参照してください。

@@ -1031,6 +1031,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "ShantenPolicy",
                 "UkeirePolicy",
                 "TwoStepUkeirePolicy",
+                "ValueAwareTwoStepUkeirePolicy",
             },
         )
 

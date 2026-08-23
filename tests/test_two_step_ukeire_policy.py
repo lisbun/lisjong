@@ -773,7 +773,7 @@ class DeterminismAndErrorBoundaryTest(unittest.TestCase):
 
 
 class PolicyGenerationAndScopeTest(unittest.TestCase):
-    def test_all_five_policy_generations_are_public(self) -> None:
+    def test_all_six_policy_generations_are_public(self) -> None:
         import lisjong.policies as policies
 
         self.assertEqual(
@@ -784,6 +784,7 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
                 "ShantenPolicy",
                 "UkeirePolicy",
                 "TwoStepUkeirePolicy",
+                "ValueAwareTwoStepUkeirePolicy",
             },
         )
 
