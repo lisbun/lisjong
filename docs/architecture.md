@@ -974,8 +974,13 @@ exact-safe dominanceだけで、`blocks_used` / `head_used`は縮約しない
 - `tools/generate_shanten_table.py`がdeterministic generatorで、同じsourceから
   byte-identicalなartifactを出力する
 - `_lookup_shanten.py`がartifact formatとruntime combineを所有する。magic /
-  format version / 宣言dimensionとfile sizeの一致というcheap validationを
-  load時に行い、失敗すれば`ShantenTableError`でfail closedする
+  format version / 宣言dimensionとfile sizeの一致に加え、frontier spanが
+  entry poolへ収まることをload時に検証し、失敗すれば`ShantenTableError`で
+  fail closedする。file sizeが一致したままの内部破損でも、spanが壊れていれば
+  sliceがsilentに短くなり誤ったshantenを返すため、ここはload時に全件見る。
+  一方frontier idのboundsは、参照したものだけをlookup時にO(1)で検査する
+  （dense key空間は数百万entryあり、load時の全件走査は`spawn` workerごとの
+  起動コストを約30ms増やすため）。artifact全体のhash検証はtests側の責務とする
 - artifactは`_shanten_table.bin`としてpackage resourceに同梱し、
   `pyproject.toml`の`package-data`でwheelへ含める。runtimeでinternet access
   を必要としない

@@ -2,6 +2,7 @@ import ast
 import inspect
 import pathlib
 import random
+import struct
 import unittest
 from unittest.mock import patch
 
@@ -670,6 +671,45 @@ class LookupTableArtifactTest(unittest.TestCase):
         self.assertTrue(payload.startswith(_lookup_shanten.MAGIC))
         # 宣言dimensionと実サイズの不一致はloaderがfail closedする。
         _lookup_shanten._ShantenTable(payload)
+
+    def test_same_size_structural_corruption_fails_closed(self) -> None:
+        # file sizeが宣言dimensionと一致していても、frontier idやspanが壊れて
+        # いれば範囲外参照になり得る。どちらも`ShantenTableError`へ統一され、
+        # `IndexError`やsilentに短いsliceにならないことを固定する。
+        payload = (
+            pathlib.Path(_PACKAGE_ROOT) / _lookup_shanten.TABLE_RESOURCE
+        ).read_bytes()
+        header_size = struct.calcsize(_lookup_shanten.HEADER_FORMAT)
+
+        # spanをpool末尾より先へ伸ばす（サイズは不変）。load時に弾かれる。
+        broken_span = bytearray(payload)
+        span_offset = (
+            header_size
+            + (_lookup_shanten.SUIT_KEY_SPACE + _lookup_shanten.HONOR_KEY_SPACE) * 2
+        )
+        broken_span[span_offset : span_offset + 4] = (0xFFFFFF).to_bytes(4, "little")
+        with self.assertRaisesRegex(
+            _lookup_shanten.ShantenTableError, "past the end of its entry pool"
+        ):
+            _lookup_shanten._ShantenTable(bytes(broken_span))
+
+        # suit key 0（= 萬子が1枚もない状態）のfrontier idを、存在しない値へ
+        # 差し替える。これもサイズは不変で、参照した時点で弾かれる。
+        broken_id = bytearray(payload)
+        broken_id[header_size : header_size + 2] = (0xFFFF).to_bytes(2, "little")
+        table = _lookup_shanten._ShantenTable(bytes(broken_id))
+
+        counts = [0] * 34
+        for kind in (9, 10, 11, 18, 19, 20, 27, 27, 28, 28, 29, 29, 30, 30):
+            counts[kind] += 1
+        self.assertEqual(sum(counts), 14)
+        self.assertEqual(sum(counts[0:9]), 0, "萬子groupがkey 0であること")
+
+        with patch.object(_lookup_shanten, "_TABLE", table):
+            with self.assertRaisesRegex(
+                _lookup_shanten.ShantenTableError, "frontier that does not exist"
+            ):
+                _lookup_shanten.calculate_standard_shanten(counts, 0)
 
     def test_corrupted_artifacts_fail_closed(self) -> None:
         payload = bytearray(

@@ -33,9 +33,17 @@ dimensionと実サイズが食い違う、参照先entryが範囲外、といっ
 `ShantenTableError`でfail closedする。old DFSへのsilent fallbackや、
 lookup / DFSを切り替えるruntime optionは持たない。
 
-integrity checkは、Windows `spawn` workerごとに走ってもよい程度のcheap
-validation（magic / version / 宣言dimensionとfile sizeの一致）に留める。
-artifact全体のhash検証はoffline validation（tests）側の責務とする。
+範囲外参照のcheckは2箇所へ分けている。file sizeが宣言dimensionと一致した
+ままの内部破損でも、`IndexError`やsilentに短いsliceを返さないためである。
+
+- frontier span（`pool[start : start + count]`）はload時に全件検証する。
+  frontierは数千件しかなく、`spawn` workerごとに走らせても無視できる。
+- frontier id（`ids[key]`の値）は参照したものだけをO(1)で検証する。dense
+  key空間は数百万entryあり、load時に全件走査すると起動コストが約30ms
+  増えるため、hot path側の比較1回へ寄せている。
+
+integrity checkはこの範囲に留め、artifact全体のhash検証はoffline
+validation（tests）側の責務とする。
 """
 
 import struct
@@ -182,6 +190,35 @@ def _build_penalty_tables() -> list[array]:
     return tables
 
 
+def _validate_spans(starts: array, counts: array, pool: array, label: str) -> None:
+    """frontier spanがpoolへ収まることをload時に確認する。
+
+    file sizeが宣言dimensionと一致していても、spanが壊れていれば
+    `pool[start : start + count]`はsliceなので例外を出さずに短い、あるいは
+    空のentry列を返してしまう。これはIndexErrorより悪く、silentに誤った
+    shantenを生む。frontierは高々数千件なのでload時に全件見ておく。
+
+    frontier id自体のboundsはここでは見ない。dense key空間は数百万entryあり、
+    全件走査するとWindows `spawn` workerごとの起動コストが跳ね上がる
+    （実測で+30ms）。idは`calculate_standard_shanten()`が実際に参照した
+    ものだけをO(1)で検査する。artifact全体のcryptographic hash検証は
+    行わない（それはoffline validationの責務）。
+    """
+    frontier_count = len(starts)
+    if frontier_count == 0 or len(counts) != frontier_count:
+        raise ShantenTableError(
+            f"{label} frontier index of the shanten table artifact is empty "
+            "or inconsistent"
+        )
+    pool_length = len(pool)
+    for frontier_id in range(frontier_count):
+        if starts[frontier_id] + counts[frontier_id] > pool_length:
+            raise ShantenTableError(
+                f"{label} frontier span of the shanten table artifact "
+                "reaches past the end of its entry pool"
+            )
+
+
 class _ShantenTable:
     """artifactを読み、base-5 group keyからfrontier entryを引くread-only view。
 
@@ -191,10 +228,12 @@ class _ShantenTable:
 
     __slots__ = (
         "honor_counts",
+        "honor_frontier_count",
         "honor_ids",
         "honor_pool",
         "honor_starts",
         "suit_counts",
+        "suit_frontier_count",
         "suit_ids",
         "suit_pool",
         "suit_starts",
@@ -253,6 +292,12 @@ class _ShantenTable:
         self.suit_pool = take("H", suit_pool_entries, 2)
         self.honor_pool = take("H", honor_pool_entries, 2)
 
+        _validate_spans(self.suit_starts, self.suit_counts, self.suit_pool, "suit")
+        _validate_spans(self.honor_starts, self.honor_counts, self.honor_pool, "honor")
+        # hot pathがO(1)でid boundsを見られるように、frontier数を持たせておく。
+        self.suit_frontier_count = len(self.suit_starts)
+        self.honor_frontier_count = len(self.honor_starts)
+
 
 def _load_table() -> _ShantenTable:
     try:
@@ -292,6 +337,8 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
     """
     table = _table()
     frontier: dict[int, int] | None = None
+    suit_frontier_count = table.suit_frontier_count
+    honor_frontier_count = table.honor_frontier_count
 
     for base, kind_count in ((0, 9), (9, 9), (18, 9), (27, 7)):
         key = 0
@@ -299,11 +346,21 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
             key = key * 5 + counts[index]
         if kind_count == _SUIT_KIND_COUNT:
             frontier_id = table.suit_ids[key]
+            if frontier_id >= suit_frontier_count:
+                raise ShantenTableError(
+                    "suit key index of the shanten table artifact references a "
+                    "frontier that does not exist"
+                )
             start = table.suit_starts[frontier_id]
             length = table.suit_counts[frontier_id]
             pool = table.suit_pool
         else:
             frontier_id = table.honor_ids[key]
+            if frontier_id >= honor_frontier_count:
+                raise ShantenTableError(
+                    "honor key index of the shanten table artifact references a "
+                    "frontier that does not exist"
+                )
             start = table.honor_starts[frontier_id]
             length = table.honor_counts[frontier_id]
             pool = table.honor_pool
