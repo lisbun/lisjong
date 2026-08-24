@@ -918,6 +918,72 @@ cache hits / cache misses / shanten evaluations / completion masses /
 selected actionはすべて変更前と一致する。変わるのは1回のshanten評価のcost
 だけである。
 
+##### exact lookup-table standard-form backend (Issue #115)
+
+PR #114でboundary変換costを除いた後も、門前standard-heavy牌姿では1回の
+shanten評価の96%以上を`_python_shanten`の再帰探索が占めていた。Issue #115で、
+**通常形だけ**をexactなlookup-table backendへ置換した。
+
+```text
+calculate_shanten(Tile...)                    一般公開API
+        ↓
+_shanten_from_valid_counts()                  唯一のsemantic core
+        ↓
+_lookup_shanten.calculate_standard_shanten()  private backend
+        ↓
+_shanten_table.bin                            read-only package resource
+```
+
+七対子・国士無双は従来どおり`_python_shanten`の単純なcount計算を使い、
+meldless handの最終結果が`min(standard, 七対子, 国士)`である点も変えていない。
+
+固定する性質は次のとおりである。
+
+- **lookup != approximation**。table entryは`_shanten_frontier.local_frontier()`
+  がcurrent標準形backendと同じ手順で列挙したexact frontierであり、group間の
+  合成もexactである。beam search / cutoff / heuristic pruningは導入していない
+- **lookup != 新しいshanten semantic**。`calculate_shanten(Tile...)`のpublic
+  contractも、package-internalなcount-native contractも変更していない
+- **lookup != private backendのexposure**。Policyはlookup実装へ依存せず、
+  引き続き`hand_evaluation`所有のcount-native contractだけを見る
+
+##### なぜgroup分解でexactに合成できるか
+
+current backendのblockは牌種group（萬子 / 筒子 / 索子 / 字牌）をまたがない。
+順子は同色内に限定され、字牌に順子はなく、刻子・対子も単一牌種で閉じる。
+したがって牌の消費と4枚制約は各group内で完結する。group間を渡るstateは
+
+```text
+blocks_used / head_used / meld_seed_delta / head_seed_delta
+```
+
+の4つだけで、`meld_seeds` / `head_seeds`は探索中どの分岐条件にも使われず
+末端の`missing_seed_penalty()`でしか読まれない。cap付き加算は単調増加なので
+最終値は`min(総increment数, cap)`に等しく、部分和からexactに再構成できる。
+
+table entryは「local shanten 1値」ではなく、この4次元frontierごとの最大
+scoreを保持する。縮約は同一`(blocks_used, head_used)`内で
+`score / meld_seed_delta / head_seed_delta`がすべて劣るstateを除く
+exact-safe dominanceだけで、`blocks_used` / `head_used`は縮約しない
+（global budgetを消費するresource座標であり、使用量が少ない方が常に有利とは
+限らないため）。
+
+##### generator / artifact ownership
+
+- `_shanten_frontier.py`がfrontier導出の正本（runtimeでは呼ばない）
+- `tools/generate_shanten_table.py`がdeterministic generatorで、同じsourceから
+  byte-identicalなartifactを出力する
+- `_lookup_shanten.py`がartifact formatとruntime combineを所有する。magic /
+  format version / 宣言dimensionとfile sizeの一致というcheap validationを
+  load時に行い、失敗すれば`ShantenTableError`でfail closedする
+- artifactは`_shanten_table.bin`としてpackage resourceに同梱し、
+  `pyproject.toml`の`package-data`でwheelへ含める。runtimeでinternet access
+  を必要としない
+- **old DFSへのruntime fallbackを持たない**。lookup / DFSを切り替える
+  runtime optionも持たない。`_python_shanten.calculate_standard_shanten()`は
+  testsのexactness oracleとしてのみ残り、productionから呼ばれないことを
+  testで固定している
+
 ### 非公開手牌belief・公開済み牌provenance
 
 非公開手牌beliefは、観測そのものではなく、観測可能情報からAIが構築する

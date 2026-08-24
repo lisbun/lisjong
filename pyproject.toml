@@ -19,6 +19,9 @@ reference = ["mahjong==2.0.0"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"lisjong.hand_evaluation" = ["_shanten_table.bin"]
+
 [tool.ruff]
 target-version = "py314"
 
