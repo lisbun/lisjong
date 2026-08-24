@@ -113,6 +113,22 @@ pruning判定はdraw直後のcompletion判定ですでに評価した`draw_shant
 pruning on/offの二重pathを持たせず、exactnessの検証はtest-localなunpruned
 reference oracleとの一致で行う。
 
+## count-native shanten hot path
+
+Issue #113で、DP内部のshanten評価を`hand_evaluation`が所有するcount-native
+contract（`calculate_shanten_from_canonical_counts()`）へ移した。DP stateは
+すでにcanonical 34牌種countなので、
+
+    counts -> Tile materialization -> calculate_shanten() -> counts再正規化
+
+というround-tripをhot pathから除いている。向聴semanticsは`calculate_shanten()`
+とまったく同じsemantic coreを共有しており、本Issueで変わったのは
+「1回のshanten評価のcost」だけである。DP recurrence、pruning条件、cache構造、
+shanten評価の**回数**はいずれも変更していない。
+
+`_python_shanten`（private backend）をPolicyから直接importしない境界は維持
+する。backendの差し替えは引き続き`hand_evaluation`層の責務である。
+
 ## subclass構造
 
 `TwoStepUkeirePolicy._decide_discard()` extension pointだけをoverrideし、
@@ -126,10 +142,10 @@ contractは持たない。horizon 1 / 2はprivate evaluatorとtestsで利用す�
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from lisjong.belief.canonical_axes import tile_type_from_index, tile_type_index
+from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.belief.tile_inventory import TILE_TYPE_COUNT
-from lisjong.hand_evaluation import calculate_shanten
+from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeirePolicy,
@@ -150,15 +166,6 @@ DEFAULT_HORIZON = 3
 
 _COMPLETE_SHANTEN = -1
 """`calculate_shanten()`が和了形へ与える値。"""
-
-_CANONICAL_TILES: tuple[Tile, ...] = tuple(
-    Tile(tile_type_from_index(index)) for index in range(TILE_TYPE_COUNT)
-)
-"""34基礎牌種canonical indexごとの代表`Tile`。
-
-structural DPは赤5と通常5を同じ基礎牌種として扱うため、代表牌は常に非赤で
-よい。root `DiscardAction` identityは別途維持する。
-"""
 
 
 class FiniteHorizonCompletionPolicyError(Exception):
@@ -275,15 +282,6 @@ def _tile_type_counts(tiles: Sequence[Tile]) -> tuple[int, ...]:
     return tuple(counts)
 
 
-def _tiles_from_counts(counts: Sequence[int]) -> list[Tile]:
-    """34基礎牌種countを`calculate_shanten()`が受け取る`Tile`列へ戻す。"""
-    return [
-        _CANONICAL_TILES[index]
-        for index, count in enumerate(counts)
-        for _ in range(count)
-    ]
-
-
 class _FiniteHorizonEvaluator:
     """1 discard decision内だけで共有するexact DPとtransposition cache。
 
@@ -321,17 +319,23 @@ class _FiniteHorizonEvaluator:
         self.shanten_evaluations = 0
 
     def shanten(self, hand_counts: tuple[int, ...]) -> int:
-        """公開`calculate_shanten()`をsemantic正本とした、cache付き向聴数。
+        """`hand_evaluation`のcount-native contractによるcache付き向聴数。
 
-        standard / 七対子 / 国士無双 / 確定面子の解釈はすべて
-        `calculate_shanten()`に従う。本moduleは新しい和了形判定を実装せず、
-        private backendも直接呼ばない。
+        standard / 七対子 / 国士無双 / 確定面子の解釈は`calculate_shanten()`と
+        同じsemantic coreに従う（Issue #113）。本moduleは新しい和了形判定を
+        実装せず、private backendも直接呼ばない。
+
+        DP stateはすでにcanonical 34牌種countなので、`counts -> Tile -> counts`
+        のround-tripを挟まずそのまま渡す。`hand_counts`が
+        `calculate_shanten_from_canonical_counts()`のpreconditionを満たすのは、
+        root handがvalidated `PolicyInput`由来であり、以降の遷移がfuture drawの
+        +1とhypothetical discardの-1だけだからである。
         """
         cached = self._shanten_cache.get(hand_counts)
         if cached is not None:
             return cached
         self.shanten_evaluations += 1
-        value = calculate_shanten(_tiles_from_counts(hand_counts))
+        value = calculate_shanten_from_canonical_counts(hand_counts)
         self._shanten_cache[hand_counts] = value
         return value
 

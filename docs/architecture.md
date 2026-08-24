@@ -850,6 +850,74 @@ Python packageである。
 高速化は実利用後のbenchmarkで必要性が確認されてから検討する。backendを交換
 しても`calculate_shanten()`を利用する側の契約は変えない。
 
+##### package-internal count-native hot path (Issue #113)
+
+`FiniteHorizonCompletionPolicy`のexact DPは、DP stateとしてすでにcanonical
+34牌種countを保持している。そのためIssue #112時点では、shanten評価のたびに
+
+```text
+34牌種count -> canonical Tile列へ復元 -> calculate_shanten()
+-> snapshot / Tile validation -> 34牌種countへ再正規化 -> private backend
+```
+
+というround-tripが発生していた。門前聴牌fixtureでは1 decisionあたり約99,000回の
+shanten評価が走り、これが支配的costだった。
+
+Issue #113で、この往復を除くためのcount-native入口を`shanten.py`へ追加した。
+責務関係は次のとおりである。
+
+```text
+一般consumer (Tile列)
+        ↓
+calculate_shanten(Tile...)              一般公開API・安全な境界
+        ↓  snapshot / type validation / hand-size validation
+        ↓  Tile -> 34牌種count正規化 / max 4枚validation
+        ↓
+_shanten_from_valid_counts()            唯一のsemantic core
+        ↑                               (standard / 七対子 / 国士 /
+        ↑                                確定面子数のdispatch)
+calculate_shanten_from_canonical_counts()
+        ↑                               package-internal hot path
+        ↑                               trusted canonical-count precondition
+FiniteHorizonCompletionPolicy (DP)
+```
+
+```text
+_shanten_from_valid_counts()
+        ↓
+_python_shanten                          private backend
+```
+
+固定する境界は次のとおりである。
+
+- `calculate_shanten(Tile...)`は引き続き**唯一の一般公開API**である。
+  `lisjong.hand_evaluation`の`__all__`は`["calculate_shanten"]`のままで、
+  count-native入口をpackage rootへexportしない
+- count-native入口は**新しい向聴semanticではない**。Tile入口と同じ
+  `_shanten_from_valid_counts()`へ委譲し、standard / 七対子 / 国士無双 /
+  確定面子数のdispatchを二重実装しない
+- count-native入口は**private backendのexposureではない**。
+  `FiniteHorizonCompletionPolicy`から`_python_shanten`を直接importしない
+  境界は維持し、backend交換は引き続き`hand_evaluation`層の責務である
+- count-native入口はTile boundaryのvalidationを再実行しない。
+  `len(counts) == 34` / canonical axis / 各count 0..4 / 有効な純手牌枚数を
+  **caller側のpreconditionとして扱う**。FiniteHorizonのDP stateはvalidated
+  root handから構築され、future drawの+1とhypothetical discardの-1だけで
+  遷移するため、この前提はDP側の構築で保たれる。1 decisionで10万回規模の
+  評価が走るhot pathであり、ここでTile相当のfull validationを繰り返すと
+  count-native化の意味が失われる。`use_validation=False`のようなruntime flagは
+  持たせず、preconditionはdocstringとtestsで固定する
+- canonical 34牌種axisをこのIssueのために再定義しない。`hand_evaluation`から
+  `belief`層への依存も追加しない（count-native入口は34牌種countをそのまま
+  受け取るため、production pathでindex mappingを行う必要がない）。axis
+  alignmentは、同じ`Tile`列を`belief.canonical_axes.tile_type_index()`で
+  count化した結果とTile入口の向聴数を突き合わせるtestで固定する
+
+Issue #113はDP algorithmを変更しない。同じfixtureに対するvisited states /
+cache hits / cache misses / shanten evaluations / completion masses /
+selected actionはすべて変更前と一致する。変わるのは1回のshanten評価のcost
+だけである。
+
 ### 非公開手牌belief・公開済み牌provenance
 
 非公開手牌beliefは、観測そのものではなく、観測可能情報からAIが構築する
