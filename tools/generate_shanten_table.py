@@ -34,12 +34,21 @@ from lisjong.hand_evaluation._shanten_frontier import (  # noqa: E402
 )
 
 
-def _build_pool(kind_count: int, *, suited: bool, progress_label: str):
-    """(key -> (start, count)) と共有poolを、frontier重複を畳んで構築する。"""
+def _build_group(kind_count: int, *, suited: bool, progress_label: str):
+    """base-5 key空間全体のfrontier id配列と、共有frontier poolを構築する。
+
+    key空間は`5 ** kind_count`のdense配列にする。runtimeがbase-5 keyで直接
+    index参照できるようにするためである（到達不能keyはid 0 = empty sentinel）。
+    frontier実体は重複が非常に多いので、distinct frontierだけをpoolへ入れ、
+    keyごとにはそのidだけを持たせる。
+    """
     keys = enumerate_group_keys(kind_count)
+    key_space = 5**kind_count
+    ids = [0] * key_space
     pool: list[int] = []
-    shared: dict[tuple[int, ...], tuple[int, int]] = {}
-    spans: dict[int, tuple[int, int]] = {}
+    # id 0 は「entryなし」のsentinel。到達不能keyがここへ落ちる。
+    id_spans: list[tuple[int, int]] = [(0, 0)]
+    shared: dict[tuple[int, ...], int] = {}
 
     started = time.perf_counter()
     for position, counts in enumerate(keys):
@@ -50,12 +59,13 @@ def _build_pool(kind_count: int, *, suited: bool, progress_label: str):
                 for (blocks_used, head_used, ms, hs), score in frontier.items()
             )
         )
-        span = shared.get(packed)
-        if span is None:
-            span = (len(pool), len(packed))
-            shared[packed] = span
+        frontier_id = shared.get(packed)
+        if frontier_id is None:
+            frontier_id = len(id_spans)
+            shared[packed] = frontier_id
+            id_spans.append((len(pool), len(packed)))
             pool.extend(packed)
-        spans[group_key(counts)] = span
+        ids[group_key(counts)] = frontier_id
 
         if position % 20000 == 0:
             elapsed = time.perf_counter() - started
@@ -65,14 +75,14 @@ def _build_pool(kind_count: int, *, suited: bool, progress_label: str):
                 flush=True,
             )
 
-    return keys, spans, pool, shared, time.perf_counter() - started
+    return ids, id_spans, pool, len(keys), time.perf_counter() - started
 
 
 def build_artifact() -> tuple[bytes, dict[str, int]]:
-    suit_keys, suit_spans, suit_pool, suit_shared, suit_time = _build_pool(
+    suit_ids, suit_spans, suit_pool, suit_reachable, suit_time = _build_group(
         SUIT_KIND_COUNT, suited=True, progress_label="suit"
     )
-    honor_keys, honor_spans, honor_pool, honor_shared, honor_time = _build_pool(
+    honor_ids, honor_spans, honor_pool, honor_reachable, honor_time = _build_group(
         HONOR_KIND_COUNT, suited=False, progress_label="honors"
     )
 
@@ -80,33 +90,31 @@ def build_artifact() -> tuple[bytes, dict[str, int]]:
         _lookup_shanten.HEADER_FORMAT,
         _lookup_shanten.MAGIC,
         _lookup_shanten.FORMAT_VERSION,
-        len(suit_keys),
-        len(honor_keys),
+        len(suit_spans),
+        len(honor_spans),
         len(suit_pool),
         len(honor_pool),
     )
 
     chunks = [header]
-    for keys, spans in ((suit_keys, suit_spans), (honor_keys, honor_spans)):
-        starts = bytearray()
-        counts = bytearray()
-        for group_counts in keys:
-            start, count = spans[group_key(group_counts)]
-            starts += struct.pack("<I", start)
-            counts += struct.pack("<B", count)
-        chunks.append(bytes(starts))
-        chunks.append(bytes(counts))
+    for ids in (suit_ids, honor_ids):
+        chunks.append(struct.pack(f"<{len(ids)}H", *ids))
+    for spans in (suit_spans, honor_spans):
+        chunks.append(struct.pack(f"<{len(spans)}I", *(start for start, _c in spans)))
+        chunks.append(struct.pack(f"<{len(spans)}B", *(count for _s, count in spans)))
     for pool in (suit_pool, honor_pool):
         chunks.append(struct.pack(f"<{len(pool)}H", *pool))
 
     payload = b"".join(chunks)
     stats = {
-        "suit_keys": len(suit_keys),
-        "honor_keys": len(honor_keys),
+        "suit_key_space": len(suit_ids),
+        "honor_key_space": len(honor_ids),
+        "suit_reachable_keys": suit_reachable,
+        "honor_reachable_keys": honor_reachable,
+        "suit_distinct_frontiers": len(suit_spans) - 1,
+        "honor_distinct_frontiers": len(honor_spans) - 1,
         "suit_pool_entries": len(suit_pool),
         "honor_pool_entries": len(honor_pool),
-        "suit_distinct_frontiers": len(suit_shared),
-        "honor_distinct_frontiers": len(honor_shared),
         "suit_generation_seconds": round(suit_time, 1),
         "honor_generation_seconds": round(honor_time, 1),
         "bytes": len(payload),

@@ -514,6 +514,26 @@ def _deterministic_hand_counts(seed_index: int, size: int) -> list[int]:
     return counts
 
 
+def _single_group_counts(span: int, seed_index: int, target: int) -> list[int]:
+    """1 groupだけを決定的に埋める。stepとspanが互いに素でなくても停止する。
+
+    巡回stepが全indexを回らない場合があるため、試行回数で必ず打ち切る。
+    埋まりきらない場合はその時点のstateをそのまま使う（valid group state）。
+    """
+    group = [0] * span
+    index = seed_index % span
+    step = 1 + seed_index % 5
+    total = 0
+    for _ in range(span * 8):
+        if total >= target:
+            break
+        if group[index] < 4:
+            group[index] += 1
+            total += 1
+        index = (index + step) % span
+    return group
+
+
 class LookupBackendExactnessTest(unittest.TestCase):
     """新lookup backendがold exact DFSと完全一致することを固定する。"""
 
@@ -583,14 +603,7 @@ class LookupBackendExactnessTest(unittest.TestCase):
         for base, span in ((0, 9), (27, 7)):
             for seed_index in range(40):
                 counts = [0] * 34
-                index = seed_index % span
-                step = 1 + seed_index % 5
-                total = 0
-                while total < min(14, span * 4):
-                    if counts[base + index] < 4:
-                        counts[base + index] += 1
-                        total += 1
-                    index = (index + step) % span
+                counts[base : base + span] = _single_group_counts(span, seed_index, 14)
                 with self.subTest(base=base, seed=seed_index):
                     self._assert_matches_oracle(counts, 0)
 
@@ -732,20 +745,10 @@ class LocalFrontierValidationTest(unittest.TestCase):
     """
 
     def test_local_frontier_reproduces_the_oracle_for_single_group_hands(self) -> None:
-        for base, span, suited in ((0, 9, True), (27, 7, False)):
+        for base, span, _suited in ((0, 9, True), (27, 7, False)):
             for seed_index in range(30):
-                group = [0] * span
-                index = seed_index % span
-                step = 1 + seed_index % 7
-                total = 0
-                target = min(14, span * 4)
-                while total < target:
-                    if group[index] < 4:
-                        group[index] += 1
-                        total += 1
-                    index = (index + step) % span
                 counts = [0] * 34
-                counts[base : base + span] = group
+                counts[base : base + span] = _single_group_counts(span, seed_index, 14)
                 with self.subTest(base=base, seed=seed_index):
                     self.assertEqual(
                         _lookup_shanten.calculate_standard_shanten(counts, 0),
@@ -756,14 +759,7 @@ class LocalFrontierValidationTest(unittest.TestCase):
         # exact-safe dominanceがoptimumを落としていないことを、縮約前後の
         # 合成結果で確認する。
         for seed_index in range(12):
-            group = [0] * 9
-            index = seed_index % 9
-            total = 0
-            while total < 9:
-                if group[index] < 4:
-                    group[index] += 1
-                    total += 1
-                index = (index + 1 + seed_index % 3) % 9
+            group = _single_group_counts(9, seed_index, 9)
             raw = _shanten_frontier.local_frontier(group, suited=True)
             reduced = _shanten_frontier.dominant_frontier(raw)
             with self.subTest(seed=seed_index):

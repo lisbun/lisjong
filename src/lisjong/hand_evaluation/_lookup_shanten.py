@@ -51,7 +51,13 @@ FORMAT_VERSION = 1
 """artifact format version。formatを変えたら必ず上げる。"""
 
 HEADER_FORMAT = "<8sIIIII"
-"""magic, format version, suit key count, honor key count, suit pool, honor pool。"""
+"""magic, format version, suit frontier数, honor frontier数, suit pool, honor pool。"""
+
+SUIT_KEY_SPACE = 5**9
+"""数牌1色のbase-5 key空間（dense index）。"""
+
+HONOR_KEY_SPACE = 5**7
+"""字牌のbase-5 key空間（dense index）。"""
 
 TABLE_RESOURCE = "_shanten_table.bin"
 """package resourceとして同梱するartifact名。"""
@@ -177,13 +183,19 @@ def _build_penalty_tables() -> list[array]:
 
 
 class _ShantenTable:
-    """artifactを読み、group keyからfrontier entryを引くread-only view。"""
+    """artifactを読み、base-5 group keyからfrontier entryを引くread-only view。
+
+    key空間はdenseなので`ids[key]`で直接frontier idを引ける。frontier実体は
+    重複が多いためdistinctなものだけをpoolへ持ち、idからspanを引く。
+    """
 
     __slots__ = (
         "honor_counts",
+        "honor_ids",
         "honor_pool",
         "honor_starts",
         "suit_counts",
+        "suit_ids",
         "suit_pool",
         "suit_starts",
     )
@@ -195,8 +207,8 @@ class _ShantenTable:
         (
             magic,
             version,
-            suit_key_count,
-            honor_key_count,
+            suit_frontier_count,
+            honor_frontier_count,
             suit_pool_entries,
             honor_pool_entries,
         ) = struct.unpack_from(HEADER_FORMAT, payload)
@@ -211,7 +223,8 @@ class _ShantenTable:
 
         expected = (
             header_size
-            + (suit_key_count + honor_key_count) * 5
+            + (SUIT_KEY_SPACE + HONOR_KEY_SPACE) * 2
+            + (suit_frontier_count + honor_frontier_count) * 5
             + (suit_pool_entries + honor_pool_entries) * 2
         )
         if len(payload) != expected:
@@ -221,31 +234,24 @@ class _ShantenTable:
             )
 
         offset = header_size
-        self.suit_starts = array("I")
-        self.suit_starts.frombytes(payload[offset : offset + suit_key_count * 4])
-        offset += suit_key_count * 4
-        self.suit_counts = array("B")
-        self.suit_counts.frombytes(payload[offset : offset + suit_key_count])
-        offset += suit_key_count
 
-        self.honor_starts = array("I")
-        self.honor_starts.frombytes(payload[offset : offset + honor_key_count * 4])
-        offset += honor_key_count * 4
-        self.honor_counts = array("B")
-        self.honor_counts.frombytes(payload[offset : offset + honor_key_count])
-        offset += honor_key_count
+        def take(typecode: str, count: int, item_size: int):
+            nonlocal offset
+            values = array(typecode)
+            values.frombytes(payload[offset : offset + count * item_size])
+            offset += count * item_size
+            if sys.byteorder == "big" and item_size > 1:
+                values.byteswap()
+            return values
 
-        self.suit_pool = array("H")
-        self.suit_pool.frombytes(payload[offset : offset + suit_pool_entries * 2])
-        offset += suit_pool_entries * 2
-        self.honor_pool = array("H")
-        self.honor_pool.frombytes(payload[offset : offset + honor_pool_entries * 2])
-
-        if sys.byteorder == "big":
-            self.suit_starts.byteswap()
-            self.honor_starts.byteswap()
-            self.suit_pool.byteswap()
-            self.honor_pool.byteswap()
+        self.suit_ids = take("H", SUIT_KEY_SPACE, 2)
+        self.honor_ids = take("H", HONOR_KEY_SPACE, 2)
+        self.suit_starts = take("I", suit_frontier_count, 4)
+        self.suit_counts = take("B", suit_frontier_count, 1)
+        self.honor_starts = take("I", honor_frontier_count, 4)
+        self.honor_counts = take("B", honor_frontier_count, 1)
+        self.suit_pool = take("H", suit_pool_entries, 2)
+        self.honor_pool = take("H", honor_pool_entries, 2)
 
 
 def _load_table() -> _ShantenTable:
@@ -292,12 +298,14 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
         for index in range(base, base + kind_count):
             key = key * 5 + counts[index]
         if kind_count == _SUIT_KIND_COUNT:
-            start = table.suit_starts[key]
-            length = table.suit_counts[key]
+            frontier_id = table.suit_ids[key]
+            start = table.suit_starts[frontier_id]
+            length = table.suit_counts[frontier_id]
             pool = table.suit_pool
         else:
-            start = table.honor_starts[key]
-            length = table.honor_counts[key]
+            frontier_id = table.honor_ids[key]
+            start = table.honor_starts[frontier_id]
+            length = table.honor_counts[frontier_id]
             pool = table.honor_pool
         entries = pool[start : start + length]
 
