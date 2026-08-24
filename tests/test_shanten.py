@@ -3,7 +3,9 @@ import pathlib
 import random
 import unittest
 
+from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.hand_evaluation import calculate_shanten
+from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 _CATEGORY_BY_SUFFIX = {
@@ -293,6 +295,177 @@ class InvalidInputTest(unittest.TestCase):
             calculate_shanten(["1m", "2m", "3m"])
 
 
+_TILE_KIND_COUNT = 34
+"""canonical 34牌種axisの要素数（test-local定数）。"""
+
+
+def _canonical_counts(tiles: list[Tile]) -> list[int]:
+    """既存canonical helperだけを使ってTile列を34牌種countへ変換する。
+
+    `hand_evaluation`側のindex mappingを再実装せず、`belief.canonical_axes`の
+    `tile_type_index()`をcanonical axisの正本として使う。これにより、
+    FiniteHorizon / beliefが使うaxisと`hand_evaluation` backendの解釈が
+    一致していること（axis driftがないこと）をtestで固定できる。
+    """
+    counts = [0] * _TILE_KIND_COUNT
+    for tile in tiles:
+        counts[tile_type_index(tile.tile_type)] += 1
+    return counts
+
+
+def _corpus_notation(seed_index: int, size: int) -> list[Tile]:
+    """乱数を使わない決定的な規則で作る、再現可能なcorpus hand。"""
+    counts = [0] * _TILE_KIND_COUNT
+    index = seed_index % _TILE_KIND_COUNT
+    step = 1 + seed_index % 7
+    total = 0
+    while total < size:
+        if counts[index] < 4:
+            counts[index] += 1
+            total += 1
+        index = (index + step) % _TILE_KIND_COUNT
+    tiles: list[Tile] = []
+    for tile_index, count in enumerate(counts):
+        for category, base, span in (
+            (TileCategory.MANZU, 0, 9),
+            (TileCategory.PINZU, 9, 9),
+            (TileCategory.SOUZU, 18, 9),
+            (TileCategory.HONOR, 27, 7),
+        ):
+            if base <= tile_index < base + span:
+                tiles.extend([Tile(TileType(category, tile_index - base + 1))] * count)
+                break
+    return tiles
+
+
+class CanonicalCountHotPathTest(unittest.TestCase):
+    """Tile公開APIとpackage-internal count-native pathの一致を固定する。
+
+    count-native pathは新しい向聴semanticではなく、同じsemantic coreへの
+    別入口である（Issue #113）。したがって同じ牌姿に対して両者は常に同じ値を
+    返さなければならない。
+    """
+
+    def _assert_paths_agree(self, tiles: list[Tile]) -> int:
+        expected = calculate_shanten(tiles)
+        actual = calculate_shanten_from_canonical_counts(_canonical_counts(tiles))
+        self.assertEqual(
+            actual,
+            expected,
+            msg=f"count-native path disagreed with the Tile API for {tiles}",
+        )
+        return expected
+
+    def test_standard_forms_agree(self) -> None:
+        fixtures = {
+            "123456789m123p11s": -1,
+            "123456789m123p1s2s": 0,
+            "123456789m123p1s3s": 0,
+            "19m19p19s1234567z": 0,
+            "123456789m12p13s5z": 1,
+        }
+        for notation, expected in fixtures.items():
+            with self.subTest(notation=notation):
+                self.assertEqual(self._assert_paths_agree(hand(notation)), expected)
+
+    def test_chiitoitsu_and_kokushi_routes_agree(self) -> None:
+        for notation in (
+            "1199m2288p3355s6z",
+            "1199m2288p3355s66z",
+            "19m19p19s1234567z",
+            "119m19p19s123456z",
+            "1122334455667z",
+        ):
+            with self.subTest(notation=notation):
+                self._assert_paths_agree(hand(notation))
+
+    def test_every_fixed_meld_context_agrees(self) -> None:
+        fixtures = {
+            0: "13579m13p246s777z",
+            1: "13579m13p246s",
+            2: "1357m13p24s",
+            3: "13m57p7z",
+            4: "1m5p",
+        }
+        for fixed_melds, notation in fixtures.items():
+            tiles = hand(notation)
+            with self.subTest(fixed_melds=fixed_melds, size=len(tiles)):
+                self.assertEqual(4 - (len(tiles) - 1) // 3, fixed_melds)
+                self._assert_paths_agree(tiles)
+
+    def test_shanten_depth_range_agrees(self) -> None:
+        # complete / tenpai / 1-shanten / deeper shanten をまたいで一致する。
+        observed = set()
+        for notation in (
+            "123456789m123p11s",
+            "123456789m123p1s2s",
+            "123456789m12p13s5z",
+            "147m258p369s1357z",
+            "147m2588p369s135z",
+        ):
+            with self.subTest(notation=notation):
+                observed.add(self._assert_paths_agree(hand(notation)))
+        self.assertLessEqual({-1, 0, 1}, observed)
+        self.assertTrue(any(value >= 2 for value in observed))
+
+    def test_red_and_normal_five_are_structurally_equivalent(self) -> None:
+        red = hand("123406789m123p11s")
+        normal = hand("123456789m123p11s")
+
+        self.assertEqual(_canonical_counts(red), _canonical_counts(normal))
+        self.assertEqual(
+            calculate_shanten_from_canonical_counts(_canonical_counts(red)),
+            calculate_shanten_from_canonical_counts(_canonical_counts(normal)),
+        )
+        self._assert_paths_agree(red)
+
+    def test_deterministic_corpus_agrees_on_the_canonical_axis(self) -> None:
+        # canonical axisがずれると通常形以外の解釈が食い違うため、決定的な
+        # corpus全体でTile path == count-native pathを固定する。
+        for size in (14, 13, 11, 10, 8, 7, 5, 4, 2, 1):
+            for seed_index in range(_TILE_KIND_COUNT):
+                tiles = _corpus_notation(seed_index, size)
+                self._assert_paths_agree(tiles)
+
+    def test_seeded_sample_corpus_agrees(self) -> None:
+        generator = random.Random(20260824)
+        for size in (14, 13, 11, 8, 5, 2):
+            for _ in range(12):
+                counts = [0] * _TILE_KIND_COUNT
+                total = 0
+                while total < size:
+                    index = generator.randrange(_TILE_KIND_COUNT)
+                    if counts[index] == 4:
+                        continue
+                    counts[index] += 1
+                    total += 1
+                tiles: list[Tile] = []
+                for tile_index, count in enumerate(counts):
+                    for category, base, span in (
+                        (TileCategory.MANZU, 0, 9),
+                        (TileCategory.PINZU, 9, 9),
+                        (TileCategory.SOUZU, 18, 9),
+                        (TileCategory.HONOR, 27, 7),
+                    ):
+                        if base <= tile_index < base + span:
+                            tiles.extend(
+                                [Tile(TileType(category, tile_index - base + 1))]
+                                * count
+                            )
+                            break
+                self._assert_paths_agree(tiles)
+
+    def test_count_native_path_accepts_a_tuple_state(self) -> None:
+        # FiniteHorizonのDP stateはtupleなので、tuple入力でも同じ値を返す。
+        tiles = hand("123456789m123p11s")
+        counts = _canonical_counts(tiles)
+
+        self.assertEqual(
+            calculate_shanten_from_canonical_counts(tuple(counts)),
+            calculate_shanten(tiles),
+        )
+
+
 _REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 _PACKAGE_ROOT = _REPOSITORY_ROOT / "src" / "lisjong" / "hand_evaluation"
 
@@ -302,6 +475,28 @@ class PublicSurfaceTest(unittest.TestCase):
         import lisjong.hand_evaluation as hand_evaluation
 
         self.assertEqual(hand_evaluation.__all__, ["calculate_shanten"])
+
+    def test_count_native_hot_path_is_not_a_top_level_public_api(self) -> None:
+        # Issue #113のcount-native pathはpackage-internal contractであり、
+        # package rootの一般public surfaceへは載せない。
+        import lisjong.hand_evaluation as hand_evaluation
+
+        self.assertNotIn(
+            "calculate_shanten_from_canonical_counts", hand_evaluation.__all__
+        )
+        self.assertFalse(
+            hasattr(hand_evaluation, "calculate_shanten_from_canonical_counts")
+        )
+
+    def test_hand_evaluation_does_not_depend_on_the_belief_layer(self) -> None:
+        # canonical axisの正本はbelief側だが、hand_evaluationからbelief layerへ
+        # 依存させない（count-native pathは34-countをそのまま受け取る）。
+        for path in _PACKAGE_ROOT.glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    with self.subTest(path=path.name, module=node.module):
+                        self.assertFalse(node.module.startswith("lisjong.belief"))
 
     def test_backend_stays_behind_a_private_module_name(self) -> None:
         modules = {path.name for path in _PACKAGE_ROOT.glob("*.py")}

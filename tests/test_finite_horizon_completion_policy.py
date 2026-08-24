@@ -1623,11 +1623,47 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
 
         self.assertIn("lisjong.belief.tile_conservation", imported_modules)
         self.assertIn("lisjong.belief.canonical_axes", imported_modules)
-        self.assertIn("lisjong.hand_evaluation", imported_modules)
+        # Issue #113: shanten評価はhand_evaluationが所有するcount-native
+        # contract経由で行い、private backendへは触れない。
+        self.assertIn("lisjong.hand_evaluation.shanten", imported_modules)
         self.assertNotIn("lisjong.hand_evaluation._python_shanten", imported_modules)
         self.assertNotIn(
             "lisjong.belief.conditional_uniform_hand_belief", imported_modules
         )
+
+    def test_module_never_references_the_private_shanten_backend(self) -> None:
+        # importだけでなく、name / attribute参照としても`_python_shanten`へ
+        # 触れないことを固定する（backend exchangeabilityはhand_evaluation層の
+        # 責務）。docstringでの言及は境界の説明なので対象外とし、実際のcode
+        # referenceだけをASTで見る。
+        tree = ast.parse(inspect.getsource(finite_horizon))
+        referenced: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                referenced.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    referenced.add(node.module)
+                referenced.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Name):
+                referenced.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                referenced.add(node.attr)
+
+        self.assertFalse(
+            any("_python_shanten" in name for name in referenced),
+            msg="the Policy must not reference the private shanten backend",
+        )
+
+    def test_shanten_hot_path_does_not_rebuild_tiles_from_counts(self) -> None:
+        # counts -> Tile -> counts のround-tripがproduction hot pathから
+        # 消えていることを固定する（Issue #113）。
+        source = inspect.getsource(finite_horizon._FiniteHorizonEvaluator.shanten)
+
+        self.assertIn("calculate_shanten_from_canonical_counts(hand_counts)", source)
+        self.assertNotIn("_tiles_from_counts", source)
+        self.assertFalse(hasattr(finite_horizon, "_tiles_from_counts"))
+        self.assertFalse(hasattr(finite_horizon, "_CANONICAL_TILES"))
 
     def test_module_has_no_hidden_or_environment_dependency(self) -> None:
         tree = ast.parse(inspect.getsource(finite_horizon))
