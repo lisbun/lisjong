@@ -332,10 +332,9 @@ deduplicateする。root legal `DiscardAction` identityは維持する。
 
 structural completionの正本は公開`calculate_shanten()`だけであり、
 `calculate_shanten(draw_hand) == -1`をcompletionとする。standard / 七対子 /
-国士無双 / 確定面子のsemanticsを本moduleで再実装しない。安全な枝刈りは
-`calculate_shanten(H) + 1 > depth`のlower boundだけで、beam search、top-N
-branch、probability cutoff、weak-shape heuristic、Monte Carlo / MCTSは
-導入しない。
+国士無双 / 確定面子のsemanticsを本moduleで再実装しない。枝刈りは後述の
+2つのexact-safeなlower boundだけで、beam search、top-N branch、probability
+cutoff、weak-shape heuristic、Monte Carlo / MCTSは導入しない。
 
 transposition cacheとshanten cacheは1 discard decision内に閉じ、全root
 discard candidateで同じevaluator instanceを共有する。Policy instance、module
@@ -348,6 +347,61 @@ global、decision間、対局間へcacheを持ち越さない。
        ├─ root candidate B
        └─ root candidate C
 ```
+
+##### exact-safe pruning (Issue #111)
+
+DPが使う枝刈りは次の2つだけであり、どちらも**approximationではない**。
+`completion_mass`のsemantic、selection結果、remaining inventory semanticsは
+いずれも変更しない、純粋なstate-space reductionである。
+
+1. **state lower bound**（Issue #109）
+
+   ```text
+   calculate_shanten(H) + 1 > depth  ->  M(H, R, depth) = 0
+   ```
+
+   そのdepth内ではstructural completionへ到達できないため、exact resultを
+   変えずに0を返せる。
+
+2. **parent pruning**（Issue #111）
+
+   draw後の`D = H + t`が未完成で
+
+   ```text
+   calculate_shanten(D) > depth - 2
+   ```
+
+   なら、hypothetical discard children全体の列挙を省略する。
+
+parent pruningが依存する不変条件はshanten deletion monotonicityである。
+
+```text
+shanten(D - d) >= shanten(D)
+```
+
+`D`はvalidなdraw-hand、`d`は`D`に存在する任意のstructural discard tileで
+あり、同じ確定面子数を共有する`14 -> 13` / `11 -> 10` / `8 -> 7` /
+`5 -> 4` / `2 -> 1`のpairを対象とする。「牌を1枚切るだけでstructural
+completionへの必要draw数が減ることはない」という性質であり、現行
+`calculate_shanten()`が13 / 14枚で評価するstandard / 七対子 / 国士無双の
+minimum semanticのもとで成立する。
+
+child stateが残り`depth - 1`回のself drawで完成するには
+`shanten(D - d) + 1 <= depth - 1`が必要なので、monotonicityより
+`shanten(D) > depth - 2`ならすべてのdiscard childのcompletion massが必ず
+0になる。したがってchildrenを列挙しなくてもexact resultは変わらない。
+
+境界は**strict `>`**である。例えば`depth = 3`で`shanten(D) = 1`なら
+`1 > 1`はfalseなのでpruneしない（切った後も1向聴を維持できれば、残り
+2drawで完成し得る）。なお和了形`shanten(D) == -1`は、到達し得る
+`depth >= 1`のすべてでこの条件を満たさないため、完成branchのsuffix success
+massがparent pruningで失われることはない。
+
+pruning判定はdraw直後のcompletion判定ですでに評価した`draw_shanten`を
+再利用し、追加の`calculate_shanten()`評価を発生させない。productionには
+pruning on / offの二重pathを持たせず、exactnessの検証はtest-localな
+unpruned reference oracleとの一致、およびshanten deletion monotonicityの
+deterministic corpus testで行う。
 
 ##### selection precedenceとanalysis
 

@@ -82,6 +82,37 @@ semanticsは再実装せず、`two_step_ukeire._evaluate_and_choose_discard()`�
 あってもcompletion massが最大なら選択する。向聴数はterminal判定、safe
 lower-bound pruning、fallback、diagnosticsに使う。
 
+## exact-safe parent pruning
+
+Issue #111で、DP探索state数を減らすためのparent-level pruningを追加した。
+これは**approximationではなく**、`completion_mass` semanticもselection結果も
+変更しない、純粋なstate-space reductionである。
+
+前提とするのはshanten deletion monotonicityである。
+
+    shanten(D - d) >= shanten(D)
+
+`D`はvalidなdraw-hand、`d`はDに存在する任意のstructural discard tileであり、
+同じfixed-meld contextに属する`14 -> 13` / `11 -> 10` / `8 -> 7` / `5 -> 4` /
+`2 -> 1`のpairを対象とする。牌を1枚切るだけでstructural completionへの必要
+draw数が減ることはない、という性質である。
+
+child stateが残り`depth - 1`回のself drawで完成するには
+`shanten(D - d) + 1 <= depth - 1`が必要なので、monotonicityより
+
+    shanten(D) > depth - 2
+
+なら全discard childのcompletion massが必ず0になる。この場合だけ
+hypothetical discard childrenの列挙自体を省略する。
+
+境界はstrict `>`である。例えば`depth = 3`で`shanten(D) = 1`なら`1 > 1`は
+falseなのでpruneしない（切った後も1向聴を維持できれば残り2drawで完成し得る）。
+
+pruning判定はdraw直後のcompletion判定ですでに評価した`draw_shanten`を
+再利用し、追加の`calculate_shanten()`評価を発生させない。productionには
+pruning on/offの二重pathを持たせず、exactnessの検証はtest-localなunpruned
+reference oracleとの一致で行う。
+
 ## subclass構造
 
 `TwoStepUkeirePolicy._decide_discard()` extension pointだけをoverrideし、
@@ -337,10 +368,17 @@ class _FiniteHorizonEvaluator:
         `k - 1` slotの内容によらず成功なので`F(sum(R'), k - 1)`、そうで
         なければ`max_d M(draw_hand - d, R', k - 1)`である。
 
-        安全な枝刈りは`calculate_shanten(H) + 1 > depth`のlower boundだけ
-        とする（depth内でstructural completionへ到達できないため、exact
-        resultを変えずに0を返せる）。beam search、top-N branch、probability
-        cutoff、weak-shape heuristicは導入しない。
+        安全な枝刈りは次の2つだけとする。どちらもexact resultを変えない。
+
+        1. state lower bound: `calculate_shanten(H) + 1 > depth`なら、その
+           depth内でstructural completionへ到達できないので0を返す。
+        2. exact-safe parent pruning: draw後の`D = H + t`が未完成で
+           `calculate_shanten(D) > depth - 2`なら、shanten deletion
+           monotonicityより全hypothetical discard childが0になるため、
+           children自体を列挙しない。
+
+        beam search、top-N branch、probability cutoff、weak-shape heuristicは
+        導入しない。
         """
         if depth <= 0:
             return 0
@@ -358,7 +396,8 @@ class _FiniteHorizonEvaluator:
             draw_hand[drawn_index] += 1
             draw_hand_counts = tuple(draw_hand)
 
-            if self.shanten(draw_hand_counts) == _COMPLETE_SHANTEN:
+            draw_shanten = self.shanten(draw_hand_counts)
+            if draw_shanten == _COMPLETE_SHANTEN:
                 total += available * completed_suffix_mass
                 continue
 
@@ -366,6 +405,18 @@ class _FiniteHorizonEvaluator:
                 # 未完成のまま最後のdraw slotを使い切ったbranchは
                 # `M(next_hand, R', 0) == 0`なので、仮想discardの列挙自体を
                 # 省略できる。近似ではなくrecurrenceの展開である。
+                continue
+
+            if draw_shanten > depth - 2:
+                # exact-safe parent pruning（Issue #111）。
+                # shanten deletion monotonicity `shanten(D - d) >= shanten(D)`
+                # より、この場合はどのdを切っても
+                # `shanten(D - d) + 1 >= draw_shanten + 1 > depth - 1`
+                # となり、child側のlower-bound pruningが必ず発火する。
+                # したがって全child completion massは0であり、列挙を省略しても
+                # exact resultは1ビットも変わらない。境界はstrict `>`であり、
+                # `draw_shanten == depth - 2`（切っても向聴数を維持できれば
+                # 残りdrawで完成し得る）はpruneしない。
                 continue
 
             next_remaining = list(remaining_counts)

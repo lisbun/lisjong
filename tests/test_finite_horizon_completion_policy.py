@@ -4,6 +4,7 @@ import ast
 import inspect
 import itertools
 import pickle
+import random
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from unittest.mock import patch
@@ -27,6 +28,7 @@ from lisjong.policies.finite_horizon_completion import (
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeirePolicyError,
+    _remove_one_matching_tile,
 )
 from lisjong.policies.two_step_ukeire import (
     _evaluate_and_choose_discard as two_step_evaluate_and_choose_discard,
@@ -189,6 +191,18 @@ _OPEN_HAND_CONCEALED = _hand("345m99s")
 
 _RED_FIVE_CONCEALED = _hand("3045m") + (SOUZU_9,)
 """3副露済みで、赤5mと通常5mの両方を持つ純手牌5枚。"""
+
+_MAX_COPIES_PER_TILE_TYPE = 4
+"""1牌種あたりのphysical上限枚数（corpus生成用のtest-local定数）。"""
+
+_ISOLATED_OPEN_HAND = _tile_type_counts(_hand("1m5p9s3z"))
+"""3副露 + 孤立牌4枚。どの牌をtsumoしても打牌後2向聴のままになる。"""
+
+_ONE_SHANTEN_OPEN_HAND = _tile_type_counts(_hand("34m9s1z"))
+"""3副露 + 1向聴の純手牌4枚。無関係牌をtsumoしても1向聴を維持できる。"""
+
+_TENPAI_OPEN_HAND = _tile_type_counts(_hand("345m9s"))
+"""3副露 + 9s単騎聴牌の純手牌4枚。"""
 
 
 def _open_hand_players() -> tuple[PlayerPublicState, ...]:
@@ -521,8 +535,11 @@ class CompletionMassRecurrenceTest(unittest.TestCase):
     def test_a_future_draw_removes_exactly_the_drawn_tile(self) -> None:
         # drawした牌種だけがremaining inventoryから1枚減り、仮想discardは
         # どのbranchでもinventoryへ戻らない。
+        # 2z / 3z はどちらもdraw後に七対子聴牌を保つため、depth 2の
+        # exact-safe parent pruning（`draw_shanten > depth - 2`）に掛からず、
+        # 仮想discard childrenが実際に生成される。
         hand = _counts(m3=3, m4=2, m5=2, s9=2, z1=2, z2=1, z3=1)
-        remaining = _counts(z4=1, s8=1)
+        remaining = _counts(z2=1, z3=1)
 
         with _RecordedEvaluation() as recorded:
             self.evaluator.completion_mass(hand, remaining, 2)
@@ -532,15 +549,16 @@ class CompletionMassRecurrenceTest(unittest.TestCase):
             for _hand, remaining_counts, depth in recorded.calls
             if depth == 1
         }
-        self.assertEqual(child_inventories, {_counts(s8=1), _counts(z4=1)})
+        self.assertEqual(child_inventories, {_counts(z3=1), _counts(z2=1)})
 
     def test_hypothetical_discards_are_deduplicated_per_tile_type(self) -> None:
-        # 仮想discardは牌種単位なので、drawした14枚目を含む8牌種から生まれる
-        # 子stateはちょうど8件になる（同じ牌種のcopy Aとcopy Bを別branchに
-        # しない）。
+        # 仮想discardは牌種単位なので、drawした14枚目を含む7牌種から生まれる
+        # 子stateはちょうど7件になる（同じ牌種のcopy Aとcopy Bを別branchに
+        # しない）。2z drawは七対子聴牌を保つのでparent pruningに掛からず、
+        # 仮想discardの列挙が実際に行われる。
         hand = _counts(m3=3, m4=2, m5=2, s9=2, z1=2, z2=1, z3=1)
-        remaining = _counts(z4=1)
-        drawn_hand_tile_types = 8
+        remaining = _counts(z2=1)
+        drawn_hand_tile_types = 7
 
         self.evaluator.completion_mass(hand, remaining, 2)
 
@@ -1236,6 +1254,328 @@ class AnalysisValueTest(unittest.TestCase):
                 for evaluation in analysis.candidate_evaluations
             )
         )
+
+
+def _corpus_hand_counts(size: int, seed_index: int) -> tuple[int, ...]:
+    """乱数を使わない決定的な規則だけで作る、再現可能なcorpus hand。
+
+    `seed_index`から固定stepで牌種を巡回し、1牌種`_MAX_COPIES_PER_TILE_TYPE`枚
+    を上限に`size`枚まで積む。同じ引数からは常に同じ牌姿になるので、CIでも
+    結果が揺れない。
+    """
+    counts = [0] * TILE_TYPE_COUNT
+    index = seed_index % TILE_TYPE_COUNT
+    step = 1 + seed_index % 7
+    total = 0
+    while total < size:
+        if counts[index] < _MAX_COPIES_PER_TILE_TYPE:
+            counts[index] += 1
+            total += 1
+        index = (index + step) % TILE_TYPE_COUNT
+    return tuple(counts)
+
+
+def _pair_heavy_corpus_counts(size: int, seed_index: int) -> tuple[int, ...]:
+    """対子中心の決定的corpus hand。七対子解釈が効きやすい牌姿を作る。"""
+    counts = [0] * TILE_TYPE_COUNT
+    index = seed_index % TILE_TYPE_COUNT
+    total = 0
+    while total < size:
+        take = min(2, size - total, _MAX_COPIES_PER_TILE_TYPE - counts[index])
+        counts[index] += take
+        total += take
+        index = (index + 1 + seed_index % 3) % TILE_TYPE_COUNT
+    return tuple(counts)
+
+
+def _orphan_heavy_corpus_counts(size: int, seed_index: int) -> tuple[int, ...]:
+    """么九牌中心の決定的corpus hand。国士解釈が効きやすい牌姿を作る。"""
+    orphans = (
+        _index(TileCategory.MANZU, 1),
+        _index(TileCategory.MANZU, 9),
+        _index(TileCategory.PINZU, 1),
+        _index(TileCategory.PINZU, 9),
+        _index(TileCategory.SOUZU, 1),
+        _index(TileCategory.SOUZU, 9),
+        *(_index(TileCategory.HONOR, rank) for rank in range(1, 8)),
+    )
+    counts = [0] * TILE_TYPE_COUNT
+    position = seed_index % len(orphans)
+    total = 0
+    while total < size:
+        index = orphans[position % len(orphans)]
+        if counts[index] < _MAX_COPIES_PER_TILE_TYPE:
+            counts[index] += 1
+            total += 1
+        position += 1
+    return tuple(counts)
+
+
+def _sampled_hand_counts(generator: random.Random, size: int) -> tuple[int, ...]:
+    """固定seedのgeneratorから引く補助corpus（CI上はdeterministic）。"""
+    counts = [0] * TILE_TYPE_COUNT
+    total = 0
+    while total < size:
+        index = generator.randrange(TILE_TYPE_COUNT)
+        if counts[index] == _MAX_COPIES_PER_TILE_TYPE:
+            continue
+        counts[index] += 1
+        total += 1
+    return tuple(counts)
+
+
+_DRAW_HAND_SIZES = (14, 11, 8, 5, 2)
+"""同じfixed-meld contextで`size -> size - 1`のdeletionが定義できる牌数。"""
+
+
+class ShantenDeletionMonotonicityTest(unittest.TestCase):
+    """exact-safe parent pruningの前提`shanten(D - d) >= shanten(D)`を固定する。
+
+    この性質が崩れると`draw_shanten > depth - 2`のparent pruningがexactで
+    なくなるため、`FiniteHorizonCompletionPolicy`側のimplementation
+    regression testとしてここで固定する。`calculate_shanten()`のpublic
+    contract自体は変更しない。
+    """
+
+    def _assert_deletion_monotone(self, hand_counts: tuple[int, ...]) -> None:
+        draw_shanten = calculate_shanten(_tiles_for_oracle(hand_counts))
+        for index, count in enumerate(hand_counts):
+            if count == 0:
+                continue
+            reduced = list(hand_counts)
+            reduced[index] -= 1
+            reduced_shanten = calculate_shanten(_tiles_for_oracle(tuple(reduced)))
+            self.assertGreaterEqual(
+                reduced_shanten,
+                draw_shanten,
+                msg=(
+                    f"deleting tile index {index} from {hand_counts} lowered "
+                    f"shanten from {draw_shanten} to {reduced_shanten}"
+                ),
+            )
+
+    def test_closed_standard_hand_is_deletion_monotone(self) -> None:
+        self._assert_deletion_monotone(_tile_type_counts(_TENPAI_HAND))
+
+    def test_chiitoitsu_relevant_hand_is_deletion_monotone(self) -> None:
+        self._assert_deletion_monotone(_tile_type_counts(_CHIITOITSU_HAND))
+
+    def test_kokushi_relevant_hand_is_deletion_monotone(self) -> None:
+        self._assert_deletion_monotone(_tile_type_counts(_KOKUSHI_HAND))
+
+    def test_every_fixed_meld_context_is_deletion_monotone(self) -> None:
+        # 14 -> 13 / 11 -> 10 / 8 -> 7 / 5 -> 4 / 2 -> 1 はいずれも同じ確定
+        # 面子数を共有するので、同一fixed-meld context内のdeletionになる。
+        fixtures = {
+            0: _TENPAI_HAND,
+            1: _hand("13579m13p246s7z"),
+            2: _hand("1357m13p24s"),
+            3: _hand("13m57p7z"),
+            4: _hand("1m5p"),
+        }
+        for fixed_melds, tiles in fixtures.items():
+            with self.subTest(fixed_melds=fixed_melds, size=len(tiles)):
+                self.assertEqual(4 - (len(tiles) - 1) // 3, fixed_melds)
+                # 和了形(-1)は下限なのでdeletion testのteethが弱くなる。
+                # 未完成fixtureであることを明示的に固定する。
+                self.assertGreaterEqual(calculate_shanten(tiles), 0)
+                self._assert_deletion_monotone(_tile_type_counts(tiles))
+
+    def test_deterministic_corpus_is_deletion_monotone(self) -> None:
+        for size in _DRAW_HAND_SIZES:
+            for seed_index in range(TILE_TYPE_COUNT):
+                self._assert_deletion_monotone(_corpus_hand_counts(size, seed_index))
+
+    def test_pair_heavy_corpus_is_deletion_monotone(self) -> None:
+        for size in _DRAW_HAND_SIZES:
+            for seed_index in range(TILE_TYPE_COUNT):
+                self._assert_deletion_monotone(
+                    _pair_heavy_corpus_counts(size, seed_index)
+                )
+
+    def test_orphan_heavy_corpus_is_deletion_monotone(self) -> None:
+        for size in _DRAW_HAND_SIZES:
+            for seed_index in range(13):
+                self._assert_deletion_monotone(
+                    _orphan_heavy_corpus_counts(size, seed_index)
+                )
+
+    def test_seeded_sample_corpus_is_deletion_monotone(self) -> None:
+        # random samplingはあくまで補助だが、固定seedなのでCI上は決定的である。
+        generator = random.Random(20260824)
+        for size in _DRAW_HAND_SIZES:
+            for _ in range(12):
+                self._assert_deletion_monotone(_sampled_hand_counts(generator, size))
+
+
+class ParentPruningBehaviorTest(unittest.TestCase):
+    """`draw_shanten > depth - 2`のexact-safe parent pruningを直接固定する。"""
+
+    def _evaluate_with_children(
+        self,
+        hand_counts: tuple[int, ...],
+        remaining_counts: tuple[int, ...],
+        depth: int,
+    ) -> tuple[int, list[tuple[tuple[int, ...], tuple[int, ...], int]]]:
+        evaluator = _FiniteHorizonEvaluator()
+        with _RecordedEvaluation() as recorded:
+            mass = evaluator.completion_mass(hand_counts, remaining_counts, depth)
+        children = [call for call in recorded.calls if call[2] == depth - 1]
+        return mass, children
+
+    def _draw_shanten(self, hand_counts: tuple[int, ...], drawn_index: int) -> int:
+        draw_counts = list(hand_counts)
+        draw_counts[drawn_index] += 1
+        return calculate_shanten(_tiles_for_oracle(tuple(draw_counts)))
+
+    def test_draw_shanten_above_the_bound_generates_no_child_state(self) -> None:
+        # depth 3、draw後2向聴。2 > 3 - 2 なので、どの牌を切っても残り2draw
+        # では完成できず、hypothetical discard childrenを生成しない。
+        green_dragon = _index(TileCategory.HONOR, 6)
+        self.assertEqual(self._draw_shanten(_ISOLATED_OPEN_HAND, green_dragon), 2)
+
+        mass, children = self._evaluate_with_children(
+            _ISOLATED_OPEN_HAND, _counts(z6=1), 3
+        )
+
+        self.assertEqual(children, [])
+        self.assertEqual(mass, 0)
+
+    def test_draw_shanten_at_the_bound_still_generates_children(self) -> None:
+        # depth 3、draw後1向聴。1 > 1 はfalseなのでpruneしてはならない。
+        green_dragon = _index(TileCategory.HONOR, 6)
+        self.assertEqual(self._draw_shanten(_ONE_SHANTEN_OPEN_HAND, green_dragon), 1)
+
+        _mass, children = self._evaluate_with_children(
+            _ONE_SHANTEN_OPEN_HAND, _counts(z6=1), 3
+        )
+
+        self.assertNotEqual(children, [])
+
+    def test_draw_shanten_below_the_bound_generates_children(self) -> None:
+        # depth 3、draw後聴牌。0 < 1 なので当然pruneしない。
+        green_dragon = _index(TileCategory.HONOR, 6)
+        self.assertEqual(self._draw_shanten(_TENPAI_OPEN_HAND, green_dragon), 0)
+
+        _mass, children = self._evaluate_with_children(
+            _TENPAI_OPEN_HAND, _counts(z6=1), 3
+        )
+
+        self.assertNotEqual(children, [])
+
+    def test_depth_two_boundary_uses_the_same_strict_comparison(self) -> None:
+        # depth 2ではboundが0になる。聴牌(0 > 0 はfalse)はpruneせず、
+        # 1向聴(1 > 0)はpruneする。
+        drawn = _counts(z6=1)
+
+        _tenpai_mass, tenpai_children = self._evaluate_with_children(
+            _TENPAI_OPEN_HAND, drawn, 2
+        )
+        one_shanten_mass, one_shanten_children = self._evaluate_with_children(
+            _ONE_SHANTEN_OPEN_HAND, drawn, 2
+        )
+
+        self.assertNotEqual(tenpai_children, [])
+        self.assertEqual(one_shanten_children, [])
+        self.assertEqual(one_shanten_mass, 0)
+
+    def test_completed_draw_keeps_the_suffix_success_mass(self) -> None:
+        # completion判定はpruning条件より先に行い、既存のsuffix mass計算を
+        # そのまま維持する。
+        remaining = _counts(s9=2, z1=1)
+
+        mass, children = self._evaluate_with_children(_TENPAI_OPEN_HAND, remaining, 2)
+
+        self.assertEqual(mass, _falling_factorial(3, 2))
+        # 9s draw(完成)はchildを作らず、1z draw(聴牌維持)だけがchildを作る。
+        self.assertNotEqual(children, [])
+        for _child_hand, child_remaining, _depth in children:
+            self.assertEqual(child_remaining, _counts(s9=2))
+
+    def test_pruning_adds_no_extra_shanten_evaluation(self) -> None:
+        # parent pruningはcompletion判定で評価済みのdraw_shantenを再利用する。
+        # 1 draw branchあたりのshanten評価はdraw_hand 1件だけである。
+        evaluator = _FiniteHorizonEvaluator()
+
+        evaluator.completion_mass(_ISOLATED_OPEN_HAND, _counts(z6=1), 3)
+
+        # 評価されるのはparent hand自身とdraw_handの2件だけ。
+        self.assertEqual(evaluator.shanten_evaluations, 2)
+
+    def test_pruned_branches_match_the_unpruned_oracle(self) -> None:
+        # pruneされたbranchのcontributionが本当に0であることを、pruningを
+        # 一切持たないtest-local oracleとの一致で確認する。
+        for hand, remaining, depth in (
+            (_ISOLATED_OPEN_HAND, _counts(z6=1, m1=3), 3),
+            (_ONE_SHANTEN_OPEN_HAND, _counts(z6=1, m2=4, m5=4), 3),
+            (_ONE_SHANTEN_OPEN_HAND, _counts(z6=2, m2=1), 2),
+        ):
+            with self.subTest(hand=hand, depth=depth):
+                evaluator = _FiniteHorizonEvaluator()
+                self.assertEqual(
+                    evaluator.completion_mass(hand, remaining, depth),
+                    _uncached_oracle_mass(hand, remaining, depth),
+                )
+
+
+class ExactnessAgainstUnprunedOracleTest(unittest.TestCase):
+    """optimized production DPがunpruned exact referenceと一致することを固定する。"""
+
+    _INVENTORIES = (
+        _counts(s9=2, z1=1),
+        _counts(s9=1, z1=2),
+        _counts(m3=3, m6=4, s9=2, z1=2),
+        _counts(m2=2, m5=2, s9=1, z1=1, z6=1),
+    )
+
+    def test_horizon_one_and_two_match_the_unpruned_oracle(self) -> None:
+        for hand in (_TENPAI_OPEN_HAND, _ONE_SHANTEN_OPEN_HAND, _ISOLATED_OPEN_HAND):
+            for remaining in self._INVENTORIES:
+                for depth in (1, 2):
+                    with self.subTest(hand=hand, remaining=remaining, depth=depth):
+                        evaluator = _FiniteHorizonEvaluator()
+                        self.assertEqual(
+                            evaluator.completion_mass(hand, remaining, depth),
+                            _uncached_oracle_mass(hand, remaining, depth),
+                        )
+
+    def test_horizon_three_matches_the_unpruned_oracle(self) -> None:
+        for hand in (_TENPAI_OPEN_HAND, _ONE_SHANTEN_OPEN_HAND, _ISOLATED_OPEN_HAND):
+            for remaining in (
+                _counts(s9=2, z1=1),
+                _counts(m2=2, m5=1, s9=1, z6=1),
+            ):
+                with self.subTest(hand=hand, remaining=remaining):
+                    evaluator = _FiniteHorizonEvaluator()
+                    self.assertEqual(
+                        evaluator.completion_mass(hand, remaining, 3),
+                        _uncached_oracle_mass(hand, remaining, 3),
+                    )
+
+    def test_every_root_candidate_mass_matches_the_unpruned_oracle(self) -> None:
+        # selected actionだけでなく、各root candidateのcompletion massそのものを
+        # unpruned oracleと突き合わせる。
+        policy_input = _open_hand_input()
+        remaining = _root_remaining_counts(policy_input)
+        discard_actions = tuple(
+            _discard(tile) for tile in dict.fromkeys(_OPEN_HAND_CONCEALED)
+        )
+        concealed = policy_input.own_hand.concealed_tiles
+
+        for horizon in (1, 2):
+            with self.subTest(horizon=horizon):
+                _selected, analysis = _evaluate_and_choose_discard(
+                    policy_input, discard_actions, horizon=horizon
+                )
+                self.assertNotEqual(analysis.candidate_evaluations, ())
+                for evaluation in analysis.candidate_evaluations:
+                    post_discard = _tile_type_counts(
+                        _remove_one_matching_tile(concealed, evaluation.action.tile)
+                    )
+                    self.assertEqual(
+                        evaluation.completion_mass,
+                        _uncached_oracle_mass(post_discard, remaining, horizon),
+                    )
 
 
 class PolicyGenerationAndScopeTest(unittest.TestCase):
