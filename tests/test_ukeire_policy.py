@@ -1026,6 +1026,7 @@ class PolicyGenerationTest(unittest.TestCase):
         self.assertEqual(
             set(policies.__all__),
             {
+                "FiniteHorizonCompletionPolicy",
                 "GenbutsuDefenseTwoStepUkeirePolicy",
                 "MinimalPolicy",
                 "ShantenPolicy",

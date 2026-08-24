@@ -237,6 +237,144 @@ ABBB parallel evaluationが`PolicySpec(factory=ValueAwareTwoStepUkeirePolicy)`�
 して利用できる、top-level importable factoryである。Arena側の評価・統合は
 本Issueの範囲外とする。
 
+#### FiniteHorizonCompletion (Issue #109)
+
+`lisjong.policies.finite_horizon_completion.FiniteHorizonCompletionPolicy`は、
+Policy-visibleなremaining uncertaintyに対するexact finite-horizon dynamic
+programmingを導入したPolicy世代である。既存2世代とのalgorithmic差は次のとおり
+である。
+
+```text
+TwoStepUkeirePolicy
+    heuristic two-step structural efficiency
+    shanten > current ukeire > second-step ukeire > stable tie-break
+
+FiniteHorizonCompletionPolicy
+    exact conditional k-self-draw structural completion probability
+    completion mass > (tie / all-zeroのときだけ) existing TwoStep ranking
+```
+
+初期世代は`DEFAULT_HORIZON = 3`固定であり、各legal discardについて
+
+```text
+current real discard
+↓ future self draw #1 → best structural hypothetical discard
+↓ future self draw #2 → best structural hypothetical discard
+↓ future self draw #3 → structural completion判定
+```
+
+をexactに再帰評価する。向聴数はcompletion massより上位のhard filterにしない。
+最小向聴でない候補でもcompletion massが最大なら選択できる点が、TwoStepとの
+中心的な差である。向聴数はterminal判定、safe lower-bound pruning、fallback、
+diagnosticsに使う。
+
+##### semanticの正本
+
+このcompletion probabilityは、
+
+```text
+k個のfuture self-draw slotsが存在すると条件付けた
+conditional-uniform structural hand-development value
+```
+
+であり、**実対局でk巡以内に和了する確率ではない**。流局、他家和了、自分の
+future draw機会が実際に何回残るか、future riichi / call / legal-action state、
+他家actionはsimulationしない。
+
+```text
+completion probability != actual probability of winning within k turns
+```
+
+同様に、future draw distributionの正本であるIssue #63の
+`derive_remaining_tile_inventory()`の`remaining_tile_counts`は**山ではない**。
+
+```text
+remaining tile inventory != live wall
+```
+
+remaining inventoryには他家concealed hand、live wall、dead wall、未開示裏ドラ
+表示牌等が含まれるため、`RoundState.live_wall_tiles_remaining`で割った値を
+draw probabilityとして使わない。Policy内でknown tile accountingを再実装せず、
+Issue #63の結果をそのまま正本とする。Issue #65からは`HandBelief`のquantized
+outputではなく、「exact観測で条件付けた後、remaining physical tilesはremaining
+hidden slotsへexchangeableに配置されている」というmodel assumptionだけを
+再利用する。
+
+##### remaining inventoryの更新規則とexact integer mass
+
+root discardではremaining inventoryを変更しない。root `PolicyInput`のself
+concealed tilesはIssue #63の導出時点ですでにexact accountedであり、打牌は
+`self concealed`から`public discard`へprovenanceが移るだけだからである。
+したがって`R_root`は全root discard candidateで共通である。future self draw
+`t`では`R' = R - one(t)`とし、その後のhypothetical discardをremaining
+inventoryへ戻さない。
+
+selection contractにbinary floating-point probabilityを使わない。remaining
+hidden physical countを`N`、horizonを`k`として、
+
+```text
+F(N, k) = N * (N - 1) * ... * (N - k + 1)
+```
+
+をordered physical draw sequence denominatorとし、DPはexact non-negative
+integerの`completion_mass`を返す。semantic probabilityは
+`completion_mass / F(N, k)`だが、root candidate間で`R_root` / `N` / `k`が
+共通なのでdenominatorも共通であり、selectionはexact integer比較だけで行う。
+常に`0 <= completion_mass <= F(N, k)`を満たす。
+
+##### DP structureとcache
+
+DP stateは概念的に`(hand_counts[34], remaining_counts[34], depth)`であり、
+34牌種axisは`belief.canonical_axes`の`tile_type_index()` /
+`tile_type_from_index()` / `TILE_TYPE_COUNT`を再利用する。structural DP内部
+では赤5と通常5を同じ基礎牌種として扱い、仮想discardは牌種単位で
+deduplicateする。root legal `DiscardAction` identityは維持する。
+
+structural completionの正本は公開`calculate_shanten()`だけであり、
+`calculate_shanten(draw_hand) == -1`をcompletionとする。standard / 七対子 /
+国士無双 / 確定面子のsemanticsを本moduleで再実装しない。安全な枝刈りは
+`calculate_shanten(H) + 1 > depth`のlower boundだけで、beam search、top-N
+branch、probability cutoff、weak-shape heuristic、Monte Carlo / MCTSは
+導入しない。
+
+transposition cacheとshanten cacheは1 discard decision内に閉じ、全root
+discard candidateで同じevaluator instanceを共有する。Policy instance、module
+global、decision間、対局間へcacheを持ち越さない。
+
+```text
+1 decision
+  └─ shared DP evaluator / cache
+       ├─ root candidate A
+       ├─ root candidate B
+       └─ root candidate C
+```
+
+##### selection precedenceとanalysis
+
+```text
+all-zero > unique positive maximum > positive exact tie
+```
+
+の順に判定する。all-zeroなら全candidateを、positive tieならmaximum-mass
+subsetだけを既存TwoStep rankingへ渡す。unique positive maximumではTwoStep
+evaluationを実行しない。completion massで負けたcandidateをfallbackで
+復活させない。TwoStep semanticsは再実装せず、
+`two_step_ukeire._evaluate_and_choose_discard()`をそのまま再利用する。
+
+`FiniteHorizonCandidateEvaluation` / `FiniteHorizonCompletionAnalysis`は、
+selectionで実際に計算したcompletion massとTwoStep tie-break結果をsource of
+truthとしてそのまま保持し、trace目的でDPやshantenを再計算しない。canonical
+valueとしてfloat probabilityを保存せず、consumer側が
+`completion_mass / sequence_denominator`を表示用に導出する。和了、リーチ、
+pass、既存fallbackのbranchではdiscard analysisを生成しない。
+`policy.last_analysis`のようなdecision間mutable stateも持たない。
+
+`ValueAwareTwoStepUkeirePolicy`との統合、dora / yaku / expected score、
+defense、horizon 4 / 5の実用化はIssue #109の対象外とし、単体評価後の別Issue
+とする。`lisjong.policies`は`FiniteHorizonCompletionPolicy`をmodule-levelな
+classとして公開し、Windows `spawn` + `ProcessPoolExecutor`から
+`PolicySpec(factory=FiniteHorizonCompletionPolicy)`として利用できる。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
@@ -1061,9 +1199,27 @@ Hand evaluationはPolicyを呼び出さず、AdapterやRunner / Arena runtimeか
 作らない。
 
 `belief`パッケージも同様にPolicy contractのvalue型だけへ依存し、Policy
-contract側からは依存されない。Issue #59時点では`PolicyInput` /
-`DecisionContext`、Policy implementation、Adapter、Runner / Arena runtimeのいずれも
-`belief`を参照しない。
+contract側からは依存されない。`PolicyInput` / `DecisionContext`、Adapter、
+Runner / Arena runtimeは`belief`を参照しない。
+
+Issue #109で`FiniteHorizonCompletionPolicy`が、future draw distributionの
+physical count sourceとしてIssue #63の`derive_remaining_tile_inventory()`と
+34牌種canonical axis helperを利用するため、Policy implementation側からのみ
+`belief`への単方向依存が加わった。
+
+```text
+policy_contract
+      ↑
+belief
+      ↑
+policies (FiniteHorizonCompletionPolicyのみ)
+```
+
+再利用するのはexact remaining inventoryとexchangeability assumptionであり、
+`HandBelief`推定値やquantized beliefをPolicy selectionへ持ち込むわけではない。
+`TwoStepUkeirePolicy` / `GenbutsuDefenseTwoStepUkeirePolicy` /
+`ValueAwareTwoStepUkeirePolicy`は引き続き`belief`を参照しない。逆方向
+（`belief -> policies`）の依存は導入しない。
 
 Issue #97のDecisionTrace / AnalysisTraceも同じ依存方向を守る。`policy_contract`が
 所有するのはroot contract（`AnalysisTrace`、`DecisionTrace`、`PolicyDecision`、

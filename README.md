@@ -202,6 +202,38 @@ candidate-dependent featureであり、`actual han` / `total hand han` /
 だけを使う。こちらも比較用の独立したPolicy世代であり、上記runtime profileへは
 自動的に割り当てない。詳細は[Architecture](docs/architecture.md)を参照。
 
+`lisjong.policies`はさらに、Policy-visibleなremaining uncertaintyに対する
+exact finite-horizon dynamic programmingで打牌を選ぶ
+`FiniteHorizonCompletionPolicy`を公開する。
+
+```text
+TwoStepUkeirePolicy:
+heuristic two-step structural efficiency
+
+FiniteHorizonCompletionPolicy:
+exact conditional k-self-draw structural completion probability
+completion mass > (tie / all-zeroのときだけ) existing TwoStep ranking
+```
+
+初期世代はhorizon 3固定で、「今後3個のself-draw slotsが存在すると条件付けた
+conditional-uniform / exchangeable model上で、3回以内にstructural completionへ
+到達する確率」をexact integer massとして比較する。向聴数はcompletion massより
+上位のhard filterにしない。
+
+次の2点はこのPolicyのsemanticとして明示的な非同一である。
+
+```text
+remaining inventory != live wall
+completion probability != actual probability of winning within 3 turns
+```
+
+remaining tile inventoryは他家concealed hand・live wall・dead wall・未開示裏ドラ
+表示牌等をまとめた残余inventoryであり、山ではない。completion probabilityも、
+流局・他家和了・実際に残るツモ回数・future riichi / call等を含まない
+structural hand-development valueである。こちらも比較用の独立したPolicy世代で
+あり、上記runtime profileへは自動的に割り当てない。詳細は
+[Architecture](docs/architecture.md)を参照。
+
 各profileは自分専用のcredential環境変数だけを参照し、他profileの
 credentialやPolicyへ暗黙fallbackしません。profile / credential compositionの詳細は
 `lisjong-arena`側の文書を参照してください。
