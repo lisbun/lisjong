@@ -35,7 +35,7 @@ private backendを公開するものでもない。standard / 七対子 / 国士
 
 from collections.abc import Iterable, Sequence
 
-from lisjong.hand_evaluation import _python_shanten
+from lisjong.hand_evaluation import _lookup_shanten, _python_shanten
 from lisjong.policy_contract.tile import Tile, TileCategory
 
 _CATEGORY_OFFSETS = {
@@ -155,10 +155,14 @@ def _shanten_from_valid_counts(counts: Sequence[int], concealed_tile_count: int)
     `concealed_tile_count`は`sum(counts)`と一致する純手牌枚数である。Tile側は
     すでに数え終えた`len(snapshot)`をそのまま渡せるため、この値を引数で受け
     取って再計算を避ける。
+
+    通常形はIssue #115でexact lookup-table backend（`_lookup_shanten`）へ
+    置き換えた。七対子・国士無双は従来どおり`_python_shanten`の単純な
+    count計算を使う。どちらもshanten semanticは変わっていない。
     """
     fixed_meld_count = _fixed_meld_count(concealed_tile_count)
 
-    shanten = _python_shanten.calculate_standard_shanten(counts, fixed_meld_count)
+    shanten = _lookup_shanten.calculate_standard_shanten(counts, fixed_meld_count)
     if concealed_tile_count in _MELDLESS_TILE_COUNTS:
         shanten = min(
             shanten,
