@@ -429,6 +429,33 @@ defense、horizon 4 / 5の実用化はIssue #109の対象外とし、単体評�
 classとして公開し、Windows `spawn` + `ProcessPoolExecutor`から
 `PolicySpec(factory=FiniteHorizonCompletionPolicy)`として利用できる。
 
+#### GenbutsuDefenseFiniteHorizonValueAware (Issue #122)
+
+`lisjong.policies.genbutsu_defense_finite_horizon_value_aware.GenbutsuDefenseFiniteHorizonValueAwarePolicy`
+は、既存4 Policyのselection semanticsを変更せず、3施策を次の順序でcomposeする
+experimental Policyである。
+
+```text
+legal discard
+  -> existing Genbutsu activation / common-genbutsu constraint
+  -> FiniteHorizon completion mass
+       unique positive maximum: select immediately
+       positive maximum tie:    maximum subset -> ValueAware
+       all-zero:                eligible set -> ValueAware
+```
+
+Genbutsuのactivationは既存Policyと同じく、他家リーチがあり、best post-discard
+shantenが1以上で、全リーチ者へのcommon genbutsuが1件以上ある場合だけ候補を制限
+する。FiniteHorizonのloserはValueAwareで復活させない。ValueAware fallbackは既存の
+`shanten > current ukeire > retained concealed dora / aka-dora count > second-step
+ukeire > stable tie-break`をそのまま使う。
+
+classは`TwoStepUkeirePolicy`を単一継承し、`_decide_discard()`だけをoverrideする。
+winning action、Always Riichi、pass、既存fallbackは基底orchestrationを継承する。
+初期実装ではcombined-specific analysisを設けず`analysis=None`とし、decision間の
+mutable stateを持たない。Arena側のdependency pin、explicit policy catalog、
+spawn-safe factory、400局Gate 1評価はmerge後のconsumer follow-upで扱う。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
