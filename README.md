@@ -234,6 +234,21 @@ structural hand-development valueである。こちらも比較用の独立し�
 あり、上記runtime profileへは自動的に割り当てない。詳細は
 [Architecture](docs/architecture.md)を参照。
 
+Issue #122のexperimental generationとして、`lisjong.policies`は
+`GenbutsuDefenseFiniteHorizonValueAwarePolicy`も公開する。このPolicyは既存4 Policyを
+変更せず、legal discardへ次のpriorityを適用する。
+
+```text
+Genbutsu safety constraint
+> FiniteHorizon completion mass
+> ValueAware ranking
+```
+
+FiniteHorizonがunique positive maximumを持つ場合はその候補を即採用し、positive
+maximum tieではmaximum-mass subsetだけ、all-zeroではGenbutsu適用後のeligible set
+全部をValueAwareへ渡す。初期実装のcombined-specific analysisは`None`であり、この
+Policyもruntime profileやArena policy catalogへ自動登録しない。
+
 各profileは自分専用のcredential環境変数だけを参照し、他profileの
 credentialやPolicyへ暗黙fallbackしません。profile / credential compositionの詳細は
 `lisjong-arena`側の文書を参照してください。

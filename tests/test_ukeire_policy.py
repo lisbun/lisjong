@@ -1027,6 +1027,7 @@ class PolicyGenerationTest(unittest.TestCase):
             set(policies.__all__),
             {
                 "FiniteHorizonCompletionPolicy",
+                "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
                 "GenbutsuDefenseTwoStepUkeirePolicy",
                 "MinimalPolicy",
                 "ShantenPolicy",
