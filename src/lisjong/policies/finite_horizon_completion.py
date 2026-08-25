@@ -345,7 +345,26 @@ class _FiniteHorizonEvaluator:
         remaining_counts: tuple[int, ...],
         depth: int,
     ) -> int:
-        """`M(H, R, depth)`をtransposition cache経由でexactに返す。"""
+        """`M(H, R, depth)`をtransposition cache経由でexactに返す。
+
+        `remaining_total`は`R`から一意に決まる導出値なので、ここで1回だけ
+        数えて再帰へ渡す。DP stateの identity は従来どおり
+        `(hand_counts, remaining_counts, depth)`であり、`remaining_total`を
+        state identityへ加えていない（`R`から決まる値なのでcache keyへ
+        含める意味がない）。
+        """
+        return self._completion_mass(
+            hand_counts, remaining_counts, depth, sum(remaining_counts)
+        )
+
+    def _completion_mass(
+        self,
+        hand_counts: tuple[int, ...],
+        remaining_counts: tuple[int, ...],
+        depth: int,
+        remaining_total: int,
+    ) -> int:
+        """`completion_mass()`の本体。`remaining_total`は`sum(R)`と常に等しい。"""
         self.visited_states += 1
         key = (hand_counts, remaining_counts, depth)
         cached = self._completion_mass_cache.get(key)
@@ -353,7 +372,7 @@ class _FiniteHorizonEvaluator:
             self.cache_hits += 1
             return cached
         self.cache_misses += 1
-        mass = self._search(hand_counts, remaining_counts, depth)
+        mass = self._search(hand_counts, remaining_counts, depth, remaining_total)
         self._completion_mass_cache[key] = mass
         return mass
 
@@ -362,8 +381,14 @@ class _FiniteHorizonEvaluator:
         hand_counts: tuple[int, ...],
         remaining_counts: tuple[int, ...],
         depth: int,
+        remaining_total: int,
     ) -> int:
         """exact recurrenceそのもの。近似・heuristic枝刈りを持たない。
+
+        `remaining_total`は`sum(remaining_counts)`と常に等しい導出値であり、
+        呼び出し側から渡すことでhot pathでの再計算を避けている（Issue #117）。
+        future drawでは`R' = R - one(t)`なので、childへは`remaining_total - 1`
+        を渡す。これはstate identityではない。
 
             M(H, R, 0) = 0
             M(H, R, k) = Σ_t R[t] * best_branch_mass(t)
@@ -389,16 +414,23 @@ class _FiniteHorizonEvaluator:
         if self.shanten(hand_counts) + 1 > depth:
             return 0
 
-        completed_suffix_mass = _falling_factorial(sum(remaining_counts) - 1, depth - 1)
+        completed_suffix_mass = _falling_factorial(remaining_total - 1, depth - 1)
+        child_depth = depth - 1
+        child_remaining_total = remaining_total - 1
+        # draw / discardごとに`list(...)`を作り直さず、1本のscratch bufferを
+        # mutate -> materialize -> restoreする。materializeした`tuple`だけが
+        # cache keyとして外へ出るので、mutable stateがkeyになることはない。
+        draw_scratch = list(hand_counts)
+        completion_mass = self._completion_mass
         total = 0
         for drawn_index in range(TILE_TYPE_COUNT):
             available = remaining_counts[drawn_index]
             if available == 0:
                 continue
 
-            draw_hand = list(hand_counts)
-            draw_hand[drawn_index] += 1
-            draw_hand_counts = tuple(draw_hand)
+            draw_scratch[drawn_index] += 1
+            draw_hand_counts = tuple(draw_scratch)
+            draw_scratch[drawn_index] -= 1
 
             draw_shanten = self.shanten(draw_hand_counts)
             if draw_shanten == _COMPLETE_SHANTEN:
@@ -427,16 +459,21 @@ class _FiniteHorizonEvaluator:
             next_remaining[drawn_index] -= 1
             next_remaining_counts = tuple(next_remaining)
 
+            discard_scratch = list(draw_hand_counts)
             best_branch_mass = 0
             for discard_index in range(TILE_TYPE_COUNT):
                 # 仮想discardは34基礎牌種単位でdeduplicateする。同じ基礎牌種の
                 # copy Aとcopy Bを別branchにしない。
                 if draw_hand_counts[discard_index] == 0:
                     continue
-                next_hand = list(draw_hand_counts)
-                next_hand[discard_index] -= 1
-                branch_mass = self.completion_mass(
-                    tuple(next_hand), next_remaining_counts, depth - 1
+                discard_scratch[discard_index] -= 1
+                next_hand_counts = tuple(discard_scratch)
+                discard_scratch[discard_index] += 1
+                branch_mass = completion_mass(
+                    next_hand_counts,
+                    next_remaining_counts,
+                    child_depth,
+                    child_remaining_total,
                 )
                 if branch_mass > best_branch_mass:
                     best_branch_mass = branch_mass
