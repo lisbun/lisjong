@@ -309,21 +309,39 @@ def _uncached_oracle_mass(
 
 
 class _RecordedEvaluation:
-    """1 decision分のDP呼び出しを記録するcontext helper。"""
+    """1 decision分のlogical DP state遷移を記録するcontext helper。
+
+    observation pointはrecursionの実体である`_completion_mass()`である。
+    public entry pointの`completion_mass()`もここへ委譲するので、rootと
+    child両方のlogical stateがもれなく記録される（Issue #117でrecursionの
+    call pathを変えた際も、観測できるlogical child stateは変わらない）。
+
+    あわせて、hot pathへ渡すderived valueの`remaining_total`が常に
+    `sum(remaining_counts)`と一致することを毎callで確認する。これは
+    state identityではない派生値であり、off-by-oneやstale reuseが起きても
+    completion massの形でしか表面化しないため、ここで直接固定しておく。
+    """
 
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[int, ...], tuple[int, ...], int]] = []
 
     def __enter__(self) -> "_RecordedEvaluation":
-        original = _FiniteHorizonEvaluator.completion_mass
+        original = _FiniteHorizonEvaluator._completion_mass
         calls = self.calls
 
-        def recording(evaluator, hand_counts, remaining_counts, depth):
+        def recording(evaluator, hand_counts, remaining_counts, depth, remaining_total):
+            if remaining_total != sum(remaining_counts):
+                raise AssertionError(
+                    "remaining_total must stay equal to sum(remaining_counts): "
+                    f"{remaining_total} != {sum(remaining_counts)}"
+                )
             calls.append((hand_counts, remaining_counts, depth))
-            return original(evaluator, hand_counts, remaining_counts, depth)
+            return original(
+                evaluator, hand_counts, remaining_counts, depth, remaining_total
+            )
 
         self._patcher = patch.object(
-            _FiniteHorizonEvaluator, "completion_mass", recording
+            _FiniteHorizonEvaluator, "_completion_mass", recording
         )
         self._patcher.start()
         return self
