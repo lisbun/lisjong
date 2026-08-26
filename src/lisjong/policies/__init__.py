@@ -7,6 +7,9 @@ from lisjong.policies.genbutsu_defense_finite_horizon_value_aware import (
 from lisjong.policies.genbutsu_defense_two_step_ukeire import (
     GenbutsuDefenseTwoStepUkeirePolicy,
 )
+from lisjong.policies.hand_value_aware_two_step_ukeire import (
+    HandValueAwareTwoStepUkeirePolicy,
+)
 from lisjong.policies.minimal import MinimalPolicy
 from lisjong.policies.shanten import ShantenPolicy
 from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
@@ -17,6 +20,7 @@ __all__ = [
     "FiniteHorizonCompletionPolicy",
     "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
     "GenbutsuDefenseTwoStepUkeirePolicy",
+    "HandValueAwareTwoStepUkeirePolicy",
     "MinimalPolicy",
     "ShantenPolicy",
     "TwoStepUkeirePolicy",

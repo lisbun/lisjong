@@ -1029,6 +1029,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "FiniteHorizonCompletionPolicy",
                 "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
                 "GenbutsuDefenseTwoStepUkeirePolicy",
+                "HandValueAwareTwoStepUkeirePolicy",
                 "MinimalPolicy",
                 "ShantenPolicy",
                 "UkeirePolicy",
