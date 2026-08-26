@@ -10,10 +10,10 @@
     > 2段階受け入れ
     > stable tie-break
 
-`retained_real_value`は、打牌後の自手に残る公開indicator由来dora、赤ドラ、
-完成済み役牌翻相当値の和である。`yaku_route_value`はtanyao / honitsu /
-chinitsu compatibilityだけを表す軽量heuristicであり、actual han、expected han、
-expected score、expected valueのいずれでもない。
+`retained_real_value`は、打牌後concealed handに残る公開indicator由来dora・赤ドラと、
+concealed hand / own meldsで完成済みの役牌翻相当値の和である。
+`yaku_route_value`はtanyao / honitsu / chinitsu compatibilityだけを表す軽量heuristicであり、
+actual han、expected han、expected score、expected valueのいずれでもない。
 
 value-aware化するのは現在decisionのreal discardだけである。第2段のhypothetical
 draw / discard branchは既存TwoStepのstructural semanticsをそのまま使う。
@@ -171,13 +171,10 @@ def _completed_yakuhai_value(
 def _retained_real_value(
     post_discard_hand: Sequence[Tile], policy_input: PolicyInput
 ) -> int:
-    """post-discard自手のretained dora / aka-dora / yakuhai価値を返す。"""
+    """concealed dora / aka-doraとconcealed + meld yakuhai価値を返す。"""
     melds = _own_melds(policy_input)
-    retained_tiles = tuple(post_discard_hand) + tuple(
-        tile for meld in melds for tile in meld.tiles
-    )
     dora_value = _retained_concealed_dora_count(
-        retained_tiles, policy_input.round.dora_indicators
+        post_discard_hand, policy_input.round.dora_indicators
     )
     yakuhai_value = _completed_yakuhai_value(
         post_discard_hand,
