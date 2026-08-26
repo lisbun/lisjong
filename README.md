@@ -202,6 +202,27 @@ candidate-dependent featureであり、`actual han` / `total hand han` /
 だけを使う。こちらも比較用の独立したPolicy世代であり、上記runtime profileへは
 自動的に割り当てない。詳細は[Architecture](docs/architecture.md)を参照。
 
+Issue #125のexperimental generationとして、`lisjong.policies`は
+`HandValueAwareTwoStepUkeirePolicy`も公開する。
+
+```text
+HandValueAwareTwoStepUkeirePolicy:
+shanten
+> current ukeire
+> retained real value
+> yaku route value
+> second-step ukeire
+> stable tie-break
+```
+
+`retained_real_value`は、post-discard自手に残る公開indicator由来dora、赤ドラ、
+完成済み役牌刻子・槓の翻相当値の和である。`yaku_route_value`はtanyao / honitsu /
+chinitsu compatibilityだけを表すlightweight heuristicであり、actual han、
+expected han、expected score、expected valueではない。value-awareなのは現在の
+real discard比較だけで、第2段のhypothetical branchは既存TwoStepのstructural
+semanticsを維持する。このPolicyもruntime profileへは自動的に割り当てない。
+詳細は[Architecture](docs/architecture.md)を参照。
+
 `lisjong.policies`はさらに、Policy-visibleなremaining uncertaintyに対する
 exact finite-horizon dynamic programmingで打牌を選ぶ
 `FiniteHorizonCompletionPolicy`を公開する。

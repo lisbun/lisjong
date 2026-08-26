@@ -237,6 +237,59 @@ ABBB parallel evaluationが`PolicySpec(factory=ValueAwareTwoStepUkeirePolicy)`�
 して利用できる、top-level importable factoryである。Arena側の評価・統合は
 本Issueの範囲外とする。
 
+#### HandValueAwareTwoStepUkeire (Issue #125)
+
+`lisjong.policies.hand_value_aware_two_step_ukeire.HandValueAwareTwoStepUkeirePolicy`
+は、既存TwoStep / ValueAwareを変更せず、牌効率をhard priorityとして維持したまま
+同じshanten・同じcurrent ukeireのreal discard候補だけを軽量hand valueで比較する
+experimental generationである。
+
+```text
+shanten
+> current ukeire
+> retained real value
+> yaku route value
+> second-step ukeire
+> stable tie-break
+```
+
+`retained_real_value`はpost-discard自手の次の整数和である。
+
+```text
+公開済みindicator由来dora count
++ retained aka-dora count
++ completed yakuhai han-equivalent value
+```
+
+dora / aka-doraはIssue #107のpure helperを再利用する。役牌はconcealed triplet /
+quadと自席の既存Pon / Kanを対象とし、三元牌・自風・場風を各+1、同一groupが
+自風かつ場風なら+2とする。pairは完成価値へ含めない。
+
+`yaku_route_value`は次のcompatibilityだけを加算するlightweight heuristicである。
+
+```text
+tanyao-compatible   = 1
+honitsu-compatible  = 2
+chinitsu-compatible = 3
+```
+
+chinitsu-compatibleではhonitsuを重複加算しない。この値はactual han、expected han、
+expected score、expected valueではない。自席のpost-discard concealed handと既存meld
+だけを使い、PolicyInput schema、hidden wall、他家concealed hand、future drawの
+ground truthを要求しない。
+
+classは`TwoStepUkeirePolicy`を単一継承し、`_decide_discard()`だけをoverrideする。
+winning action、Always Riichi、pass、fallbackは基底orchestrationを継承する。
+value-aware化するのはcurrent real discardだけで、`_second_step_score()`以下の
+hypothetical branchは既存TwoStepのstructural semanticsをそのまま使う。
+
+`HandValueCandidateEvaluation` / `HandValueAwareTwoStepUkeireAnalysis`はselectionで
+実際に計算したshanten、current ukeire、retained real value、yaku route value、
+second-step scoreをsource of truthとして保持するPolicy-specific immutable typed
+payloadである。lazy stageへ進まなかった値は`None`、評価結果のzeroは`0`とし、
+analysis用の再計算やdecision間mutable stateを持たない。Policy classはmodule-levelに
+公開し、Windows `spawn`からfactoryとして利用できる。
+
 #### FiniteHorizonCompletion (Issue #109)
 
 `lisjong.policies.finite_horizon_completion.FiniteHorizonCompletionPolicy`は、
