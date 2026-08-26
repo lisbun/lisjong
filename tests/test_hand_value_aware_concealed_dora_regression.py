@@ -27,7 +27,11 @@ def _player(*, melds: tuple[PublicMeld, ...] = ()) -> PlayerPublicState:
     )
 
 
-def _input(*, own_melds: tuple[PublicMeld, ...], dora_indicators: tuple[Tile, ...]) -> PolicyInput:
+def _input(
+    *,
+    own_melds: tuple[PublicMeld, ...],
+    dora_indicators: tuple[Tile, ...],
+) -> PolicyInput:
     players = [_player() for _ in range(4)]
     players[0] = _player(melds=own_melds)
     return PolicyInput(
