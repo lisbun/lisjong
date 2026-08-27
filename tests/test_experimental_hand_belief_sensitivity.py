@@ -22,7 +22,12 @@ def _tile(rank: int) -> Tile:
 
 
 def _player() -> PlayerPublicState:
-    return PlayerPublicState(score=25000, discards=(), melds=(), riichi=RiichiState.NONE)
+    return PlayerPublicState(
+        score=25000,
+        discards=(),
+        melds=(),
+        riichi=RiichiState.NONE,
+    )
 
 
 def _policy_input() -> PolicyInput:
@@ -193,7 +198,8 @@ class HandBeliefSensitivityTest(unittest.TestCase):
             )
 
         by_action = {
-            evaluation.action: evaluation for evaluation in decision.candidate_evaluations
+            evaluation.action: evaluation
+            for evaluation in decision.candidate_evaluations
         }
         self.assertEqual(by_action[_discard(1)].non_opponent_effective_tile_mass, 4.0)
 
