@@ -225,5 +225,116 @@ class HandBeliefSensitivityTest(unittest.TestCase):
                 )
 
 
+class OpponentExpectedCountsTest(unittest.TestCase):
+    def test_belief_reduction_sums_only_opponent_rows(self) -> None:
+        counts = sensitivity.opponent_expected_counts_from_belief(
+            _policy_input(),
+            _belief(east={3: 4}, south={3: 3}, west={3: 1}, north={4: 2}),
+        )
+
+        self.assertEqual(counts.total(TileType(TileCategory.MANZU, 3)), 4.0)
+        self.assertEqual(counts.total(TileType(TileCategory.MANZU, 4)), 2.0)
+
+    def test_counts_must_have_canonical_length(self) -> None:
+        with self.assertRaises(ValueError):
+            sensitivity.OpponentExpectedCounts(counts=(0.0,) * 33)
+
+    def test_counts_reject_values_outside_structural_range(self) -> None:
+        with self.assertRaises(ValueError):
+            sensitivity.OpponentExpectedCounts(counts=(12.5,) + (0.0,) * 33)
+        with self.assertRaises(ValueError):
+            sensitivity.OpponentExpectedCounts(counts=(-0.5,) + (0.0,) * 33)
+
+    def test_counts_reject_non_numeric_values(self) -> None:
+        with self.assertRaises(TypeError):
+            sensitivity.OpponentExpectedCounts(counts=(True,) + (0.0,) * 33)
+
+    def test_structural_upper_bound_is_not_a_conservation_check(self) -> None:
+        """positionのunseen枚数を超える値はconstruction時には拒否しない。"""
+        counts = sensitivity.OpponentExpectedCounts(counts=(12.0,) + (0.0,) * 33)
+
+        self.assertEqual(counts.total(TileType(TileCategory.MANZU, 1)), 12.0)
+
+
+class ExpectedCountSeamEquivalenceTest(unittest.TestCase):
+    """expected-count-only seamと既存ConcealedHandBelief pathのequivalence。"""
+
+    def setUp(self) -> None:
+        self.policy_input = _policy_input()
+        self.actions = (_discard(1), _discard(2))
+
+    def _both_paths(self, belief):
+        with (
+            patch.object(
+                sensitivity._DecisionShantenEvaluator,
+                "calculate",
+                return_value=1,
+            ),
+            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(
+                sensitivity,
+                "_effective_tile_types",
+                side_effect=_effective_tiles,
+            ),
+        ):
+            from_belief = sensitivity.evaluate_hand_belief_sensitive_discard(
+                self.policy_input,
+                self.actions,
+                belief,
+            )
+            from_counts = sensitivity.evaluate_expected_count_sensitive_discard(
+                self.policy_input,
+                self.actions,
+                sensitivity.opponent_expected_counts_from_belief(
+                    self.policy_input,
+                    belief,
+                ),
+            )
+        return from_belief, from_counts
+
+    def test_expected_count_seam_matches_belief_path(self) -> None:
+        for belief in (
+            _belief(south={3: 3}),
+            _belief(south={4: 3}),
+            _belief(east={3: 4}),
+            _belief(south={3: 2}, west={4: 1}),
+            _belief(),
+        ):
+            with self.subTest(belief=belief):
+                from_belief, from_counts = self._both_paths(belief)
+                self.assertEqual(from_belief, from_counts)
+
+    def test_expected_count_seam_preserves_conservation_failure(self) -> None:
+        with (
+            patch.object(
+                sensitivity._DecisionShantenEvaluator,
+                "calculate",
+                return_value=1,
+            ),
+            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(
+                sensitivity,
+                "_effective_tile_types",
+                side_effect=_effective_tiles,
+            ),
+        ):
+            with self.assertRaises(sensitivity.HandBeliefSensitivityError):
+                sensitivity.evaluate_expected_count_sensitive_discard(
+                    self.policy_input,
+                    self.actions,
+                    sensitivity.OpponentExpectedCounts(
+                        counts=tuple(5.0 if index == 2 else 0.0 for index in range(34))
+                    ),
+                )
+
+    def test_expected_count_seam_requires_expected_count_table(self) -> None:
+        with self.assertRaises(TypeError):
+            sensitivity.evaluate_expected_count_sensitive_discard(
+                self.policy_input,
+                self.actions,
+                _belief(),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
