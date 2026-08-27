@@ -19,7 +19,7 @@ wait belief、hidden state、future action、rollout、push/fold、learned model
 
 from dataclasses import dataclass
 
-from lisjong.belief.canonical_axes import wind_for_seat
+from lisjong.belief.canonical_axes import wind_for_seat, wind_index
 from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
 from lisjong.policies.two_step_ukeire import (
     _DecisionShantenEvaluator,
@@ -68,10 +68,11 @@ def _opponent_expected_count(
         policy_input.self_seat,
         policy_input.round.dealer_seat,
     )
+    self_wind_number = wind_index(self_wind)
     return sum(
         hand.expected_count(tile_type)
-        for wind, hand in zip(tuple(type(self_wind)), belief.hands, strict=True)
-        if wind is not self_wind
+        for wind_number, hand in enumerate(belief.hands)
+        if wind_number != self_wind_number
     )
 
 
