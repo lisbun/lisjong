@@ -82,6 +82,15 @@ def _effective_tiles(post_discard_hand, *_args):
     raise AssertionError("unexpected post-discard hand")
 
 
+def _shanten_by_remaining_tile(post_discard_hand) -> int:
+    ranks = {tile.tile_type.rank for tile in post_discard_hand}
+    if 2 in ranks:
+        return 0
+    if 1 in ranks:
+        return 1
+    raise AssertionError("unexpected post-discard hand")
+
+
 class HandBeliefSensitivityTest(unittest.TestCase):
     def setUp(self) -> None:
         self.policy_input = _policy_input()
@@ -101,21 +110,43 @@ class HandBeliefSensitivityTest(unittest.TestCase):
                 side_effect=_effective_tiles,
             ),
         ):
-            mostly_three_man_in_opponents = sensitivity.evaluate_hand_belief_sensitive_discard(
-                self.policy_input,
-                self.actions,
-                _belief(south={3: 3}),
+            mostly_three_man_in_opponents = (
+                sensitivity.evaluate_hand_belief_sensitive_discard(
+                    self.policy_input,
+                    self.actions,
+                    _belief(south={3: 3}),
+                )
             )
-            mostly_four_man_in_opponents = sensitivity.evaluate_hand_belief_sensitive_discard(
-                self.policy_input,
-                self.actions,
-                _belief(south={4: 3}),
+            mostly_four_man_in_opponents = (
+                sensitivity.evaluate_hand_belief_sensitive_discard(
+                    self.policy_input,
+                    self.actions,
+                    _belief(south={4: 3}),
+                )
             )
 
         self.assertTrue(mostly_three_man_in_opponents.consumer_active)
         self.assertTrue(mostly_four_man_in_opponents.consumer_active)
         self.assertEqual(mostly_three_man_in_opponents.action, _discard(2))
         self.assertEqual(mostly_four_man_in_opponents.action, _discard(1))
+
+    def test_worse_shanten_candidate_cannot_be_resurrected_by_belief(self) -> None:
+        with (
+            patch.object(
+                sensitivity._DecisionShantenEvaluator,
+                "calculate",
+                side_effect=_shanten_by_remaining_tile,
+            ),
+            patch.object(sensitivity, "_ukeire_count", return_value=10),
+        ):
+            decision = sensitivity.evaluate_hand_belief_sensitive_discard(
+                self.policy_input,
+                self.actions,
+                _belief(south={3: 4}),
+            )
+
+        self.assertFalse(decision.consumer_active)
+        self.assertEqual(decision.action, _discard(1))
 
     def test_unique_public_ukeire_winner_does_not_activate_consumer(self) -> None:
         with (
