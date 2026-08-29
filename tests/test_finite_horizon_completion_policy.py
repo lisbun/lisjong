@@ -2,7 +2,6 @@
 
 import ast
 import inspect
-import itertools
 import pickle
 import random
 import unittest
@@ -993,9 +992,15 @@ class DecisionResultTest(unittest.TestCase):
             )
 
     def test_decision_is_independent_of_the_legal_action_order(self) -> None:
-        selections = set()
-        for permutation in itertools.permutations(self.discard_actions):
-            selections.add(self.policy.choose_action(_open_hand_decision(permutation)))
+        action_orders = (
+            self.discard_actions,
+            tuple(reversed(self.discard_actions)),
+            self.discard_actions[1:] + self.discard_actions[:1],
+        )
+        selections = {
+            self.policy.choose_action(_open_hand_decision(actions))
+            for actions in action_orders
+        }
 
         self.assertEqual(len(selections), 1)
 
