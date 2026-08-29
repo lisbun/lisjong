@@ -48,6 +48,7 @@ validation（tests）側の責務とする。
 
 import struct
 import sys
+import threading
 from array import array
 from collections.abc import Sequence
 from importlib import resources
@@ -329,7 +330,7 @@ def _table() -> _ShantenTable:
     return table
 
 
-# --- runtime frontier combineのscratch buffer（Issue #131） ---
+# --- runtime frontier combineのscratch buffer（Issue #131 / #132） ---
 #
 # `calculate_standard_shanten()`は1 decisionあたり数万〜十万回呼ばれるhot
 # pathで、支配的costはgroup間のfrontier combineだった（PR #118 profile:
@@ -338,22 +339,54 @@ def _table() -> _ShantenTable:
 # ため、callごとに`dict`を作ってhashするのではなく、固定sizeのlistへ
 # epoch stampで書き込む。stampが現在のepochと一致しないentryは「この
 # callではまだ触れていない」ことを意味し、call間で明示的にlistをclearする
-# 必要がない（epochは単調増加するcall-local世代番号）。
+# 必要がない（epochは単調増加するworkspace-local世代番号）。
 #
 # 2本のbuffer（A / B）をping-pongで使い回す。1回のcallは
 # 「初期構築 + 3回のmerge」で計4 phaseを行うため、奇数phaseの出力が
 # 偶数phaseの入力になるよう交互に書き込み先を入れ替える。
 #
-# この関数はreentrantではなく（再帰も、他のthreadからの並行呼び出しも
-# ない）、module-level scratch bufferの再利用はfail-closedな読み取り専用
-# artifactの話ではなくpure runtime workspaceなので、artifact整合性
-# boundaryとは無関係である。
-_SCRATCH_SCORES_A = [0] * _RESOURCE_STATE_COUNT
-_SCRATCH_STAMP_A = [-1] * _RESOURCE_STATE_COUNT
-_SCRATCH_SCORES_B = [0] * _RESOURCE_STATE_COUNT
-_SCRATCH_STAMP_B = [-1] * _RESOURCE_STATE_COUNT
-_scratch_epoch = 0
-"""scratch bufferの単調増加call-local世代番号。0は「未使用」を表す。"""
+# `calculate_shanten()`は一般公開APIであり、呼び出し側がthreadを使わない
+# 保証はない。CPythonはpure Python bytecodeの実行中でもthread切り替えが
+# 起き得るため、scratch bufferをmodule-globalに1組だけ持つと、他threadが
+# 書き込んだ内容を読んでsilentに誤ったshantenを返し得る（Issue #132
+# レビュー）。したがってscratch workspaceは`threading.local()`でthreadごと
+# に分離する。globalなlockで全shanten計算をserializeするより、独立した
+# workspaceをthreadごとに持たせる方針を優先した。プロセスをまたぐ共有は
+# そもそも発生しない（`multiprocessing`はforkでもspawnでも子ごとに別
+# interpreter stateを持つ）ので、対象はthread間の共有だけである。
+#
+# `calculate_standard_shanten()`自身は再帰しない（非reentrant）ため、
+# 同一threadの中でこのworkspaceを複数の呼び出しが同時に使うことはない。
+# 各threadは1個の`_ScratchWorkspace`を初回callで作り、以後使い回す。
+# module-level scratch bufferの再利用はfail-closedな読み取り専用artifact
+# の話ではなくpure runtime workspaceなので、artifact整合性boundaryとは
+# 無関係である。
+
+
+class _ScratchWorkspace:
+    """1 threadが専有するfrontier combineのscratch領域。"""
+
+    __slots__ = ("epoch", "scores_a", "scores_b", "stamp_a", "stamp_b")
+
+    def __init__(self) -> None:
+        self.scores_a = [0] * _RESOURCE_STATE_COUNT
+        self.stamp_a = [-1] * _RESOURCE_STATE_COUNT
+        self.scores_b = [0] * _RESOURCE_STATE_COUNT
+        self.stamp_b = [-1] * _RESOURCE_STATE_COUNT
+        self.epoch = 0
+        """scratch bufferの単調増加workspace-local世代番号。0は「未使用」。"""
+
+
+_SCRATCH_LOCAL = threading.local()
+
+
+def _scratch_workspace() -> _ScratchWorkspace:
+    """呼び出しthreadに紐づく`_ScratchWorkspace`を返す（初回callで作る）。"""
+    workspace = getattr(_SCRATCH_LOCAL, "workspace", None)
+    if workspace is None:
+        workspace = _ScratchWorkspace()
+        _SCRATCH_LOCAL.workspace = workspace
+    return workspace
 
 
 def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> int:
@@ -373,7 +406,8 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
        支配的fixtureが最大1.8x〜2.6x）。
     2. **dictの代わりにepoch-stamped dense array。** resource stateは
        `_RESOURCE_STATE_COUNT`個に収まるため、`dict`のhashingではなく
-       固定sizeのlistへ直接indexする。
+       固定sizeのlistへ直接indexする。scratch領域はthreadごとに独立した
+       `_ScratchWorkspace`を使う（`_scratch_workspace()`参照）。
     3. **base-5 keyのloop展開。** `range()`ループより約2倍速い。
 
     どの変更も、参照するfrontier entry・組み合わせるresource state・
@@ -478,22 +512,22 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
     # exact resultは変わらない（このmoduleのdocstring参照）。
     groups.sort(key=lambda group: group[0])
 
-    global _scratch_epoch
+    workspace = _scratch_workspace()
     combine = _COMBINE
     invalid_state = _INVALID_STATE
     score_shift = _SCORE_SHIFT
     score_mask = _SCORE_MASK
     resource_state_count = _RESOURCE_STATE_COUNT
 
-    cur_scores = _SCRATCH_SCORES_A
-    cur_stamp = _SCRATCH_STAMP_A
-    next_scores = _SCRATCH_SCORES_B
-    next_stamp = _SCRATCH_STAMP_B
+    cur_scores = workspace.scores_a
+    cur_stamp = workspace.stamp_a
+    next_scores = workspace.scores_b
+    next_stamp = workspace.stamp_b
 
     touched: list[int] = []
     for step, (_length, entries) in enumerate(groups):
-        _scratch_epoch += 1
-        epoch = _scratch_epoch
+        workspace.epoch += 1
+        epoch = workspace.epoch
 
         if step == 0:
             for packed in entries:

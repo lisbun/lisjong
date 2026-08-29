@@ -3,6 +3,8 @@ import inspect
 import pathlib
 import random
 import struct
+import sys
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -726,6 +728,105 @@ class LookupTableArtifactTest(unittest.TestCase):
             _lookup_shanten._ShantenTable(bytes(bad_version))
         with self.assertRaises(_lookup_shanten.ShantenTableError):
             _lookup_shanten._ShantenTable(bytes(payload[:-2]))
+
+
+class ScratchWorkspaceThreadSafetyTest(unittest.TestCase):
+    """Issue #132 review: frontier combineのscratch workspaceがthreadごとに
+    分離されていることを固定する。
+
+    `calculate_shanten()`は一般公開APIであり、呼び出し側がthreadを使わない
+    保証はない。以前の実装はscratch bufferをmodule-globalに1組だけ持って
+    おり、複数threadが同時に`calculate_standard_shanten()`を呼ぶと
+    silentに誤ったshantenを返し得た。
+    """
+
+    def test_each_thread_gets_a_distinct_workspace(self) -> None:
+        # timingに依存しない決定的な確認。「同一threadから複数回呼んでも
+        # 常に同じobjectが返る」「thread間ではobjectが異なる」の2点だけを
+        # 見る。id()はobjectが生きている間しか一意性を保証しないため、
+        # 比較する前に全workspaceへの参照を保持しておく（GC後のid再利用を
+        # 避けるため。実際にこの保持を忘れて書いたら、thread終了直後に
+        # workspaceがGCされ、次のthreadが同じidを再利用してしまい、
+        # 誤って「分離されていない」という結果になった）。
+        thread_count = 8
+        workspaces: list[object | None] = [None] * thread_count
+        same_object_violations: list[int] = []
+        barrier = threading.Barrier(thread_count)
+
+        def worker(thread_index: int) -> None:
+            barrier.wait()
+            first = _lookup_shanten._scratch_workspace()
+            second = _lookup_shanten._scratch_workspace()
+            if first is not second:
+                same_object_violations.append(thread_index)
+            workspaces[thread_index] = first
+
+        threads = [
+            threading.Thread(target=worker, args=(index,))
+            for index in range(thread_count)
+        ]
+        for started in threads:
+            started.start()
+        for joined in threads:
+            joined.join()
+
+        self.assertEqual(
+            same_object_violations,
+            [],
+            "同一threadからの複数callが異なるworkspaceを返した",
+        )
+        self.assertEqual(len(workspaces), thread_count)
+        self.assertEqual(
+            len({id(workspace) for workspace in workspaces}),
+            thread_count,
+            "workspaceがthread間で共有されている",
+        )
+
+    def test_concurrent_shanten_matches_the_oracle(self) -> None:
+        # scratch workspaceの分離が壊れていれば、複数threadが同時に
+        # 異なる牌姿を計算したときに互いのbufferを上書きしてしまい、
+        # oracleと食い違うshantenをsilentに返す。この判定条件自体は
+        # timingに依存しない（分離が正しければ、実際にthread切り替えが
+        # 起きても起きなくても常に一致する）。thread切り替えの機会を
+        # 増やすため、switch intervalを一時的に短くする。
+        #
+        # このtestは、修正前（scratch bufferをmodule-globalに1組だけ持つ
+        # 実装）に対して実行すると2,000回中18回exact mismatchを検出した
+        # （手元でのIssue #132対応時の確認）。
+        thread_count = 8
+        iterations_per_thread = 250
+        errors: list[str] = []
+        errors_lock = threading.Lock()
+        barrier = threading.Barrier(thread_count)
+
+        def worker(thread_index: int) -> None:
+            barrier.wait()
+            for iteration in range(iterations_per_thread):
+                counts = _deterministic_hand_counts(thread_index * 97 + iteration, 14)
+                actual = _lookup_shanten.calculate_standard_shanten(counts, 0)
+                expected = _old_standard_shanten(counts, 0)
+                if actual != expected:
+                    with errors_lock:
+                        errors.append(
+                            f"thread={thread_index} iteration={iteration} "
+                            f"counts={counts} actual={actual} expected={expected}"
+                        )
+
+        threads = [
+            threading.Thread(target=worker, args=(index,))
+            for index in range(thread_count)
+        ]
+        previous_interval = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            for started in threads:
+                started.start()
+            for joined in threads:
+                joined.join()
+        finally:
+            sys.setswitchinterval(previous_interval)
+
+        self.assertEqual(errors, [])
 
 
 class ProductionBackendBoundaryTest(unittest.TestCase):
