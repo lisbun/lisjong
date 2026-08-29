@@ -329,76 +329,215 @@ def _table() -> _ShantenTable:
     return table
 
 
+# --- runtime frontier combineのscratch buffer（Issue #131） ---
+#
+# `calculate_standard_shanten()`は1 decisionあたり数万〜十万回呼ばれるhot
+# pathで、支配的costはgroup間のfrontier combineだった（PR #118 profile:
+# `calculate_standard_shanten` tottime 4.017s / `dict.get` 1,040万call）。
+# combine先のresource stateは`_RESOURCE_STATE_COUNT`（360）でdenseに収まる
+# ため、callごとに`dict`を作ってhashするのではなく、固定sizeのlistへ
+# epoch stampで書き込む。stampが現在のepochと一致しないentryは「この
+# callではまだ触れていない」ことを意味し、call間で明示的にlistをclearする
+# 必要がない（epochは単調増加するcall-local世代番号）。
+#
+# 2本のbuffer（A / B）をping-pongで使い回す。1回のcallは
+# 「初期構築 + 3回のmerge」で計4 phaseを行うため、奇数phaseの出力が
+# 偶数phaseの入力になるよう交互に書き込み先を入れ替える。
+#
+# この関数はreentrantではなく（再帰も、他のthreadからの並行呼び出しも
+# ない）、module-level scratch bufferの再利用はfail-closedな読み取り専用
+# artifactの話ではなくpure runtime workspaceなので、artifact整合性
+# boundaryとは無関係である。
+_SCRATCH_SCORES_A = [0] * _RESOURCE_STATE_COUNT
+_SCRATCH_STAMP_A = [-1] * _RESOURCE_STATE_COUNT
+_SCRATCH_SCORES_B = [0] * _RESOURCE_STATE_COUNT
+_SCRATCH_STAMP_B = [-1] * _RESOURCE_STATE_COUNT
+_scratch_epoch = 0
+"""scratch bufferの単調増加call-local世代番号。0は「未使用」を表す。"""
+
+
 def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> int:
     """通常形（4面子1雀頭）の向聴数を、exact lookup tableから返す。
 
     `counts`はcanonical 34牌種countで、`_shanten_from_valid_counts()`が
     保証するpreconditionを満たしていることを前提とする。
+
+    frontier combineの実装はIssue #131で最適化した。exact frontier
+    definitionとgroup間combineがexactである理由（block/seedがgroupを
+    またがないこと）はPR #116の`_shanten_frontier`docstringが正本であり、
+    ここで行っているのは同じexact計算を安く行う3つの変更だけである。
+
+    1. **combine順序の並べ替え。** combineは結合的なので、4 groupを
+       どの順で畳み込んでもexact resultは変わらない。entry数が少ない
+       groupから畳み込むと、中間frontierの膨張を抑えられる（実測で
+       支配的fixtureが最大1.8x〜2.6x）。
+    2. **dictの代わりにepoch-stamped dense array。** resource stateは
+       `_RESOURCE_STATE_COUNT`個に収まるため、`dict`のhashingではなく
+       固定sizeのlistへ直接indexする。
+    3. **base-5 keyのloop展開。** `range()`ループより約2倍速い。
+
+    どの変更も、参照するfrontier entry・組み合わせるresource state・
+    採用する最大scoreを一切変えていない。単に同じ計算を行う順序と
+    データ構造を変えただけである。
     """
     table = _table()
-    frontier: dict[int, int] | None = None
+    suit_ids = table.suit_ids
+    suit_starts = table.suit_starts
+    suit_counts = table.suit_counts
+    suit_pool = table.suit_pool
     suit_frontier_count = table.suit_frontier_count
+    honor_ids = table.honor_ids
+    honor_starts = table.honor_starts
+    honor_counts = table.honor_counts
+    honor_pool = table.honor_pool
     honor_frontier_count = table.honor_frontier_count
 
-    for base, kind_count in ((0, 9), (9, 9), (18, 9), (27, 7)):
-        key = 0
-        for index in range(base, base + kind_count):
-            key = key * 5 + counts[index]
-        if kind_count == _SUIT_KIND_COUNT:
-            frontier_id = table.suit_ids[key]
-            if frontier_id >= suit_frontier_count:
-                raise ShantenTableError(
-                    "suit key index of the shanten table artifact references a "
-                    "frontier that does not exist"
-                )
-            start = table.suit_starts[frontier_id]
-            length = table.suit_counts[frontier_id]
-            pool = table.suit_pool
-        else:
-            frontier_id = table.honor_ids[key]
-            if frontier_id >= honor_frontier_count:
-                raise ShantenTableError(
-                    "honor key index of the shanten table artifact references a "
-                    "frontier that does not exist"
-                )
-            start = table.honor_starts[frontier_id]
-            length = table.honor_counts[frontier_id]
-            pool = table.honor_pool
-        entries = pool[start : start + length]
+    # base-5 group key。4群とも9 / 7牌種のrange loopをやめ、乗加算を展開
+    # している（このmoduleのdocstring・profile findings参照）。
+    m = counts
+    manzu_key = (
+        (
+            (((((m[0] * 5 + m[1]) * 5 + m[2]) * 5 + m[3]) * 5 + m[4]) * 5 + m[5]) * 5
+            + m[6]
+        )
+        * 5
+        + m[7]
+    ) * 5 + m[8]
+    pinzu_key = (
+        (
+            (((((m[9] * 5 + m[10]) * 5 + m[11]) * 5 + m[12]) * 5 + m[13]) * 5 + m[14])
+            * 5
+            + m[15]
+        )
+        * 5
+        + m[16]
+    ) * 5 + m[17]
+    souzu_key = (
+        (
+            (((((m[18] * 5 + m[19]) * 5 + m[20]) * 5 + m[21]) * 5 + m[22]) * 5 + m[23])
+            * 5
+            + m[24]
+        )
+        * 5
+        + m[25]
+    ) * 5 + m[26]
+    honor_key = (
+        ((((m[27] * 5 + m[28]) * 5 + m[29]) * 5 + m[30]) * 5 + m[31]) * 5 + m[32]
+    ) * 5 + m[33]
 
-        if frontier is None:
-            frontier = {}
+    groups: list[tuple[int, list[int]]] = []
+    for key, ids, starts, lengths, pool, frontier_count, label in (
+        (
+            manzu_key,
+            suit_ids,
+            suit_starts,
+            suit_counts,
+            suit_pool,
+            suit_frontier_count,
+            "suit",
+        ),
+        (
+            pinzu_key,
+            suit_ids,
+            suit_starts,
+            suit_counts,
+            suit_pool,
+            suit_frontier_count,
+            "suit",
+        ),
+        (
+            souzu_key,
+            suit_ids,
+            suit_starts,
+            suit_counts,
+            suit_pool,
+            suit_frontier_count,
+            "suit",
+        ),
+        (
+            honor_key,
+            honor_ids,
+            honor_starts,
+            honor_counts,
+            honor_pool,
+            honor_frontier_count,
+            "honor",
+        ),
+    ):
+        frontier_id = ids[key]
+        if frontier_id >= frontier_count:
+            raise ShantenTableError(
+                f"{label} key index of the shanten table artifact references a "
+                "frontier that does not exist"
+            )
+        start = starts[frontier_id]
+        length = lengths[frontier_id]
+        groups.append((length, pool[start : start + length].tolist()))
+
+    # combineは結合的なので、entry数が少ないgroupから畳み込んでも
+    # exact resultは変わらない（このmoduleのdocstring参照）。
+    groups.sort(key=lambda group: group[0])
+
+    global _scratch_epoch
+    combine = _COMBINE
+    invalid_state = _INVALID_STATE
+    score_shift = _SCORE_SHIFT
+    score_mask = _SCORE_MASK
+    resource_state_count = _RESOURCE_STATE_COUNT
+
+    cur_scores = _SCRATCH_SCORES_A
+    cur_stamp = _SCRATCH_STAMP_A
+    next_scores = _SCRATCH_SCORES_B
+    next_stamp = _SCRATCH_STAMP_B
+
+    touched: list[int] = []
+    for step, (_length, entries) in enumerate(groups):
+        _scratch_epoch += 1
+        epoch = _scratch_epoch
+
+        if step == 0:
             for packed in entries:
-                state = packed >> _SCORE_SHIFT
-                score = packed & _SCORE_MASK
-                if frontier.get(state, -1) < score:
-                    frontier[state] = score
+                state = packed >> score_shift
+                score = packed & score_mask
+                if cur_stamp[state] != epoch:
+                    cur_stamp[state] = epoch
+                    cur_scores[state] = score
+                    touched.append(state)
+                elif score > cur_scores[state]:
+                    cur_scores[state] = score
             continue
 
-        merged: dict[int, int] = {}
-        for left_state, left_score in frontier.items():
-            row = left_state * _RESOURCE_STATE_COUNT
+        merged_touched: list[int] = []
+        for left_state in touched:
+            left_score = cur_scores[left_state]
+            row = left_state * resource_state_count
             for packed in entries:
-                combined = _COMBINE[row + (packed >> _SCORE_SHIFT)]
-                if combined == _INVALID_STATE:
+                combined = combine[row + (packed >> score_shift)]
+                if combined == invalid_state:
                     continue
-                score = left_score + (packed & _SCORE_MASK)
-                if merged.get(combined, -1) < score:
-                    merged[combined] = score
-        frontier = merged
+                score = left_score + (packed & score_mask)
+                if next_stamp[combined] != epoch:
+                    next_stamp[combined] = epoch
+                    next_scores[combined] = score
+                    merged_touched.append(combined)
+                elif score > next_scores[combined]:
+                    next_scores[combined] = score
+        touched = merged_touched
+        cur_scores, next_scores = next_scores, cur_scores
+        cur_stamp, next_stamp = next_stamp, cur_stamp
 
-    if not frontier:
+    if not touched:
         raise ShantenTableError(
             "shanten table produced no reachable decomposition for the hand"
         )
 
     penalties = _PENALTY[fixed_meld_count]
     best = None
-    for state, score in frontier.items():
+    for state in touched:
         penalty = penalties[state]
         if penalty == _UNREACHABLE_PENALTY:
             continue
-        value = score - penalty
+        value = cur_scores[state] - penalty
         if best is None or value > best:
             best = value
     if best is None:
