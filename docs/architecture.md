@@ -527,6 +527,68 @@ winning action、Always Riichi、pass、既存fallbackは基底orchestrationを�
 mutable stateを持たない。Arena側のdependency pin、explicit policy catalog、
 spawn-safe factory、400局Gate 1評価はmerge後のconsumer follow-upで扱う。
 
+#### GenbutsuDefenseFiniteHorizonHandValueAware (Issue #143)
+
+`lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware.GenbutsuDefenseFiniteHorizonHandValueAwarePolicy`
+は、current strength baselineである`GenbutsuDefenseFiniteHorizonValueAwarePolicy`
+（Issue #122、以下current Combined）を変更せず並存させるexperimental candidateで
+ある。
+
+```text
+current Combined
+    = frozen comparison baseline
+new GenbutsuDefenseFiniteHorizonHandValueAwarePolicy
+    = experimental candidate
+```
+
+selectionの概念上の優先順位は次のとおりで、current Combinedの`ValueAware`段だけを
+`HandValueAware`（Issue #125）へ置き換える。
+
+```text
+Push/Fold decision
+> Discard Safety
+> FiniteHorizon completion mass
+> HandValueAware ranking
+```
+
+current Combinedのdefense semanticは1つの`_genbutsu_eligible_actions()`として
+実装されているが、本Policyはsemanticを変えないままコード上で2段へ明示的に分ける。
+
+```text
+_decide_push_fold()  -> _PushFoldDecision (PUSH / FOLD)
+_discard_safety()    -> _DiscardSafety (COMMON_GENBUTSU / UNKNOWN)
+```
+
+`_PushFoldDecision` / `_DiscardSafety`はこのPolicy専用のprivate typed valueで
+あり、generic defense framework、public PushFold / Safety API、
+runtime-configurable pipelineへは昇格させない。Push/Fold判定は既存Genbutsu
+activationと同じ条件を使う。他家リーチがなければPUSH、リーチがあっても
+legal discardのいずれかで`post_discard_shanten < 1`を維持できればPUSHとし、
+全candidateが非聴牌になる場合だけFOLDとする。FOLD時だけSafetyを評価し、
+全リーチ者の河に共通する牌種を`COMMON_GENBUTSU`、それ以外を`UNKNOWN`
+（危険ではなく安全根拠未確認）とする。複数リーチ者では既存Combinedと同じく
+intersectionを取り、`COMMON_GENBUTSU`が1件もなければ全legal discardへ
+fallbackする。
+
+defense filtering後のeligible setには既存`FiniteHorizonCompletionPolicy`の
+DP実装（`_evaluate_completion_masses` / `_FiniteHorizonEvaluator`）をそのまま
+再利用し、unique positive maximum即採用・positive maximum tieのmaximum
+subset限定・all-zeroのeligible set全部委譲・completion mass loserの
+resurrection禁止という既存selection precedenceを維持する。
+
+HandValueAware段は既存`HandValueAwareTwoStepUkeirePolicy`の
+`_evaluate_and_choose_discard()`をそのまま呼び出す。retained real value、
+completed yakuhai、tanyao / honitsu / chinitsu route value、second-step
+rankingはこのPolicy専用に再実装しない。
+
+classは`TwoStepUkeirePolicy`を単一継承し、`_decide_discard()`だけをoverrideする。
+winning action、Always Riichi、pass、既存fallbackは基底orchestrationを継承し、
+combined-specific analysisは追加せず`analysis=None`とする。`PolicyInput`
+schemaは拡張せず、Policy-visible informationだけを使用する。Arena側の
+policy catalog登録、spawn-safe factory登録、strength evaluation
+（current Combinedとの400局 Gate 1 / 10,000局 Gate 2比較）はこのPolicy追加とは
+別のfollow-up（Arena側は別Issue、評価結果はIssue #121）で扱う。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
