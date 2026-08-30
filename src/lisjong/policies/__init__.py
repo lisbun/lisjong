@@ -18,6 +18,9 @@ from lisjong.policies.shanten import ShantenPolicy
 from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policies.ukeire import UkeirePolicy
 from lisjong.policies.value_aware_two_step_ukeire import ValueAwareTwoStepUkeirePolicy
+from lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aware import (
+    YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy,
+)
 
 __all__ = [
     "FiniteHorizonCompletionPolicy",
@@ -30,4 +33,5 @@ __all__ = [
     "TwoStepUkeirePolicy",
     "UkeirePolicy",
     "ValueAwareTwoStepUkeirePolicy",
+    "YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
 ]

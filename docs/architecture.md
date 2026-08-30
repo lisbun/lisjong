@@ -589,6 +589,36 @@ policy catalog登録、spawn-safe factory登録、strength evaluation
 （current Combinedとの400局 Gate 1 / 10,000局 Gate 2比較）はこのPolicy追加とは
 別のfollow-up（Arena側は別Issue、評価結果はIssue #121）で扱う。
 
+#### YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAware (Issue #145)
+
+`lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aware.YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy`
+は、Issue #143のno-call Policyをそのままparentとして、call-responseだけへ最小の
+call strategyを追加するexperimental candidateである。parentの`_decide()`を先に
+1回だけ実行し、winning action、Always Riichi、ordinary discardの
+`Push/Fold > Safety > FiniteHorizon > HandValueAware`を変更しない。parentが明示的な
+`PassAction`を選ぶresponseでだけChi/Ponを検討する。
+
+call modeはPolicy instanceへ保存せず、自席のcurrent `PublicMeld` snapshotから毎回
+導出する。役牌の`PON`（元Pon provenanceを保持する`KAKAN`を含む）がなければ、
+役牌をconcealedにexactly 2枚持つinitial Ponだけを候補にする。解禁後はChi/Ponを
+候補にできるが、Ponは常に同牌種exact pairだけに限定し、concealed tripletを
+崩さない。役牌判定はHandValueAwareの三元牌・自風・場風pure helperを共有する。
+
+call qualificationは`Action.consumed_tiles`を赤牌区分まで含むexact identityで
+concealed handから除去し、mandatory discard後のstable handについて
+`calculate_shanten()`のminimumを求める。current shantenよりstrictly小さい場合だけ
+callする。hypothetical discardではcurrent `4p-red-single`と同じく、Ponはcalled
+tile type、Chiはcalled tile typeと端呼びの筋喰い替え側を候補から除く。このpure
+helperはcall可否だけに使い、best discardを保存・pre-commitしない。actual call後は
+fresh `DecisionContext.legal_actions`を唯一の合法性authorityとしてparentが打牌する。
+
+他家リーチが存在し、current concealed handが非聴牌で、全リーチ者の河のintersection
+に属するcommon genbutsuを自手に持つ場合はcallよりPassを優先する。現物がない場合の
+安全度heuristicは追加しない。複数callがstrictly改善する場合はminimum post-call
+shantenを優先し、同値はaction variant・seat・called tile・exact consumed tilesの
+明示的canonical順で決定する。Kan strategy、generic rules/call framework、
+`PolicyInput`拡張、engine/runtime dependencyは追加しない。
+
 - RiichiEnv、RiichiLab、mjai、WebSocket固有の型や通信処理へ依存しない
 - `DecisionContext`は、同じseat・同じ判断時点のPolicy入力と
   `legal_actions`をまとめた、整合した不変スナップショットとする
