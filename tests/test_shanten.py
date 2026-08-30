@@ -940,6 +940,12 @@ class PublicSurfaceTest(unittest.TestCase):
         self.assertFalse(
             hasattr(hand_evaluation, "calculate_shanten_from_canonical_counts")
         )
+        for predicate in (
+            "is_structurally_complete_from_canonical_counts",
+            "is_structurally_tenpai_from_canonical_counts",
+        ):
+            self.assertNotIn(predicate, hand_evaluation.__all__)
+            self.assertFalse(hasattr(hand_evaluation, predicate))
 
     def test_hand_evaluation_does_not_depend_on_the_belief_layer(self) -> None:
         # canonical axisの正本はbelief側だが、hand_evaluationからbelief layerへ
@@ -952,7 +958,7 @@ class PublicSurfaceTest(unittest.TestCase):
                         self.assertFalse(node.module.startswith("lisjong.belief"))
 
     def test_backend_stays_behind_a_private_module_name(self) -> None:
-        # Issue #115でlookup-table backendとそのfrontier generatorを追加した。
+        # Issue #115のnumeric backendとIssue #141のpredicate backendを含む。
         # 期待するprivate architectureをexact setとして固定する（public
         # surfaceは増やさない）。
         modules = {path.name for path in _PACKAGE_ROOT.glob("*.py")}
@@ -964,14 +970,16 @@ class PublicSurfaceTest(unittest.TestCase):
                 "_python_shanten.py",
                 "_shanten_frontier.py",
                 "_lookup_shanten.py",
+                "_structural_predicates.py",
             },
         )
 
     def test_lookup_table_artifact_ships_with_the_package(self) -> None:
-        artifact = _PACKAGE_ROOT / "_shanten_table.bin"
-
-        self.assertTrue(artifact.is_file())
-        self.assertGreater(artifact.stat().st_size, 0)
+        for resource in ("_shanten_table.bin", "_structural_predicate_table.bin"):
+            with self.subTest(resource=resource):
+                artifact = _PACKAGE_ROOT / resource
+                self.assertTrue(artifact.is_file())
+                self.assertGreater(artifact.stat().st_size, 0)
 
     def test_does_not_depend_on_external_environments(self) -> None:
         """RiichiEnv / RiichiLab / transportへ依存しないことを、importから確認する。"""

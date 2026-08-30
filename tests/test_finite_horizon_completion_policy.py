@@ -11,7 +11,11 @@ from unittest.mock import patch
 import lisjong.policies.finite_horizon_completion as finite_horizon
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.belief.tile_inventory import TILE_TYPE_COUNT
-from lisjong.hand_evaluation import calculate_shanten
+from lisjong.hand_evaluation import _structural_predicates, calculate_shanten
+from lisjong.hand_evaluation.shanten import (
+    calculate_shanten_from_canonical_counts,
+    is_structurally_tenpai_from_canonical_counts,
+)
 from lisjong.policies import FiniteHorizonCompletionPolicy, TwoStepUkeirePolicy
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
@@ -548,6 +552,194 @@ class CompletionMassRecurrenceTest(unittest.TestCase):
         )
 
         self.assertEqual(red_mass, normal_mass)
+
+    def test_completion_true_and_false_cache_hits_skip_recomputation(self) -> None:
+        for value in (True, False):
+            with self.subTest(value=value):
+                evaluator = _FiniteHorizonEvaluator()
+                hand = _counts(m1=2)
+                with patch.object(
+                    finite_horizon,
+                    "is_structurally_complete_from_canonical_counts",
+                    return_value=value,
+                ) as predicate:
+                    self.assertIs(evaluator.is_structurally_complete(hand), value)
+                    self.assertIs(evaluator.is_structurally_complete(hand), value)
+                predicate.assert_called_once_with(hand)
+
+    def test_tenpai_true_and_false_cache_hits_skip_recomputation(self) -> None:
+        for value in (True, False):
+            with self.subTest(value=value):
+                evaluator = _FiniteHorizonEvaluator()
+                hand = _counts(m1=1)
+                with patch.object(
+                    finite_horizon,
+                    "is_structurally_tenpai_from_canonical_counts",
+                    return_value=value,
+                ) as predicate:
+                    self.assertIs(evaluator.is_structurally_tenpai(hand), value)
+                    self.assertIs(evaluator.is_structurally_tenpai(hand), value)
+                predicate.assert_called_once_with(hand)
+
+    def test_numeric_cache_precedes_both_predicate_backends(self) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        completed = _counts(m1=2)
+        tenpai = _counts(m1=1)
+        evaluator._shanten_cache[completed] = -1
+        evaluator._shanten_cache[tenpai] = 0
+
+        with (
+            patch.object(
+                finite_horizon, "is_structurally_complete_from_canonical_counts"
+            ) as completion,
+            patch.object(
+                finite_horizon, "is_structurally_tenpai_from_canonical_counts"
+            ) as tenpai_predicate,
+        ):
+            self.assertTrue(evaluator.is_structurally_complete(completed))
+            self.assertTrue(evaluator.is_structurally_tenpai(tenpai))
+        completion.assert_not_called()
+        tenpai_predicate.assert_not_called()
+
+    def test_completion_predicate_only_result_is_removed_on_numeric_promotion(
+        self,
+    ) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        hand = _counts(m1=2)
+
+        self.assertTrue(evaluator.is_structurally_complete(hand))
+        self.assertIn(hand, evaluator._completion_predicate_cache)
+        self.assertEqual(evaluator.shanten(hand), -1)
+
+        self.assertNotIn(hand, evaluator._completion_predicate_cache)
+        self.assertIn(hand, evaluator._shanten_cache)
+        self.assertEqual(evaluator.numeric_promotions, 1)
+
+    def test_tenpai_predicate_only_result_is_removed_on_numeric_promotion(self) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        hand = _counts(m1=1)
+
+        self.assertTrue(evaluator.is_structurally_tenpai(hand))
+        self.assertIn(hand, evaluator._tenpai_predicate_cache)
+        self.assertEqual(evaluator.shanten(hand), 0)
+
+        self.assertNotIn(hand, evaluator._tenpai_predicate_cache)
+        self.assertIn(hand, evaluator._shanten_cache)
+        self.assertEqual(evaluator.numeric_promotions, 1)
+
+    def test_numeric_promotion_removes_both_synthetic_predicate_entries(self) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        hand = _counts(m1=1)
+        evaluator._completion_predicate_cache[hand] = False
+        evaluator._tenpai_predicate_cache[hand] = True
+
+        self.assertEqual(evaluator.shanten(hand), 0)
+
+        self.assertNotIn(hand, evaluator._completion_predicate_cache)
+        self.assertNotIn(hand, evaluator._tenpai_predicate_cache)
+        self.assertFalse(
+            evaluator._shanten_cache.keys()
+            & (
+                evaluator._completion_predicate_cache.keys()
+                | evaluator._tenpai_predicate_cache.keys()
+            )
+        )
+
+    def test_depth_one_uses_predicates_without_numeric_shanten(self) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        hand = _counts(m3=1, m4=1, m5=1, s9=1)
+
+        self.assertEqual(evaluator.completion_mass(hand, _counts(s9=2, z1=1), 1), 2)
+        self.assertEqual(evaluator.shanten_evaluations, 0)
+        self.assertEqual(evaluator.tenpai_predicate_evaluations, 1)
+        self.assertGreater(evaluator.completion_predicate_evaluations, 0)
+
+    def test_depth_one_state_bound_is_exactly_not_structural_tenpai(self) -> None:
+        for size in (1, 4, 7, 10, 13):
+            for seed_index in range(TILE_TYPE_COUNT):
+                hand = _corpus_hand_counts(size, seed_index)
+                shanten = calculate_shanten_from_canonical_counts(hand)
+                self.assertGreaterEqual(shanten, 0)
+                self.assertEqual(
+                    shanten + 1 > 1,
+                    not is_structurally_tenpai_from_canonical_counts(hand),
+                )
+
+    def test_closed_tenpai_reference_preserves_semantics_and_cache_partition(
+        self,
+    ) -> None:
+        policy_input = _make_input(_TENPAI_HAND)
+        actions = tuple(_discard(tile) for tile in dict.fromkeys(_TENPAI_HAND))
+        evaluator = _FiniteHorizonEvaluator()
+        evaluations = finite_horizon._evaluate_completion_masses(
+            policy_input,
+            actions,
+            _root_remaining_counts(policy_input),
+            DEFAULT_HORIZON,
+            evaluator,
+        )
+        selected, _analysis = finite_horizon._select_from_completion_masses(
+            policy_input, evaluations
+        )
+        masses = {
+            (
+                evaluation.action.tile.tile_type.category,
+                evaluation.action.tile.tile_type.rank,
+            ): evaluation.completion_mass
+            for evaluation in evaluations
+        }
+
+        self.assertEqual(selected.tile, SOUZU_5)
+        self.assertEqual(evaluator.visited_states, 165_542)
+        self.assertEqual(evaluator.cache_hits, 90_444)
+        self.assertEqual(evaluator.cache_misses, 75_098)
+        self.assertEqual(evaluator.shanten_evaluations, 27_051)
+        self.assertEqual(evaluator.completion_predicate_evaluations, 45_830)
+        self.assertEqual(evaluator.tenpai_predicate_evaluations, 30_491)
+        self.assertEqual(evaluator.numeric_promotions, 4_129)
+        self.assertEqual(
+            masses,
+            {
+                (TileCategory.MANZU, 2): 39_228,
+                (TileCategory.MANZU, 3): 15_408,
+                (TileCategory.MANZU, 4): 26_811,
+                (TileCategory.MANZU, 5): 27_075,
+                (TileCategory.MANZU, 6): 15_696,
+                (TileCategory.MANZU, 7): 38_652,
+                (TileCategory.PINZU, 2): 39_228,
+                (TileCategory.PINZU, 3): 15_408,
+                (TileCategory.PINZU, 4): 26_811,
+                (TileCategory.PINZU, 5): 27_075,
+                (TileCategory.PINZU, 6): 15_696,
+                (TileCategory.PINZU, 7): 38_652,
+                (TileCategory.SOUZU, 5): 202_494,
+                (TileCategory.HONOR, 7): 202_494,
+            },
+        )
+        predicate_keys = (
+            evaluator._completion_predicate_cache.keys()
+            | evaluator._tenpai_predicate_cache.keys()
+        )
+        self.assertEqual(len(predicate_keys), 72_192)
+        self.assertEqual(len(evaluator._shanten_cache), 27_051)
+        self.assertFalse(evaluator._shanten_cache.keys() & predicate_keys)
+        self.assertEqual(len(predicate_keys) + len(evaluator._shanten_cache), 99_243)
+
+    def test_artifact_failure_propagates_without_policy_fallback(self) -> None:
+        evaluator = _FiniteHorizonEvaluator()
+        error = _structural_predicates.StructuralPredicateTableError("broken")
+        with patch.object(
+            finite_horizon,
+            "is_structurally_tenpai_from_canonical_counts",
+            side_effect=error,
+        ):
+            with self.assertRaises(
+                _structural_predicates.StructuralPredicateTableError
+            ) as raised:
+                evaluator.completion_mass(
+                    _counts(m3=1, m4=1, m5=1, s9=1), _counts(s9=1), 1
+                )
+        self.assertIs(raised.exception, error)
 
     def test_a_future_draw_removes_exactly_the_drawn_tile(self) -> None:
         # drawした牌種だけがremaining inventoryから1枚減り、仮想discardは

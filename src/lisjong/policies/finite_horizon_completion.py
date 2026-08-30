@@ -113,6 +113,19 @@ pruning判定はdraw直後のcompletion判定ですでに評価した`draw_shant
 pruning on/offの二重pathを持たせず、exactnessの検証はtest-localなunpruned
 reference oracleとの一致で行う。
 
+## depth=1 exact predicate specialization
+
+Issue #141ではdepth=1だけ、full numeric shantenを`hand_evaluation.shanten`所有の
+package-internal structural predicateへ置き換える。state側はstructural tenpai、
+draw側はstructural completionだけを必要とするためである。depth > 1のnumeric
+shanten pathとparent pruningは変更しない。
+
+numeric shanten cacheを常に先に参照し、numeric missだけをdecision-localな
+completion / tenpai bool cacheへ送る。predicate-only resultをnumeric値へ偽装せず、
+後からnumeric valueが必要になったpromotionではnumeric resultを保存して両predicate
+entryを削除する。artifact failureはそのままpropagateし、TwoStepやnumeric shantenへ
+fallbackしない。
+
 ## count-native shanten hot path
 
 Issue #113で、DP内部のshanten評価を`hand_evaluation`が所有するcount-native
@@ -145,7 +158,11 @@ from dataclasses import dataclass
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.belief.tile_inventory import TILE_TYPE_COUNT
-from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
+from lisjong.hand_evaluation.shanten import (
+    calculate_shanten_from_canonical_counts,
+    is_structurally_complete_from_canonical_counts,
+    is_structurally_tenpai_from_canonical_counts,
+)
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeirePolicy,
@@ -286,36 +303,46 @@ class _FiniteHorizonEvaluator:
     """1 discard decision内だけで共有するexact DPとtransposition cache。
 
     1 decisionにつき1 instanceを生成し、全root discard candidateで同じ
-    transposition tableとshanten cacheを共有する。candidateごとにcacheを
-    作り直さない。Policy instance、module global、decision間、対局間へ
-    cacheを持ち越さない。
+    transposition table、numeric shanten cache、completion / tenpai predicate
+    cacheを共有する。candidateごとにcacheを作り直さない。Policy instance、
+    module global、decision間、対局間へcacheを持ち越さない。
 
     DP stateは概念上`(hand_counts[34], remaining_counts[34], depth)`であり、
     `hand_counts`は常に**打牌後**のstructural hand（したがって和了形では
     ない）を表す。
 
-    `visited_states` / `cache_hits` / `cache_misses` /
-    `shanten_evaluations`はdevelopment benchmark用のprivate instrumentation
-    であり、Policyの公開APIではない。
+    `visited_states` / `cache_hits` / `cache_misses` / shanten・predicate evaluation
+    count / promotion countはdevelopment benchmark用のprivate instrumentationで
+    あり、Policyの公開APIではない。
     """
 
     __slots__ = (
+        "_completion_predicate_cache",
         "_completion_mass_cache",
         "_shanten_cache",
+        "_tenpai_predicate_cache",
         "cache_hits",
         "cache_misses",
+        "completion_predicate_evaluations",
+        "numeric_promotions",
         "shanten_evaluations",
+        "tenpai_predicate_evaluations",
         "visited_states",
     )
 
     def __init__(self) -> None:
         self._shanten_cache: dict[tuple[int, ...], int] = {}
+        self._completion_predicate_cache: dict[tuple[int, ...], bool] = {}
+        self._tenpai_predicate_cache: dict[tuple[int, ...], bool] = {}
         self._completion_mass_cache: dict[
             tuple[tuple[int, ...], tuple[int, ...], int], int
         ] = {}
         self.visited_states = 0
         self.cache_hits = 0
         self.cache_misses = 0
+        self.completion_predicate_evaluations = 0
+        self.tenpai_predicate_evaluations = 0
+        self.numeric_promotions = 0
         self.shanten_evaluations = 0
 
     def shanten(self, hand_counts: tuple[int, ...]) -> int:
@@ -337,6 +364,40 @@ class _FiniteHorizonEvaluator:
         self.shanten_evaluations += 1
         value = calculate_shanten_from_canonical_counts(hand_counts)
         self._shanten_cache[hand_counts] = value
+        promoted = hand_counts in self._completion_predicate_cache
+        promoted = hand_counts in self._tenpai_predicate_cache or promoted
+        self._completion_predicate_cache.pop(hand_counts, None)
+        self._tenpai_predicate_cache.pop(hand_counts, None)
+        if promoted:
+            self.numeric_promotions += 1
+        return value
+
+    def is_structurally_complete(self, hand_counts: tuple[int, ...]) -> bool:
+        """Return cached exact completion, preferring an existing numeric value."""
+        numeric = self._shanten_cache.get(hand_counts)
+        if numeric is not None:
+            return numeric == _COMPLETE_SHANTEN
+        try:
+            return self._completion_predicate_cache[hand_counts]
+        except KeyError:
+            pass
+        self.completion_predicate_evaluations += 1
+        value = is_structurally_complete_from_canonical_counts(hand_counts)
+        self._completion_predicate_cache[hand_counts] = value
+        return value
+
+    def is_structurally_tenpai(self, hand_counts: tuple[int, ...]) -> bool:
+        """Return cached exact tenpai, preferring an existing numeric value."""
+        numeric = self._shanten_cache.get(hand_counts)
+        if numeric is not None:
+            return numeric == 0
+        try:
+            return self._tenpai_predicate_cache[hand_counts]
+        except KeyError:
+            pass
+        self.tenpai_predicate_evaluations += 1
+        value = is_structurally_tenpai_from_canonical_counts(hand_counts)
+        self._tenpai_predicate_cache[hand_counts] = value
         return value
 
     def completion_mass(
@@ -399,8 +460,9 @@ class _FiniteHorizonEvaluator:
 
         安全な枝刈りは次の2つだけとする。どちらもexact resultを変えない。
 
-        1. state lower bound: `calculate_shanten(H) + 1 > depth`なら、その
-           depth内でstructural completionへ到達できないので0を返す。
+        1. state lower bound: depth=1ではexact structural tenpai predicate、
+           depth>1では`calculate_shanten(H) + 1 > depth`を使い、そのdepth内で
+           structural completionへ到達できない場合に0を返す。
         2. exact-safe parent pruning: draw後の`D = H + t`が未完成で
            `calculate_shanten(D) > depth - 2`なら、shanten deletion
            monotonicityより全hypothetical discard childが0になるため、
@@ -411,7 +473,10 @@ class _FiniteHorizonEvaluator:
         """
         if depth <= 0:
             return 0
-        if self.shanten(hand_counts) + 1 > depth:
+        if depth == 1:
+            if not self.is_structurally_tenpai(hand_counts):
+                return 0
+        elif self.shanten(hand_counts) + 1 > depth:
             return 0
 
         completed_suffix_mass = _falling_factorial(remaining_total - 1, depth - 1)
@@ -432,15 +497,16 @@ class _FiniteHorizonEvaluator:
             draw_hand_counts = tuple(draw_scratch)
             draw_scratch[drawn_index] -= 1
 
+            if depth == 1:
+                if self.is_structurally_complete(draw_hand_counts):
+                    total += available * completed_suffix_mass
+                # An incomplete hand after the final draw contributes zero.
+                # No numeric shanten value or hypothetical discard is needed.
+                continue
+
             draw_shanten = self.shanten(draw_hand_counts)
             if draw_shanten == _COMPLETE_SHANTEN:
                 total += available * completed_suffix_mass
-                continue
-
-            if depth == 1:
-                # 未完成のまま最後のdraw slotを使い切ったbranchは
-                # `M(next_hand, R', 0) == 0`なので、仮想discardの列挙自体を
-                # 省略できる。近似ではなくrecurrenceの展開である。
                 continue
 
             if draw_shanten > depth - 2:
