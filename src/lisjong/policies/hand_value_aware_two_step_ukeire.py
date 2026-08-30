@@ -41,7 +41,7 @@ from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
-from lisjong.policy_contract.tile import Tile, TileCategory
+from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
 
 _WIND_RANK = {
@@ -136,6 +136,26 @@ def _seat_wind_rank(policy_input: PolicyInput) -> int:
     return (int(policy_input.self_seat) - int(policy_input.round.dealer_seat)) % 4 + 1
 
 
+def _yakuhai_han_value(
+    tile_type: TileType,
+    *,
+    seat_wind_rank: int,
+    round_wind_rank: int,
+) -> int:
+    """1牌種が持つ三元牌・自風・場風の翻相当値を返すpure helper。"""
+    if tile_type.category is not TileCategory.HONOR:
+        return 0
+
+    value = 0
+    if tile_type.rank >= _DRAGON_MINIMUM_RANK:
+        value += 1
+    if tile_type.rank == seat_wind_rank:
+        value += 1
+    if tile_type.rank == round_wind_rank:
+        value += 1
+    return value
+
+
 def _completed_yakuhai_value(
     post_discard_hand: Sequence[Tile],
     melds: Sequence[PublicMeld],
@@ -157,15 +177,14 @@ def _completed_yakuhai_value(
         and meld.tiles[0].tile_type.category is TileCategory.HONOR
     )
 
-    value = 0
-    for tile_type in completed_types:
-        if tile_type.rank >= _DRAGON_MINIMUM_RANK:
-            value += 1
-        if tile_type.rank == seat_wind_rank:
-            value += 1
-        if tile_type.rank == round_wind_rank:
-            value += 1
-    return value
+    return sum(
+        _yakuhai_han_value(
+            tile_type,
+            seat_wind_rank=seat_wind_rank,
+            round_wind_rank=round_wind_rank,
+        )
+        for tile_type in completed_types
+    )
 
 
 def _retained_real_value(

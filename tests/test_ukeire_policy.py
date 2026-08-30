@@ -1036,6 +1036,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "UkeirePolicy",
                 "TwoStepUkeirePolicy",
                 "ValueAwareTwoStepUkeirePolicy",
+                "YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
             },
         )
 
