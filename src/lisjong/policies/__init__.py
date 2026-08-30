@@ -1,6 +1,9 @@
 """lisjongの具体Policy実装。"""
 
 from lisjong.policies.finite_horizon_completion import FiniteHorizonCompletionPolicy
+from lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware import (
+    GenbutsuDefenseFiniteHorizonHandValueAwarePolicy,
+)
 from lisjong.policies.genbutsu_defense_finite_horizon_value_aware import (
     GenbutsuDefenseFiniteHorizonValueAwarePolicy,
 )
@@ -18,6 +21,7 @@ from lisjong.policies.value_aware_two_step_ukeire import ValueAwareTwoStepUkeire
 
 __all__ = [
     "FiniteHorizonCompletionPolicy",
+    "GenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
     "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
     "GenbutsuDefenseTwoStepUkeirePolicy",
     "HandValueAwareTwoStepUkeirePolicy",
