@@ -6,6 +6,10 @@ from collections.abc import Iterable
 from mahjong.shanten import Shanten
 
 from lisjong.hand_evaluation import calculate_shanten
+from lisjong.hand_evaluation.shanten import (
+    is_structurally_complete_from_canonical_counts,
+    is_structurally_tenpai_from_canonical_counts,
+)
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 _EXPECTED_REFERENCE_VERSION = "2.0.0"
@@ -163,6 +167,22 @@ class SeededRandomShantenDifferentialTest(unittest.TestCase):
                 )
                 self.assertLessEqual(max(reference_tiles_34), 4, diagnostic)
                 self.assertEqual(lisjong_result, reference_result, diagnostic)
+                if hand_size in (2, 5, 8, 11, 14):
+                    self.assertEqual(
+                        is_structurally_complete_from_canonical_counts(
+                            reference_tiles_34
+                        ),
+                        reference_result == -1,
+                        diagnostic,
+                    )
+                else:
+                    self.assertEqual(
+                        is_structurally_tenpai_from_canonical_counts(
+                            reference_tiles_34
+                        ),
+                        reference_result == 0,
+                        diagnostic,
+                    )
 
 
 if __name__ == "__main__":

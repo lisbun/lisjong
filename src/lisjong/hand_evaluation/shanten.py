@@ -15,7 +15,7 @@ calculate_shanten(Tile...)        # 一般公開API・安全な境界
     ↓  snapshot / type validation / hand-size validation
     ↓  Tile -> 34牌種count正規化 / max 4枚validation
     ↓
-_shanten_from_valid_counts()      # 唯一のsemantic core
+_shanten_from_valid_counts()      # numeric shantenの唯一のsemantic core
     ↑
 calculate_shanten_from_canonical_counts()
                                   # package-internal hot path
@@ -26,16 +26,21 @@ lisjong内部consumer (すでに34牌種countを保持している側)
 `calculate_shanten_from_canonical_counts()`はIssue #113で追加した
 lisjong内部向けのperformance contractであり、package rootの`__all__`へは
 追加しない一般非公開の入口である。新しい向聴semanticを定義するものでも、
-private backendを公開するものでもない。standard / 七対子 / 国士無双 /
-確定面子数のdispatchは`_shanten_from_valid_counts()`だけが持ち、入口ごとに
-複製しない。
+private backendを公開するものでもない。numeric shantenのstandard / 七対子 /
+国士無双 / 確定面子数のdispatchは`_shanten_from_valid_counts()`だけが持ち、
+入口ごとに複製しない。package-internalのstructural completion / tenpai
+predicateもこのmoduleが所有し、special-hand計算は同じhelperを共有する。
 
 34牌種countはprivateな内部表現であり、一般公開APIにはしない。
 """
 
 from collections.abc import Iterable, Sequence
 
-from lisjong.hand_evaluation import _lookup_shanten, _python_shanten
+from lisjong.hand_evaluation import (
+    _lookup_shanten,
+    _python_shanten,
+    _structural_predicates,
+)
 from lisjong.policy_contract.tile import Tile, TileCategory
 
 _CATEGORY_OFFSETS = {
@@ -144,8 +149,54 @@ def calculate_shanten_from_canonical_counts(counts: Sequence[int]) -> int:
     return _shanten_from_valid_counts(counts, sum(counts))
 
 
+def is_structurally_complete_from_canonical_counts(counts: Sequence[int]) -> bool:
+    """Return whether trusted canonical counts have structural shanten ``-1``.
+
+    This is a package-internal, boolean performance contract for validated
+    canonical 34-count callers.  Its preconditions are the same as
+    ``calculate_shanten_from_canonical_counts()``, with supported concealed
+    counts restricted to ``2 / 5 / 8 / 11 / 14``.  It is not a legal-win,
+    yaku, furiten, scoring, or remaining-inventory predicate.
+
+    Standard completion comes from the separate lazy compact predicate
+    artifact.  Closed 14-tile hands additionally retain the same seven-pairs
+    and thirteen-orphans semantics as canonical shanten.  Artifact failures
+    propagate without a numeric or recursive fallback.
+    """
+    concealed_tile_count = sum(counts)
+    fixed_meld_count = _fixed_meld_count(concealed_tile_count)
+    if _structural_predicates.is_standard_structurally_complete(
+        counts, fixed_meld_count
+    ):
+        return True
+    if concealed_tile_count != 14:
+        return False
+    return _meldless_special_shanten(counts) == -1
+
+
+def is_structurally_tenpai_from_canonical_counts(counts: Sequence[int]) -> bool:
+    """Return whether trusted canonical counts have structural shanten ``0``.
+
+    This package-internal hot-path contract supports concealed counts
+    ``1 / 4 / 7 / 10 / 13`` and shares the trusted-input preconditions of the
+    count-native shanten contract.  It ignores remaining inventory, so a dead
+    wait is still structural tenpai.
+
+    Standard one-added reachability comes from the separate lazy compact
+    predicate artifact.  Closed 13-tile hands additionally retain the same
+    seven-pairs and thirteen-orphans semantics as canonical shanten.
+    """
+    concealed_tile_count = sum(counts)
+    fixed_meld_count = _fixed_meld_count(concealed_tile_count)
+    if _structural_predicates.is_standard_structurally_tenpai(counts, fixed_meld_count):
+        return True
+    if concealed_tile_count != 13:
+        return False
+    return _meldless_special_shanten(counts) == 0
+
+
 def _shanten_from_valid_counts(counts: Sequence[int], concealed_tile_count: int) -> int:
-    """検証済み34牌種countから向聴数を求める、唯一のsemantic coreである。
+    """検証済み34牌種countから向聴数を求めるnumeric semantic core。
 
     Tile入口（`calculate_shanten()`）とcount-native入口
     （`calculate_shanten_from_canonical_counts()`）はどちらもここへ委譲する。
@@ -164,12 +215,16 @@ def _shanten_from_valid_counts(counts: Sequence[int], concealed_tile_count: int)
 
     shanten = _lookup_shanten.calculate_standard_shanten(counts, fixed_meld_count)
     if concealed_tile_count in _MELDLESS_TILE_COUNTS:
-        shanten = min(
-            shanten,
-            _python_shanten.calculate_seven_pairs_shanten(counts),
-            _python_shanten.calculate_thirteen_orphans_shanten(counts),
-        )
+        shanten = min(shanten, _meldless_special_shanten(counts))
     return shanten
+
+
+def _meldless_special_shanten(counts: Sequence[int]) -> int:
+    """Return the shared closed-hand minimum for seven pairs / orphans."""
+    return min(
+        _python_shanten.calculate_seven_pairs_shanten(counts),
+        _python_shanten.calculate_thirteen_orphans_shanten(counts),
+    )
 
 
 def _snapshot_tiles(tiles: Iterable[Tile]) -> tuple[Tile, ...]:

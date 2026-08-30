@@ -383,15 +383,33 @@ DP stateは概念的に`(hand_counts[34], remaining_counts[34], depth)`であり
 では赤5と通常5を同じ基礎牌種として扱い、仮想discardは牌種単位で
 deduplicateする。root legal `DiscardAction` identityは維持する。
 
-structural completionの正本は公開`calculate_shanten()`だけであり、
-`calculate_shanten(draw_hand) == -1`をcompletionとする。standard / 七対子 /
-国士無双 / 確定面子のsemanticsを本moduleで再実装しない。枝刈りは後述の
+structural completion / tenpaiのsemanticは`hand_evaluation.shanten`が正本を
+持ち、numericな`calculate_shanten()`とpackage-internal predicateの一致を保つ。
+standard / 七対子 / 国士無双 / 確定面子のsemanticsをPolicy moduleで
+再実装しない。枝刈りは後述の
 2つのexact-safeなlower boundだけで、beam search、top-N branch、probability
 cutoff、weak-shape heuristic、Monte Carlo / MCTSは導入しない。
 
-transposition cacheとshanten cacheは1 discard decision内に閉じ、全root
-discard candidateで同じevaluator instanceを共有する。Policy instance、module
-global、decision間、対局間へcacheを持ち越さない。
+transposition cache、numeric shanten cache、structural completion / tenpai
+predicate cacheは1 discard decision内に閉じ、全root discard candidateで同じ
+evaluator instanceを共有する。Policy instance、module global、decision間、対局間へ
+cacheを持ち越さない。predicate lookupはnumeric cacheを先に参照し、後から同じ
+handのfull numeric shantenが必要になった場合はnumeric resultを保存したうえで両
+predicate cache entryを削除する。
+
+Issue #141ではdepth=1だけをspecializeする。post-discard stateのlower boundは
+package-internal structural tenpai predicate、draw後のterminal判定はpackage-internal
+structural completion predicateを使う。depth > 1のnumeric shanten、parent pruning、
+completion mass recurrence、remaining inventory、TwoStep fallbackは変更しない。
+
+predicate semanticは`hand_evaluation.shanten`が所有し、Policyはそのcontractだけを
+importする。通常形はgroup keyごとの1-byte mask-pair IDと小さいshared mask poolを
+持つseparate `_structural_predicate_table.bin`からexactに合成する。artifactはpredicate
+初回callまでloadせず、独自magic / format version / declared dimensionsを検証し、
+missing・corrupt・invalid IDでは専用internal errorでfail closedする。full numeric
+shanten、frontier、recursive evaluatorへのruntime fallbackはない。閉じた13 / 14枚の
+七対子・国士無双dispatchも`hand_evaluation`側に留める。predicateはpackage rootの
+public APIへexportしない。
 
 ```text
 1 decision
