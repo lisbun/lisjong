@@ -530,18 +530,20 @@ spawn-safe factory、400局Gate 1評価はmerge後のconsumer follow-upで扱う
 #### GenbutsuDefenseFiniteHorizonHandValueAware (Issue #143)
 
 `lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware.GenbutsuDefenseFiniteHorizonHandValueAwarePolicy`
-は、current strength baselineである`GenbutsuDefenseFiniteHorizonValueAwarePolicy`
-（Issue #122、以下current Combined）を変更せず並存させるexperimental candidateで
-ある。
+は、Issue #143のimplementation時点でstrength baselineだった
+`GenbutsuDefenseFiniteHorizonValueAwarePolicy`（Issue #122、以下Combined）を変更せず、
+experimental generationとして並存させたPolicyである。この節のbaseline / candidate表現は
+Issue #143当時のimplementation contextを示す。current strength roleは
+[Policy current status](policy-status.md)を参照する。
 
 ```text
-current Combined
+implementation-time Combined
     = frozen comparison baseline
-new GenbutsuDefenseFiniteHorizonHandValueAwarePolicy
+Issue #143 GenbutsuDefenseFiniteHorizonHandValueAwarePolicy
     = experimental candidate
 ```
 
-selectionの概念上の優先順位は次のとおりで、current Combinedの`ValueAware`段だけを
+selectionの概念上の優先順位は次のとおりで、Combinedの`ValueAware`段だけを
 `HandValueAware`（Issue #125）へ置き換える。
 
 ```text
@@ -551,7 +553,7 @@ Push/Fold decision
 > HandValueAware ranking
 ```
 
-current Combinedのdefense semanticは1つの`_genbutsu_eligible_actions()`として
+Combinedのdefense semanticは1つの`_genbutsu_eligible_actions()`として
 実装されているが、本Policyはsemanticを変えないままコード上で2段へ明示的に分ける。
 
 ```text
@@ -586,14 +588,16 @@ winning action、Always Riichi、pass、既存fallbackは基底orchestrationを�
 combined-specific analysisは追加せず`analysis=None`とする。`PolicyInput`
 schemaは拡張せず、Policy-visible informationだけを使用する。Arena側の
 policy catalog登録、spawn-safe factory登録、strength evaluation
-（current Combinedとの400局 Gate 1 / 10,000局 Gate 2比較）はこのPolicy追加とは
+（Combinedとの400局 Gate 1 / 10,000局 Gate 2比較）はこのPolicy追加とは
 別のfollow-up（Arena側は別Issue、評価結果はIssue #121）で扱う。
 
 #### YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAware (Issue #145)
 
 `lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aware.YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy`
 は、Issue #143のno-call Policyをそのままparentとして、call-responseだけへ最小の
-call strategyを追加するexperimental candidateである。parentの`_decide()`を先に
+call strategyを追加するIssue #145当時のexperimental candidateとして実装された。
+この表現はimplementation historyを示し、current strength roleは
+[Policy current status](policy-status.md)を参照する。parentの`_decide()`を先に
 1回だけ実行し、winning action、Always Riichi、ordinary discardの
 `Push/Fold > Safety > FiniteHorizon > HandValueAware`を変更しない。parentが明示的な
 `PassAction`を選ぶresponseでだけChi/Ponを検討する。
