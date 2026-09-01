@@ -43,6 +43,7 @@ accuracy / calibration等のcomponent-specific evaluationは`lisjong`が扱い�
 統合した後のcontrolled performance comparisonは
 [`lisjong-arena`](https://github.com/lisbun/lisjong-arena)へ接続します。
 技術的な責務境界は[Architecture](docs/architecture.md)を参照してください。
+公開Policyのcurrent roleとcurrent strength baselineは[Policy current status](docs/policy-status.md)を参照してください。
 
 ## 位置づけ
 
