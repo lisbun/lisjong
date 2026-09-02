@@ -275,6 +275,50 @@ Policyもruntime profileやArena policy catalogへ自動登録しない。
 credentialやPolicyへ暗黙fallbackしません。profile / credential compositionの詳細は
 `lisjong-arena`側の文書を参照してください。
 
+## Model-facing action vocabulary
+
+`lisjong.action_vocabulary`は、learned Policyが固定長のaction出力を扱えるように、
+fixed-sizeかつversionedなmodel-facing action vocabulary、`InternalAction`との
+codec、`DecisionContext.legal_actions`から導出するfixed-size legal maskを提供
+します(Issue #149)。ML runtime(NumPy / PyTorch等)へは依存せず、maskは純粋な
+Python contract(`tuple[bool, ...]`)として表現します。
+
+```text
+semantic identity
+    = InternalAction dataclass value equality
+
+model action index
+    = versioned adapter representation
+```
+
+model action indexは新しいAction identityではありません。麻雀上の合法性の根拠でも、
+`legal_actions`のtuple indexでもありません。`resolve_legal_action()`は同じ
+decisionの`legal_actions`側のcanonical `InternalAction`を返し、
+`execute_policy()`のsignature・validation・例外semanticsは変更しません。
+
+```python
+from lisjong.action_vocabulary import (
+    ACTION_VOCABULARY_SIZE,  # 802
+    ACTION_VOCABULARY_VERSION,  # "lisjong-action-vocabulary-1"
+    build_legal_action_mask,
+    encode_action,
+    resolve_legal_action,
+)
+
+mask = build_legal_action_mask(decision)  # len(mask) == ACTION_VOCABULARY_SIZE
+index = ...  # modelがmask上で選んだindex
+action = resolve_legal_action(index, decision)  # canonical legal InternalAction
+
+encode_action(action) == index  # 同じdecisionでround-tripする
+```
+
+encodeできないAction、mask上illegalなindex、範囲外のindex、同一decision内の
+index衝突、未対応のvocabulary versionはいずれもfail closedとし、fallback Action
+へ置換しません。index layout、encoding規則、version更新規則は
+[Model-facing action vocabulary](docs/action-vocabulary.md)を正本とします。
+feature encoder、tensor schema、HandBelief consumer seam、model architecture、
+trainingは後続Issueで扱います。
+
 ## RiichiLab ranked / validation execution
 
 RiichiLab ranked one-game orchestrationのcanonical implementationとfirst-party CLIは
@@ -421,6 +465,9 @@ PR #46でexact pinを`376f69088a134b5a9bcc33a69b95e3f779eb2b0e`へ同期済み�
 所有し、mappingが参照するPolicy class自体はlisjongが引き続き所有します。AI-sideでは
 remaining tile inventoryとconditional-uniform `HandBelief` baselineまで実装済みで、
 observation-aware heuristic / learned estimatorや学習済みmodelは未導入です。
+learned Policy向けには、Issue #149でfixed-sizeかつversionedなmodel-facing action
+vocabulary、`InternalAction` codec、legal mask contract(`lisjong.action_vocabulary`)
+まで実装済みです。feature encoder、model、trainingは未導入です。
 
 ## License
 

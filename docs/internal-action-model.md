@@ -16,7 +16,10 @@
 本書は`InternalAction`のvariant、field、麻雀上の意味、不変条件を定める。
 Python実装は`lisjong.policy_contract.action`を正本とし、semantic equality、
 canonicalization、deduplication、外部合法Actionとの対応は
-[Action identity](action-identity.md)を正本とする。
+[Action identity](action-identity.md)を正本とする。learned Policy向けに、この
+variantとfieldをfixed-sizeなmodel action indexへ対応付けるcodecとlegal maskは
+[Model-facing action vocabulary](action-vocabulary.md)を正本とし、本書の
+variantとfieldを変更しない。
 
 RiichiEnv調査記録で未実測とされているAction種別やRiichiLabオンライン経路を、
 本書によって実測済みへ格上げしない。本書のvariantとfieldはlisjongの設計判断で

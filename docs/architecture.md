@@ -1551,6 +1551,7 @@ flowchart TD
     Impl --> HandEval["Hand evaluation"]
     HandEval --> Contract
     Belief["belief"] --> Contract
+    ActionVocab["action vocabulary"] --> Contract
 ```
 
 Local game runner、RiichiLab orchestration、lower-level runtime、
@@ -1588,6 +1589,22 @@ Hand evaluationはPolicyを呼び出さず、AdapterやRunner / Arena runtimeか
 `belief`パッケージも同様にPolicy contractのvalue型だけへ依存し、Policy
 contract側からは依存されない。`PolicyInput` / `DecisionContext`、Adapter、
 Runner / Arena runtimeは`belief`を参照しない。
+
+Issue #149の`action_vocabulary`パッケージも同じ方向を守る。Policy contractの
+value型（`InternalAction` variantとそのvalue型、`DecisionContext`）だけへ依存し、
+`policy_contract -> action_vocabulary`という逆依存は作らない。
+
+```text
+policy_contract
+      ↑
+action_vocabulary
+      ↑
+learned Policy consumers (後続Issue)
+```
+
+現時点のlisjong内consumerは存在せず、`lisjong.policies`の既存Policyも
+`action_vocabulary`を参照しない。model-facing indexはPolicy契約の判断単位や
+`execute_policy()`のvalidationを置換しないためである。
 
 Issue #109で`FiniteHorizonCompletionPolicy`が、future draw distributionの
 physical count sourceとしてIssue #63の`derive_remaining_tile_inventory()`と
@@ -1652,6 +1669,43 @@ Arena-local `RiichiLabSeatAdapter`が共有する環境非依存の契約package
 RiichiLab、mjai、WebSocketその他の外部protocol固有型をimportしない。Policy実装は
 このpackageへ依存し、Arena-local Adapter / Runnerはrepository外からこのpackageを
 consumerとして利用する。逆向きの依存は作らない。
+
+### Model-facing action vocabulary package (Issue #149)
+
+`lisjong.action_vocabulary`は、learned Policyが固定長のaction出力を扱えるように、
+`InternalAction`とmodel-facingな固定action vocabularyの対応付けだけを所有する
+packageである。意味契約の正本は
+[Model-facing action vocabulary](action-vocabulary.md)である。
+
+```text
+semantic identity
+    = InternalAction dataclass value equality
+
+model action index
+    = versioned adapter representation
+```
+
+- `action_codec.py`はfixed-sizeかつversionedなvocabulary
+  （`ACTION_VOCABULARY_VERSION = "lisjong-action-vocabulary-1"`、
+  `ACTION_VOCABULARY_SIZE = 802`）、variantごとのindex block、
+  `encode_action()` / `decode_action()`を所有する
+- `legal_mask.py`は`DecisionContext.legal_actions`からの
+  `encode_legal_actions()` / `build_legal_action_mask()` /
+  `resolve_legal_action()`を所有する
+- `errors.py`はfail closed例外階層（`ActionVocabularyError`とその派生）を所有する
+
+model action indexは新しいAction identityではなく、麻雀上の合法性の根拠でも、
+`legal_actions`のtuple indexでもない。`resolve_legal_action()`は同じdecisionの
+`legal_actions`側のcanonical `InternalAction` objectを返し、`execute_policy()`の
+signature、validation、例外semanticsを変更しない。`actor`はvocabularyへ含めず、
+`target` / `from_seat`はactor相対でencodeする。
+
+このpackageはPython標準libraryと`lisjong.policy_contract`のvalue型だけへ依存し、
+NumPy / PyTorch等のML runtime、RiichiEnv / RiichiLab / mjai固有型、hidden
+informationを参照しない。maskは純粋なPython contract（`tuple[bool, ...]`）と
+して表現し、tensorへの変換はconsumer側の責務とする。feature encoder、tensor
+schema、HandBelief consumer seam、model architecture、trainingは本packageの
+責務ではなく、後続Issueで扱う。
 
 ## 情報境界
 

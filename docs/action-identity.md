@@ -14,11 +14,19 @@
 - RiichiEnv 0.4.8の公式情報、source確認、実測、推測・未確認事項、
   lisjongの設計判断の区別は
   [RiichiEnv調査記録](riichienv-investigation.md)を正本とする
+- learned Policy向けのfixed-size action vocabulary、codec、legal maskは
+  [Model-facing action vocabulary](action-vocabulary.md)を正本とする
 
 本書は、Policyが選ぶ麻雀上の操作を、外部engineのphysical objectや候補の並び順に
 依存せず照合するsemantic identityを定める。Python実装では、
 `lisjong.policy_contract.action`の各Action dataclassのvalue equalityをsemantic
 identityとし、別のcanonical keyやaction IDは設けない。
+
+この「別のcanonical key / action IDを設けない」はsemantic identityについての契約
+である。Issue #149で追加したmodel-facing action index
+（[Model-facing action vocabulary](action-vocabulary.md)）は、semantic identityを
+置換しないversioned adapter representationであり、本書の契約と両立する。詳細は
+「Model-facing action vocabulary」節を参照する。
 
 RiichiEnvで未実測のAction種別やRiichiLabオンライン経路を、本書によって実測済みへ
 格上げしない。本書のidentity規則はlisjongの設計判断である。
@@ -406,6 +414,53 @@ raw牌譜がphysical tile identityを保持する場合も、Policyのsemantic a
 
 physical copy差だけの教師ラベルは同じsemantic identityへ正規化する。raw dataの
 保存形式と学習datasetのversioningは本書では確定しない。
+
+## Model-facing action vocabulary
+
+learned Policyは固定長のaction出力を持つため、`InternalAction`と固定長vector上の
+numeric indexを対応付ける表現が必要になる。Issue #149で、その対応付けを
+`lisjong.action_vocabulary`のfixed-sizeかつversionedなvocabularyとして追加した。
+意味契約の正本は[Model-facing action vocabulary](action-vocabulary.md)である。
+
+```text
+semantic identity
+    = InternalAction dataclass value equality
+
+model action index
+    = versioned adapter representation
+```
+
+model action indexは本書のsemantic identityを置換しない。次のいずれとしても
+扱わない。
+
+- Action identityの正本または代替canonical key
+- 麻雀上の合法性の根拠
+- `DecisionContext.legal_actions`のtuple index
+- 永続的なAction ID
+
+indexは`InternalAction`のsemantic fieldだけから導出し、Python object identity、
+Python hash値、候補の並び順、外部engineのphysical tile IDを使用しない。`actor`は
+indexへ含めず、decode時のcontext（`DecisionContext.input.self_seat`）から復元
+する。`target`と`from_seat`はactor相対位置としてencodeし、`ChiAction.target`は
+値不変条件により常にactorの上家であるためcontextから復元する。
+
+indexからActionへ戻す`resolve_legal_action()`は、同じdecisionの`legal_actions`側の
+canonical `InternalAction` objectを返す。equalな別objectやfallback Actionを返さ
+ない。Policy実装はresolveしたActionをそのまま返し、既存の`execute_policy()`の
+validationを迂回しない。
+
+```text
+DecisionContext
+    -> fixed-size legal mask
+    -> model-selected action index
+    -> canonical legal InternalAction
+    -> execute_policy() の既存validation
+```
+
+赤牌構成、`tsumogiri`、Chiの`consumed_tiles`、Pon / Kanのconsumed multisetといった
+本書のsemantic distinctionは、vocabulary上でも別indexとして保持する。encodeでき
+ない値、同一decision内で衝突するindex、mask上illegalなindex、unsupported version
+はいずれもfail closedとする。
 
 ## 検証境界とtest観点
 
