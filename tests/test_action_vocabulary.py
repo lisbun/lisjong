@@ -1,3 +1,4 @@
+import hashlib
 import inspect
 import unittest
 
@@ -43,6 +44,116 @@ from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
 
 UNSUPPORTED_VERSION = "lisjong-action-vocabulary-0"
+
+# version -> 全indexのcanonical semanticsのfingerprint。
+#
+# vocabularyのnumeric assignmentは同じversion内でstableでなければならない。
+# size、block range、bijectionだけを検証しても、block内の列挙順（tile順、
+# tsumogiriの順、赤牌構成の順等）の入れ替えは検出できず、同じversionのweightsが
+# 別Actionへdecodeされる。fingerprintはindexごとの意味を実装のkey表現とは独立に
+# 文字列化して固定するため、意味が動けば必ずここが失敗する。
+#
+# 意図的にlayoutを変更する場合は、`ACTION_VOCABULARY_VERSION`を更新したうえで、
+# 新しいversionのfingerprintをこの表へ追加する（既存entryは書き換えない）。
+_VOCABULARY_FINGERPRINTS = {
+    "lisjong-action-vocabulary-1": "543c6bca832069dd88b22554b8546ddcd958840a7be7ed291b4ebab6302d7952",
+}
+
+# 各blockの先頭 / 末尾indexの意味。fingerprintが人手で追跡できないため、
+# layout変更時に何が動いたかを読めるanchorとして併記する。
+_PINNED_BLOCK_BOUNDARIES = {
+    0: "DiscardAction tile=manzu1 tsumogiri=False",
+    73: "DiscardAction tile=honor7 tsumogiri=True",
+    74: "RiichiAction",
+    75: "ChiAction target=+3 called=manzu1 consumed=manzu2,manzu3",
+    164: "ChiAction target=+3 called=souzu9 consumed=souzu7,souzu8",
+    165: "PonAction target=+1 called=manzu1 consumed=manzu1,manzu1",
+    311: "PonAction target=+3 called=honor7 consumed=honor7,honor7",
+    312: "DaiminkanAction target=+1 called=manzu1 consumed=manzu1,manzu1,manzu1",
+    476: "DaiminkanAction target=+3 called=honor7 consumed=honor7,honor7,honor7",
+    477: "AnkanAction tiles=manzu1,manzu1,manzu1,manzu1",
+    522: "AnkanAction tiles=honor7,honor7,honor7,honor7",
+    523: "KakanAction added=manzu1 from=+1 called=manzu1",
+    651: "KakanAction added=honor7 from=+3 called=honor7",
+    652: "RonAction target=+1 winning=manzu1",
+    762: "RonAction target=+3 winning=honor7",
+    763: "TsumoAction winning=manzu1",
+    799: "TsumoAction winning=honor7",
+    800: "PassAction",
+    801: "KyuushuKyuuhaiAction",
+}
+
+_TILE_CATEGORY_NAMES = {
+    TileCategory.MANZU: "manzu",
+    TileCategory.PINZU: "pinzu",
+    TileCategory.SOUZU: "souzu",
+    TileCategory.HONOR: "honor",
+}
+
+
+def _tile_text(tile: Tile) -> str:
+    return (
+        f"{_TILE_CATEGORY_NAMES[tile.tile_type.category]}"
+        f"{tile.tile_type.rank}"
+        f"{'r' if tile.is_red else ''}"
+    )
+
+
+def _tiles_text(tiles: tuple[Tile, ...]) -> str:
+    return ",".join(_tile_text(tile) for tile in tiles)
+
+
+def _relative_text(actor: Seat, other: Seat) -> str:
+    return f"+{(int(other) - int(actor)) % 4}"
+
+
+def _describe_action(action: InternalAction) -> str:
+    """Actionのcanonical semanticsを、実装のkey表現とは独立に文字列化する。
+
+    codecの内部key（`_action_key()`）を再利用しないことが重要である。実装側の
+    表現をそのまま使うと、列挙順の入れ替えをfingerprintで検出できなくなる。
+    """
+    actor = action.actor
+    name = type(action).__name__
+    if isinstance(action, DiscardAction):
+        return f"{name} tile={_tile_text(action.tile)} tsumogiri={action.tsumogiri}"
+    if isinstance(action, (ChiAction, PonAction, DaiminkanAction)):
+        return (
+            f"{name} target={_relative_text(actor, action.target)} "
+            f"called={_tile_text(action.called_tile)} "
+            f"consumed={_tiles_text(action.consumed_tiles)}"
+        )
+    if isinstance(action, AnkanAction):
+        return f"{name} tiles={_tiles_text(action.tiles)}"
+    if isinstance(action, KakanAction):
+        return (
+            f"{name} added={_tile_text(action.added_tile)} "
+            f"from={_relative_text(actor, action.from_seat)} "
+            f"called={_tile_text(action.called_tile)}"
+        )
+    if isinstance(action, RonAction):
+        return (
+            f"{name} target={_relative_text(actor, action.target)} "
+            f"winning={_tile_text(action.winning_tile)}"
+        )
+    if isinstance(action, TsumoAction):
+        return f"{name} winning={_tile_text(action.winning_tile)}"
+    if isinstance(action, (RiichiAction, PassAction, KyuushuKyuuhaiAction)):
+        return name
+    raise AssertionError(f"unhandled action variant: {name}")
+
+
+def _index_semantics() -> tuple[str, ...]:
+    """index順のcanonical semantics行を返す。"""
+    return tuple(
+        f"{index}\t{_describe_action(decode_action(index, Seat.SEAT_0))}"
+        for index in range(ACTION_VOCABULARY_SIZE)
+    )
+
+
+def _vocabulary_fingerprint() -> str:
+    payload = "\n".join(_index_semantics()).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _manzu(rank: int, *, red: bool = False) -> Tile:
@@ -140,6 +251,14 @@ def _sample_actions(actor: Seat = Seat.SEAT_0) -> tuple[InternalAction, ...]:
     )
 
 
+class _DerivedDiscardAction(DiscardAction):
+    """`InternalAction` variantのsubclass。encode対象として受理してはならない。"""
+
+
+class _DerivedPassAction(PassAction):
+    """field追加を伴わないsubclassでも、base variantとは別の型である。"""
+
+
 class VocabularyIdentityTest(unittest.TestCase):
     def test_version_identity_and_fixed_size(self) -> None:
         self.assertEqual(ACTION_VOCABULARY_VERSION, "lisjong-action-vocabulary-1")
@@ -162,6 +281,46 @@ class VocabularyIdentityTest(unittest.TestCase):
                 KyuushuKyuuhaiAction: range(801, 802),
             },
         )
+
+    def test_numeric_assignment_is_pinned_for_this_version(self) -> None:
+        """同じversion内でindexの意味が動いていないことを固定する。
+
+        size、block range、bijectionだけではblock内の列挙順の入れ替えを検出
+        できず、同じversionのweightsが別Actionへdecodeされ得る。
+        """
+        expected = _VOCABULARY_FINGERPRINTS.get(ACTION_VOCABULARY_VERSION)
+
+        self.assertIsNotNone(
+            expected,
+            f"{ACTION_VOCABULARY_VERSION} のfingerprintが未登録である。"
+            "vocabularyのlayoutを変更した場合は、新しいversion文字列と"
+            "そのfingerprintを_VOCABULARY_FINGERPRINTSへ追加する。",
+        )
+        self.assertEqual(
+            _vocabulary_fingerprint(),
+            expected,
+            f"{ACTION_VOCABULARY_VERSION} のindex semanticsが変化している。"
+            "互換性を壊す変更なら ACTION_VOCABULARY_VERSION を更新し、"
+            "新しいversionのfingerprintを追加する（既存entryは書き換えない）。",
+        )
+
+    def test_pinned_block_boundary_semantics(self) -> None:
+        boundaries: set[int] = set()
+        for block in ACTION_VOCABULARY_BLOCKS.values():
+            boundaries.update({block.start, block.stop - 1})
+
+        self.assertEqual(set(_PINNED_BLOCK_BOUNDARIES), boundaries)
+        for index, description in _PINNED_BLOCK_BOUNDARIES.items():
+            with self.subTest(index=index):
+                self.assertEqual(
+                    _describe_action(decode_action(index, Seat.SEAT_0)), description
+                )
+
+    def test_index_semantics_are_stated_once_per_index(self) -> None:
+        semantics = _index_semantics()
+
+        self.assertEqual(len(semantics), ACTION_VOCABULARY_SIZE)
+        self.assertEqual(len(set(semantics)), ACTION_VOCABULARY_SIZE)
 
     def test_blocks_partition_the_whole_index_space(self) -> None:
         covered: list[int] = []
@@ -461,6 +620,32 @@ class EncodeDecodeVariantTest(unittest.TestCase):
             self.assertEqual(decode_action(index, Seat.SEAT_0), action)
             self.assertEqual(len(ACTION_VOCABULARY_BLOCKS[type(action)]), 1)
 
+    def test_encode_rejects_action_subclasses(self) -> None:
+        """subclassはbase variantのsemantic fieldしか表現できないため拒否する。
+
+        `DecisionContext`はsubclass instanceを受理するが、vocabularyはbase
+        variantしかdecodeできない。encodeを許すとdecode結果が元の値と一致せず、
+        semantic distinctionをsilentに失う。
+        """
+        derived_discard = _DerivedDiscardAction(
+            actor=Seat.SEAT_0, tile=_manzu(5), tsumogiri=False
+        )
+        derived_pass = _DerivedPassAction(actor=Seat.SEAT_0)
+
+        for action in (derived_discard, derived_pass):
+            with self.subTest(variant=type(action).__name__):
+                with self.assertRaises(ActionEncodingError):
+                    encode_action(action)
+
+    def test_decode_returns_the_base_variant_type(self) -> None:
+        base = DiscardAction(actor=Seat.SEAT_0, tile=_manzu(5), tsumogiri=False)
+        index = encode_action(base)
+
+        decoded = decode_action(index, Seat.SEAT_0)
+
+        self.assertIs(type(decoded), DiscardAction)
+        self.assertEqual(decoded, base)
+
     def test_encode_rejects_non_internal_action(self) -> None:
         for value in (None, "discard", 0, object()):
             with self.subTest(value=value):
@@ -645,6 +830,20 @@ class LegalMaskTest(unittest.TestCase):
                     resolve_legal_action(0, value)
                 with self.assertRaises(TypeError):
                     encode_legal_actions(value)
+
+    def test_action_subclasses_in_legal_actions_fail_closed(self) -> None:
+        """`DecisionContext`が受理するsubclassも、mask / resolveで拒否する。"""
+        decision = _decision(
+            _DerivedDiscardAction(actor=Seat.SEAT_0, tile=_manzu(5), tsumogiri=False),
+            PassAction(actor=Seat.SEAT_0),
+        )
+
+        with self.assertRaises(ActionEncodingError):
+            encode_legal_actions(decision)
+        with self.assertRaises(ActionEncodingError):
+            build_legal_action_mask(decision)
+        with self.assertRaises(ActionEncodingError):
+            resolve_legal_action(encode_action(PassAction(actor=Seat.SEAT_0)), decision)
 
     def test_colliding_legal_actions_fail_closed(self) -> None:
         """同一indexへ衝突するlegal actionsは、どちらも採用せず拒否する。

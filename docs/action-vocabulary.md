@@ -69,9 +69,27 @@ version identityは、vocabularyの意味とnumeric assignmentの組を表す。
 - 扱うAction variantの集合
 - context復元に使うfieldの取り決め
 
-同じversionの範囲では、numeric assignmentはstableである。後続のmodel artifactは
-weightsと同じ場所へこのversionを記録し、読み込み時に照合する。artifact format
-そのものは本書で確定しない。
+同じversionの範囲では、numeric assignmentはstableである。size、block range、
+bijectionの検証だけではblock内の列挙順（tile順、`tsumogiri`の順、赤牌構成の順
+など）の入れ替えを検出できず、同じversionのweightsが別Actionへdecodeされ得る。
+そのためtestは、全indexのcanonical semanticsから生成したfingerprintを
+`version -> fingerprint`のliteralとして固定する。
+
+```text
+_VOCABULARY_FINGERPRINTS = {
+    "lisjong-action-vocabulary-1":
+        "543c6bca832069dd88b22554b8546ddcd958840a7be7ed291b4ebab6302d7952",
+}
+```
+
+fingerprintはindexごとの意味を、実装内部のkey表現とは独立に文字列化して
+sha256したものである。layoutや列挙順を変更するとversionを更新しない限りCIが
+失敗する。意図的な変更では`ACTION_VOCABULARY_VERSION`を更新し、新しいversionの
+fingerprintを追加する（既存entryは書き換えない）。各blockの先頭 / 末尾indexの
+意味も、変更内容を人手で追跡できるanchorとして併記する。
+
+後続のmodel artifactはweightsと同じ場所へこのversionを記録し、読み込み時に
+照合する。artifact formatそのものは本書で確定しない。
 
 ## Index layout
 
@@ -230,8 +248,9 @@ object identity、Python hash値、`legal_actions`の並び順、外部engineの
 tile IDは使用しない。`actor`を含めないため、同じsemantic操作はactorによらず同じ
 indexになる。
 
-Action値不変条件を満たす`InternalAction`は、すべて損失なくencodeできる。encode
-できない値はfail closedとし、近いindexやfallbackへ丸めない。
+Action値不変条件を満たす11 variantのexact typeは、すべて損失なくencodeできる。
+variantのsubclassを含め、encodeできない値はfail closedとし、近いindexやfallback
+へ丸めない。
 
 ### Decode
 
@@ -268,15 +287,24 @@ codecとmaskは`DecisionContext.legal_actions`と`input.self_seat`だけを読�
 | 条件 | 例外 |
 | --- | --- |
 | 未対応のvocabulary version | `UnsupportedActionVocabularyVersionError` |
-| `InternalAction`でない値、または損失なくencodeできない値 | `ActionEncodingError` |
-| int以外のindex、actorがSeatでない、decisionが`DecisionContext`でない | `TypeError` |
+| 11 variantのexact typeでない値（subclassを含む）、または損失なくencodeできない値 | `ActionEncodingError` |
 | vocabulary範囲外のindex | `ActionIndexError` |
 | vocabulary上は有効だが当該decisionでlegalでないindex（mask上illegal） | `IllegalActionIndexError` |
 | 同一decision内で複数legal actionsが同じindexへ衝突 | `ActionIndexCollisionError` |
+| int以外のindex、`Seat`でないactor、`DecisionContext`でないdecision | `TypeError` |
 
-いずれも`ActionVocabularyError`を基底とする。`lisjong.policy_contract`の
-`PolicyActionValidationError`とは別の階層とし、`execute_policy()`のsignature、
+上表のうち、`ActionVocabularyError`を基底に持つのはこのpackageが定義する5つの
+例外である。引数の型不正はPython標準の`TypeError`とし、`ActionVocabularyError`
+階層へは含めない。いずれも`lisjong.policy_contract`の
+`PolicyActionValidationError`とは別であり、`execute_policy()`のsignature、
 validation、例外semanticsを変更しない。
+
+`InternalAction` variantのsubclassは`isinstance`上variantに一致するが、
+vocabularyはbase variantのsemantic fieldしか表現できず、decodeもbase variantを
+返す。subclassをencodeすると`decode(encode(a)) != a`となりsemantic distinctionを
+silentに失うため、encodeはexact typeで判定してfail closedとする
+（`DecisionContext`自体はsubclassを受理するため、maskとresolveも同じ地点で
+拒否する）。
 
 versionの検証は他の検証より先に行う。unsupported versionの下でindex範囲や
 legalityの判断を行わない。
@@ -291,6 +319,8 @@ collision検出はdefensive guardとして残し、衝突時にどちらかのAc
 
 - vocabulary version identityと総size
 - documented index layoutとblockが`range(0, 802)`を分割すること
+- `version -> fingerprint`のliteral固定（同じversion内でindexの意味が動かないこと）と、
+  block境界indexの意味のliteral固定
 - 全indexの機械的検査（decode → encode round-trip、alias / hole / range重複の不在、
   decode結果が自分のvariant blockへ収まること）
 - 11 variantすべてのencode / decode
@@ -305,7 +335,7 @@ collision検出はdefensive guardとして残し、衝突時にどちらかのAc
 - maskのtrue index集合とencoded legal action集合の完全一致
 - `legal_actions` permutationへの非依存、`PolicyInput`内容への非依存
 - out-of-range index、非int index、mask上illegalなindex、unsupported version、
-  collisionのfail closed
+  collision、variant subclassのfail closed
 - `execute_policy()`のsignatureとcanonical action返却が変わらないこと
 
 ## 引き続き未確定の事項

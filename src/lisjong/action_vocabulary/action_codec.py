@@ -140,6 +140,25 @@ def _chi_contains_five(low_rank: int) -> bool:
     return low_rank <= 5 <= low_rank + 2
 
 
+# encode可能なAction variantのexact type集合。`lisjong.policy_contract.action`の
+# 11 variantと一致させる。subclassはここへ含めず、encode時にfail closedとする。
+_ENCODABLE_VARIANTS = frozenset(
+    {
+        DiscardAction,
+        RiichiAction,
+        ChiAction,
+        PonAction,
+        DaiminkanAction,
+        AnkanAction,
+        KakanAction,
+        RonAction,
+        TsumoAction,
+        PassAction,
+        KyuushuKyuuhaiAction,
+    }
+)
+
+
 def _build_vocabulary_keys() -> tuple[_VocabularyKey, ...]:
     """vocabulary index順のcanonical key列を構築する。
 
@@ -341,8 +360,26 @@ def _called_meld_key(
     )
 
 
+def _require_encodable_variant(action: object) -> None:
+    """encode対象が11 variantのexact typeであることを検証する。
+
+    `isinstance`ではなくexact typeで判定する。`InternalAction` variantの
+    subclassは、subclass固有のstateやequality semanticsを持ち得る一方、
+    vocabularyはbase variantのsemantic fieldしか表現できない。subclassを
+    encodeすると、decodeがbase variantを返してsemantic distinctionを失うため、
+    silentにlossyなencodeを行わずfail closedとする。
+    """
+    if type(action) not in _ENCODABLE_VARIANTS:
+        raise ActionEncodingError(
+            "action must be exactly one of the 11 InternalAction variants; "
+            f"got {type(action).__name__} instead"
+        )
+
+
 def _action_key(action: object) -> _VocabularyKey:
     """InternalActionをvocabulary keyへ正規化する。actorは含めない。"""
+    _require_encodable_variant(action)
+
     match action:
         case DiscardAction():
             return (DiscardAction, _tile_index(action.tile), action.tsumogiri)
@@ -380,7 +417,7 @@ def _action_key(action: object) -> _VocabularyKey:
             return (PassAction,)
         case KyuushuKyuuhaiAction():
             return (KyuushuKyuuhaiAction,)
-        case _:
+        case _:  # pragma: no cover - _require_encodable_variant()が先に拒否する
             raise ActionEncodingError(
                 f"action must be an InternalAction; got {type(action).__name__} instead"
             )
