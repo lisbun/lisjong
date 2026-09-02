@@ -13,6 +13,8 @@ Policyが選択する`InternalAction`のvariant、field、意味契約は、
 [内部Actionモデル](internal-action-model.md)を正本とする。
 `InternalAction`のsemantic identity、外部候補の集約、decision-local mappingは
 [Action identity](action-identity.md)を正本とする。
+learned Policy向けのfixed-size action vocabulary、codec、legal maskは
+[Model-facing action vocabulary](action-vocabulary.md)を正本とする。
 
 本書の非空な合法手集合等の条件はlisjongの設計判断である。特に、
 RiichiEnvの`legal_actions()`が常に1件以上を返すことを確認済みという意味では
@@ -141,6 +143,46 @@ semantic identityと共通の照合原則は
 [Action identity](action-identity.md)で定める。RiichiLabの実際の
 `possible_actions`との具体的なtranslation、serialization、照合規則には
 未実測事項があるため、引き続き確定しない。
+
+## Model-facing action vocabularyとの関係
+
+learned Policyは固定長のaction出力を持つため、`InternalAction`と固定長vector上の
+numeric indexを対応付ける表現を必要とする。Issue #149で追加した
+`lisjong.action_vocabulary`は、その対応付けだけを所有するoptionalなadapter層で
+あり、本書のPolicy契約を変更しない。意味契約の正本は
+[Model-facing action vocabulary](action-vocabulary.md)である。
+
+```text
+semantic identity
+    = InternalAction dataclass value equality
+
+model action index
+    = versioned adapter representation
+```
+
+- `Policy`の`choose_action()`は引き続き`InternalAction`を返す。model action index
+  を返すPolicy interfaceは追加しない
+- model action indexは新しいAction identityではなく、合法性の根拠でもなく、
+  `legal_actions`のtuple indexでもない
+- `resolve_legal_action()`は同じdecisionの`legal_actions`側のcanonical
+  `InternalAction` objectを返す。Policy実装はそれをそのまま返し、
+  `execute_policy()`のvalidationを迂回しない
+- `execute_policy()`のsignature、validation、例外semanticsは変更しない。
+  vocabularyのfail closedは`ActionVocabularyError`階層で表し、
+  `PolicyActionValidationError`のsemanticsを変更しない
+- codecとlegal maskは`DecisionContext.legal_actions`と`input.self_seat`だけを
+  読む。`PolicyInput` / `DecisionContext`へ新しい情報を追加しない
+
+```text
+DecisionContext
+    -> fixed-size legal mask
+    -> model-selected action index
+    -> canonical legal InternalAction
+    -> execute_policy() の既存validation
+```
+
+feature encoder、tensor schema、HandBelief consumer seam、model architecture、
+trainingは後続Issueで扱い、本書とvocabulary contractへ先行して固定しない。
 
 ## DecisionTrace / AnalysisTrace
 
@@ -465,6 +507,9 @@ RunnerおよびClientが勝手に次へ置換して外部へ送信すること�
   Policy runtimeのmutable stateを保持しない
 - `execute_policy_with_trace()`はopt-in APIとし、`execute_policy()`と同じprivate
   validation pathだけを共有する
+- learned Policy向けのmodel-facing action vocabularyは、`policy_contract`ではなく
+  `lisjong.action_vocabulary`が所有する。`policy_contract`側の型、`execute_policy()`
+  のvalidation、例外semanticsは変更しない
 
 ## 引き続き未確定の項目
 
