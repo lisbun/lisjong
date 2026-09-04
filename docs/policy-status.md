@@ -67,6 +67,49 @@ mappingは`lisjong-arena`が所有し、strength statusとは独立に変更・�
 deprecation、runtime profile assignmentを表さない。implementation時のmodule / class docstringに
 `experimental`とある場合も、current strength roleは本書のsnapshotを参照する。
 
+## Training coverage source Policy (not part of the strength hierarchy)
+
+`lisjong #151`は、`lisjong-arena #131`のHandBelief Stage 3 Entry Gate pilotが
+daiminkan / ankan / kakan / rinshan_drawを1件も観測しなかったcoverage holeへの
+対応として、次のPolicyを追加した。
+
+| Field | Value |
+| --- | --- |
+| Implementation class | `KanCoverageYakuhaiCallPolicy` |
+| Public import reference | `lisjong.policies.kan_coverage_yakuhai_call:KanCoverageYakuhaiCallPolicy` |
+| Arena identity | — (Arena `POLICY_CATALOG`未登録。explicit import referenceで利用する) |
+| Role | HandBelief / experiment **training coverage source**。current strength baselineでも、strength hierarchy上のcomparatorでもない |
+
+```text
+kan-capable coverage source
+!= stronger Policy
+!= current strength baseline
+!= production recommendation
+```
+
+selection semanticsは次の優先順位で固定する。
+
+```text
+1. RonAction / TsumoAction        (winning action)
+2. DaiminkanAction / AnkanAction / KakanAction  (legal kan action、種別を問わない)
+3. delegated normal-play decision (yakuhai-call: YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy)
+```
+
+合法性は常に`DecisionContext.legal_actions`を正本とし、Policy側でkan legality
+（riichi後ankan等を含む）を再判定しない。複数kan候補が同時にlegalな場合は、
+semantic fieldだけから作るdeterministic total orderで1件を選ぶ。kan種別間の
+固定順序（`daiminkan < ankan < kakan`）はdeterminismを固定するimplementation
+choiceであり、麻雀上の優劣を意味しない。
+
+winning actionもkanも無いdecisionは、既存`yakuhai-call`
+（`YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy`）へ
+compositionでdelegateする。delegate instanceは構築時に1回だけ生成し、既存
+`yakuhai-call` / `MinimalPolicy`のclass自体のsemanticsは変更していない。
+
+本Policyの追加だけでは「kan / rinshan coverageが十分」とは結論しない。実際の
+daiminkan / ankan / kakan / rinshan frequencyとHandBelief training-sourceとして
+のcoverage adequacyは、後続の`lisjong-arena`側bounded pilotで測定する。
+
 ## Representative evidence
 
 代表的なdecision / evidenceだけを案内する。数値と完全な経緯はlink先のhistorical recordに残す。
