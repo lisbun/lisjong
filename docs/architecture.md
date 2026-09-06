@@ -333,10 +333,12 @@ Policy入力の具体field / canonicalization / invariantsは[Policy入力の最
 重要なのはbackendではなくsemantic contractである。
 
 - general public APIはvalidated `Tile` inputを使う
+- 和了形 = `-1`、聴牌 = `0`というnumeric shanten semanticsを維持する
+- standard / 七対子 / 国士無双をcurrent contractに従って評価し、Policy moduleごとに別semanticを再実装しない
 - package-internal optimized pathを追加しても新しいshanten semanticsを作らない
 - lookup / native / cache等のbackend optimizationで結果semanticを変えない
 - fail closedなinput validationを維持する
-- Policy側でshanten semanticsを再実装しない
+- count-native hot pathやpackage-internal predicateは一般public APIへ自動昇格させない
 
 具体的backend / lookup artifactはimplementation detailとして扱う。
 
@@ -357,11 +359,16 @@ Policy入力の具体field / canonicalization / invariantsは[Policy入力の最
 - structural wait belief
 - exact wait ground-truth builder for offline validation
 
+current representationでは、player axisはWind semanticsを明示的に扱い、expected-count / probabilityはcanonical fixed-point domainを使う。storage表現をconsumer側semanticへ漏らさず、semantic accessorを優先する。
+
 重要なsemantic boundary:
 
 ```text
 remaining tile inventory
 != live wall
+
+HandBelief marginal set
+!= full joint posterior
 
 structural wait
 != ron-legal wait
@@ -370,7 +377,11 @@ structural wait
 != game EV
 ```
 
-belief representationはposteriorの完全なjoint distributionや十分統計量であるとは仮定しない。
+`remaining tile inventory`は、exact accounted public / self informationをstandard physical inventoryから差し引いた残余であり、他家concealed / live wall / dead wall等のlocation posteriorを意味しない。
+
+conditional-uniform baselineは、exact観測で条件付けたremaining physical tilesがremaining hidden slotsへexchangeableに配置されているというmodel assumptionを使う。これはground truthではない。
+
+wait beliefでは`None = feature unavailable`と`all-zero = estimatorがzeroと評価`を区別する。mechanism channelはmulti-labelであり、単純sumからjoint distributionを復元できるとは仮定しない。
 
 exact / player-safe informationとlearned uncertaintyを混同しない。physical conservationを壊すbeliefを黙って正常値として扱わない。
 
@@ -394,7 +405,24 @@ model action indexは麻雀上の合法性の根拠ではない。`DecisionConte
 
 Policy世代ごとのhistorical design詳細やcurrent strength roleをarchitectureへ重複せず、[Policy current status](policy-status.md)を参照する。
 
-新Policyは、既存stable semanticsをreuseし、experimentで必要になっただけのgeneric abstractionをproduction coreへ先行追加しない。
+ただし、stable consumerが誤解しやすいalgorithmic semanticsはowner側で維持する。
+
+### Finite-horizon structural completion semantics
+
+finite-horizon completion系Policyが扱う値は、
+
+```text
+k個のfuture self-draw slotsが存在すると条件付けた
+conditional-uniform structural hand-completion value
+```
+
+であり、実対局で「k巡以内に和了する確率」ではない。
+
+他家和了、流局、future call / riichi legality、実際に残るself-draw回数等を同じ値へ暗黙に混ぜない。remaining inventoryをlive wallとして扱わない。
+
+selectionでexact integer completion massを使う実装は、float probabilityを新しいcanonical semanticへしない。optimization / pruningはselection semanticを変えないexact-safe reductionに限定する。
+
+新Policyは既存stable semanticsをreuseし、experimentで必要になっただけのgeneric abstractionをproduction coreへ先行追加しない。
 
 ---
 
@@ -418,6 +446,12 @@ AnalysisTrace      -> lisjong
 concrete analysis payloadの意味は各AI domain value / Policy implementationが所有し、`AnalysisTrace` root contractがshanten / ukeire / value / defense等を再定義しない。
 
 free-form natural-language reasoningや`dict[str, object]`をcanonical AI semanticsとして固定しない。
+
+trace取得のためにPolicyを二重実行せず、traced / untraced executionでsemantic selected Actionを変えない。`DecisionTrace.selected_action`はvalidation後のcanonical legal `InternalAction`を表す。
+
+`analysis=None`は「analysisを生成していない」を意味し、評価値zeroやempty evaluationへ流用しない。
+
+Policy exception / Action validation failure時に成功したDecisionTraceを偽装しない。observer / sinkの存在をPolicy-visible inputへ入れない。
 
 Arenaは`DecisionTrace` / `AnalysisTrace`をtransport / persistできるが、payload semanticsを再定義しない。
 
