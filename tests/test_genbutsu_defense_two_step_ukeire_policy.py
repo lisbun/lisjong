@@ -507,7 +507,7 @@ class ThreatIdentityAndDeterminismTest(unittest.TestCase):
 
 
 class PublicGenerationAndScopeTest(unittest.TestCase):
-    def test_all_eleven_policy_generations_are_public(self) -> None:
+    def test_all_twelve_policy_generations_are_public(self) -> None:
         import lisjong.policies as policies
 
         self.assertEqual(
@@ -519,6 +519,7 @@ class PublicGenerationAndScopeTest(unittest.TestCase):
                 "GenbutsuDefenseTwoStepUkeirePolicy",
                 "HandValueAwareTwoStepUkeirePolicy",
                 "MinimalPolicy",
+                "OpenHandYakuAwareCallPolicy",
                 "ShantenPolicy",
                 "TwoStepUkeirePolicy",
                 "UkeirePolicy",

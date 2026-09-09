@@ -204,13 +204,8 @@ def _retained_real_value(
     return dora_value + yakuhai_value
 
 
-def _yaku_route_value(
-    post_discard_hand: Sequence[Tile], melds: Sequence[PublicMeld]
-) -> int:
-    """tanyao / honitsu / chinitsu compatibilityの軽量heuristicを返す。"""
-    tiles = tuple(post_discard_hand) + tuple(
-        tile for meld in melds for tile in meld.tiles
-    )
+def _yaku_route_value_for_tiles(tiles: Sequence[Tile]) -> int:
+    """全自牌のtanyao / honitsu / chinitsu compatibility値を返す。"""
     if not tiles:
         return 0
 
@@ -233,6 +228,15 @@ def _yaku_route_value(
         else:
             value += 3
     return value
+
+
+def _yaku_route_value(
+    post_discard_hand: Sequence[Tile], melds: Sequence[PublicMeld]
+) -> int:
+    """tanyao / honitsu / chinitsu compatibilityの軽量heuristicを返す。"""
+    return _yaku_route_value_for_tiles(
+        tuple(post_discard_hand) + tuple(tile for meld in melds for tile in meld.tiles)
+    )
 
 
 def _evaluate_and_choose_discard(
