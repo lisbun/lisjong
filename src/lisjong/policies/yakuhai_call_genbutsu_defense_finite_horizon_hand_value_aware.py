@@ -131,18 +131,25 @@ def _best_post_call_shanten(
     concealed_tiles: Sequence[Tile], action: _CallAction
 ) -> int | None:
     """call後に許されるmandatory discardを行ったstable stateの最小向聴数。"""
+    stable_hands = _post_call_stable_hands(concealed_tiles, action)
+    if not stable_hands:
+        return None
+    return min(calculate_shanten(stable_hand) for stable_hand in stable_hands)
+
+
+def _post_call_stable_hands(
+    concealed_tiles: Sequence[Tile], action: _CallAction
+) -> tuple[tuple[Tile, ...], ...]:
+    """exact consumeとcurrent kuikaeを適用したmandatory-discard後の手牌群。"""
     post_call_tiles = _remove_exact_consumed_tiles(
         concealed_tiles, action.consumed_tiles
     )
     forbidden_types = _kuikae_forbidden_tile_types(action)
-    candidate_shanten = tuple(
-        calculate_shanten([*post_call_tiles[:index], *post_call_tiles[index + 1 :]])
+    return tuple(
+        tuple((*post_call_tiles[:index], *post_call_tiles[index + 1 :]))
         for index, tile in enumerate(post_call_tiles)
         if tile.tile_type not in forbidden_types
     )
-    if not candidate_shanten:
-        return None
-    return min(candidate_shanten)
 
 
 def _call_action_sort_key(action: _CallAction) -> tuple[object, ...]:

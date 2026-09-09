@@ -14,6 +14,7 @@ from lisjong.policies.hand_value_aware_two_step_ukeire import (
     HandValueAwareTwoStepUkeirePolicy,
 )
 from lisjong.policies.minimal import MinimalPolicy
+from lisjong.policies.open_hand_yaku_aware_call import OpenHandYakuAwareCallPolicy
 from lisjong.policies.shanten import ShantenPolicy
 from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policies.ukeire import UkeirePolicy
@@ -29,6 +30,7 @@ __all__ = [
     "GenbutsuDefenseTwoStepUkeirePolicy",
     "HandValueAwareTwoStepUkeirePolicy",
     "MinimalPolicy",
+    "OpenHandYakuAwareCallPolicy",
     "ShantenPolicy",
     "TwoStepUkeirePolicy",
     "UkeirePolicy",
