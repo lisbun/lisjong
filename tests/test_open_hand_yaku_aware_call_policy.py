@@ -244,6 +244,36 @@ class RouteAndShantenRejectionTest(unittest.TestCase):
             PASS,
         )
 
+    def test_mixed_route_preserving_and_breaking_discards_reject_call(self) -> None:
+        concealed = _hand("34458m2348p266s6z")
+        stable_hands = _post_call_stable_hands(concealed, self.action)
+        new_meld_tiles = (*self.action.consumed_tiles, self.action.called_tile)
+        current_shanten = open_yaku_call.calculate_shanten(concealed)
+        stable_evaluations = tuple(
+            (
+                open_yaku_call.calculate_shanten(stable_hand),
+                _yaku_route_value_for_tiles((*stable_hand, *new_meld_tiles)),
+            )
+            for stable_hand in stable_hands
+        )
+
+        self.assertTrue(
+            any(
+                post_call_shanten < current_shanten and route_value > 0
+                for post_call_shanten, route_value in stable_evaluations
+            )
+        )
+        self.assertTrue(any(route_value == 0 for _, route_value in stable_evaluations))
+        self.assertIsNone(
+            open_yaku_call._route_compatible_post_call_shanten(
+                _input(concealed), self.action, current_shanten
+            )
+        )
+        self.assertIs(
+            self.policy.choose_action(_decision(concealed, (self.action, PASS))),
+            PASS,
+        )
+
     def test_two_terminals_prevent_tanyao_and_flush_routes(self) -> None:
         concealed = _hand("2234m12345p456s9s")
         with patch.object(open_yaku_call, "calculate_shanten") as shanten:

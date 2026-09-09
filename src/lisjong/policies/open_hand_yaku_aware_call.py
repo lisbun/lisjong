@@ -6,9 +6,10 @@ Issue #157のexperimental Policyとして、current strength baseline
 post-Yakuhai-open callはそのまま返し、明示的なPassだけを置換対象にする。
 
 役牌open前のChi / non-Yakuhai Ponは、baselineと同じdefense、exact consume、
-kuikae、concealed-triplet preservationを維持し、mandatory discard後の同じ
-stable handでstrict shanten improvementと既存HandValueAware由来のTanyao /
-Honitsu / Chinitsu compatibilityが同時に成立する場合だけ選べる。
+kuikae、concealed-triplet preservationを維持する。allowed mandatory discardの
+少なくとも1つでstrict shanten improvementし、かつ全stable handで既存
+HandValueAware由来のTanyao / Honitsu / Chinitsu compatibilityを保つ場合だけ
+選べる。
 
 Tanyao routeはcurrent first-party open-Tanyao rulesetへscopeを固定する。
 hypothetical discardは保存せず、actual next decisionではfresh legal_actionsを
@@ -47,26 +48,32 @@ def _route_compatible_post_call_shanten(
     action: _CallAction,
     current_shanten: int,
 ) -> int | None:
-    """routeを保ったstrictly-improving stable handの最小向聴数を返す。"""
+    """全stable handがrouteを保つcallのstrict improvementを返す。"""
     current_meld_tiles = tuple(
         tile for meld in _own_melds(policy_input) for tile in meld.tiles
     )
     new_meld_tiles = (*action.consumed_tiles, action.called_tile)
-    qualifying_shanten = tuple(
-        post_call_shanten
-        for stable_hand in _post_call_stable_hands(
-            policy_input.own_hand.concealed_tiles, action
-        )
-        for post_call_shanten in (calculate_shanten(stable_hand),)
-        if post_call_shanten < current_shanten
-        and _yaku_route_value_for_tiles(
+    stable_hands = _post_call_stable_hands(
+        policy_input.own_hand.concealed_tiles, action
+    )
+    if not stable_hands or any(
+        _yaku_route_value_for_tiles(
             (*stable_hand, *current_meld_tiles, *new_meld_tiles)
         )
-        > 0
-    )
-    if not qualifying_shanten:
+        == 0
+        for stable_hand in stable_hands
+    ):
         return None
-    return min(qualifying_shanten)
+
+    improving_shanten = tuple(
+        post_call_shanten
+        for stable_hand in stable_hands
+        for post_call_shanten in (calculate_shanten(stable_hand),)
+        if post_call_shanten < current_shanten
+    )
+    if not improving_shanten:
+        return None
+    return min(improving_shanten)
 
 
 def _qualifying_initial_open_yaku_calls(
