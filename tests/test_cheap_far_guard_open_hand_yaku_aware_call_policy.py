@@ -184,6 +184,15 @@ HONITSU_CHI_ACTION = _chi(MANZU_2, (MANZU_3, MANZU_4))
 HONITSU_PON_CONCEALED = _hand("112247789m1777z")
 HONITSU_PON_ACTION = _pon(MANZU_2)
 
+# TANYAO_CHI_CONCEALED also contains a concealed MANZU_2 pair, so the exact
+# same hand additionally qualifies a real cheap+far *Pon* of MANZU_2 (as
+# opposed to the Chi above). This pins the Pon side of the Required tests'
+# "selected cheap+far Pon -> legal Pass" case with real parent selection,
+# mirroring the Chi coverage above rather than only the boundary-level
+# `_evaluate_cheap_far_call()` unit tests.
+TANYAO_PON_FAR_CONCEALED = TANYAO_CHI_CONCEALED
+TANYAO_PON_FAR_ACTION = _pon(MANZU_2)
+
 
 class RealFixturePropertyTest(unittest.TestCase):
     """boundary/suppression testsが依拠する実手牌のshanten/valueを固定する。"""
@@ -229,6 +238,20 @@ class RealFixturePropertyTest(unittest.TestCase):
         )
         shantens = [cheap_far_guard.calculate_shanten(h) for h in stable_hands]
         self.assertLess(min(shantens), 2)
+
+    def test_tanyao_pon_far_is_two_shanten_and_one_han_equivalent(self) -> None:
+        stable_hands = cheap_far_guard._post_call_stable_hands(
+            TANYAO_PON_FAR_CONCEALED, TANYAO_PON_FAR_ACTION
+        )
+        shantens = [cheap_far_guard.calculate_shanten(h) for h in stable_hands]
+        values = [
+            cheap_far_guard._current_visible_value_proxy(
+                h, (), seat_wind_rank=1, round_wind_rank=2
+            )
+            for h in stable_hands
+        ]
+        self.assertGreaterEqual(min(shantens), 2)
+        self.assertLess(max(values), 3)
 
 
 class BaselinePreservationTest(unittest.TestCase):
@@ -295,6 +318,11 @@ class RealCallSuppressionTest(unittest.TestCase):
     def test_two_shanten_two_han_equivalent_chi_is_suppressed(self) -> None:
         decision = _decision(HONITSU_CHI_CONCEALED, (PASS, HONITSU_CHI_ACTION))
         self.assertIs(self.baseline.choose_action(decision), HONITSU_CHI_ACTION)
+        self.assertIs(self.policy.choose_action(decision), PASS)
+
+    def test_two_shanten_one_han_equivalent_pon_is_suppressed(self) -> None:
+        decision = _decision(TANYAO_PON_FAR_CONCEALED, (PASS, TANYAO_PON_FAR_ACTION))
+        self.assertIs(self.baseline.choose_action(decision), TANYAO_PON_FAR_ACTION)
         self.assertIs(self.policy.choose_action(decision), PASS)
 
     def test_zero_shanten_cheap_pon_is_not_suppressed(self) -> None:
