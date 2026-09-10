@@ -166,6 +166,10 @@ def is_direct_main_push(command: str, current_branch: str) -> bool:
         ):
             return True
 
+        # With no explicit refspec, git pushes the current branch according to
+        # push.default/upstream configuration. A default push from main must not
+        # be allowed to bypass the repository's no-direct-main-push policy.
+        # --tags without a refspec is tag-only and therefore does not update main.
         if not refspecs and current_branch == "main" and "--tags" not in args:
             return True
 
@@ -200,6 +204,7 @@ def _candidate_commit_paths(cwd: Path, command: str) -> list[str]:
     )
     candidates = set(staged)
 
+    tokens: list[str]
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError as exc:
@@ -256,7 +261,8 @@ def _guard_direct_main_push(command: str, cwd: Path) -> None:
     branch = _current_branch(cwd)
     if is_direct_main_push(command, branch):
         raise GuardError(
-            "Direct pushes that can update main are blocked. Push the Issue branch instead."
+            "Direct pushes that can update main are blocked. "
+            "Push the Issue branch instead."
         )
 
 
