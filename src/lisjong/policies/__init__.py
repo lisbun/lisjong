@@ -1,5 +1,8 @@
 """lisjongの具体Policy実装。"""
 
+from lisjong.policies.cheap_far_guard_open_hand_yaku_aware_call import (
+    CheapFarGuardOpenHandYakuAwareCallPolicy,
+)
 from lisjong.policies.finite_horizon_completion import FiniteHorizonCompletionPolicy
 from lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware import (
     GenbutsuDefenseFiniteHorizonHandValueAwarePolicy,
@@ -24,6 +27,7 @@ from lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aw
 )
 
 __all__ = [
+    "CheapFarGuardOpenHandYakuAwareCallPolicy",
     "FiniteHorizonCompletionPolicy",
     "GenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
     "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
