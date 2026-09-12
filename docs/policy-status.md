@@ -96,7 +96,8 @@ Current status:
 
 ```text
 implementation         COMPLETE / merged
-strength evaluation    Gate 2 CONFIRMED POSITIVE (Arena #216 / #217)
+Gate 1                 INCONCLUSIVE / Gate 2 eligible (Arena #216)
+Gate 2                 CONFIRMED POSITIVE (Arena #217)
 protocol scope         ABBB / 4p-red-single
 Arena curated alias     mechanism-riichi-defense (Arena #219)
 promotion               YES — protocol-scoped heuristic strength baseline
@@ -111,7 +112,7 @@ mean delta      +109.2
 
 この結果は `ABBB` / `4p-red-single` protocol に限定された評価であり、hanchan や他 protocol への一般化、production/runtime default 化、Champion 指定を含意しない。
 
-Current work: [lisjong #163](https://github.com/lisbun/lisjong/issues/163)
+Implementation / original hypothesis: [lisjong #163](https://github.com/lisbun/lisjong/issues/163)
 
 ## `KanCoverageYakuhaiCallPolicy` — training coverage role
 
