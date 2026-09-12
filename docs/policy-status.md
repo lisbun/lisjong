@@ -2,8 +2,7 @@
 
 ## Purpose
 
-本書は、`lisjong`が公開するPolicy implementationの**current role**を示すrepository-owned snapshotである。
-Policy strengthに関する情報は、次のownerへ分離する。
+本書は、`lisjong` が公開する Policy implementation の **current role** を示す repository-owned snapshot である。
 
 ```text
 lisjong Policy status
@@ -16,69 +15,78 @@ bounded GitHub Issue / PR
     = individual work / decision history
 ```
 
-本書はhistorical evaluation logではない。過去runの数値や採用・保留・棄却の全経緯を
-複製せず、current roleと代表的evidenceへのreferenceだけを保持する。Policy strengthを
-どのように比較するかは、Arena-ownedの
-[Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md)
-を正本とする。
+本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
 Snapshot date: **2026-09-12**
 
 ## Current strength baseline
-
-current strength baselineは次のPolicyである。
 
 | Field | Current value |
 | --- | --- |
 | Arena identity | `yakuhai-call` |
 | Implementation class | `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` |
 | Family | defense + finite-horizon + hand-value + conservative call |
-| Role | current overall-strength baseline |
+| Role | **current overall-strength baseline** |
 
-`yakuhai-call`は、fresh holdout comparisonで当時のbaseline `combined`を上回ったdecisionに基づき昇格した。
-current interpretationの根拠は
-[lisjong #121のGate 2 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5471486662)
-に残す。historical measurement数値は本書へ重複転記しない。
+`yakuhai-call` は fresh holdout comparison に基づいて昇格した current baseline である。Learned Policy、HandBelief、bounded heuristic candidate が存在しても、それだけで baseline は変更しない。promotion には purpose-appropriate な Arena evaluation と明示的な status update が必要である。
 
-current baselineはruntime profileへの自動配備を意味しない。RiichiLab等のexecution profile
-mappingは`lisjong-arena`が所有し、strength statusとは独立に変更・検証する。
-
-また、Learned PolicyやHandBelief experimentで別candidateが生成されても、bounded research resultだけで
-current strength baselineを自動更新しない。promotionにはpurpose-appropriateなArena evaluationと明示的な
-current-status更新が必要である。
+Runtime profile への配備は別責務であり、RiichiLab 等の execution profile mapping は `lisjong-arena` が所有する。
 
 ## Public Policy inventory
 
-`lisjong.policies`のpublic exportsを、current management roleとともに示す。
-`Arena identity`が`—`のPolicyは、public implementationではあるがcurrent Arena
-`single_round_compare` catalogへは登録されていない。
+`Arena identity` が `—` の Policy は public implementation ではあるが、current Arena `single_round_compare` curated catalog へ登録されていない場合がある。
 
-| Public Policy | Arena identity | Family | Current role | Major capabilities / runtime characteristics |
-| --- | --- | --- | --- | --- |
-| `MinimalPolicy` | — | deterministic contract baseline | foundational / boundary validation | legal actionをstable total orderで選ぶ。strengthを目的とせず、計算costは小さい |
-| `ShantenPolicy` | — | structural efficiency | foundational comparator | 向聴数中心のdiscard selection。打点・守備・lookaheadを扱わない |
-| `UkeirePolicy` | — | structural efficiency | foundational comparator | current ukeireを加えた局所的な牌効率。future lookaheadを扱わない |
-| `TwoStepUkeirePolicy` | `two-step` | structural efficiency | historical structural baseline / cheap comparator | shanten、current ukeire、second-step ukeireを順に比較。exact finite-horizon DPより軽量 |
-| `GenbutsuDefenseTwoStepUkeirePolicy` | — | structural efficiency + defense | component comparator | 非聴牌かつ被立直時に全リーチ者への共通現物を優先。generic risk / push-fold EVではない |
-| `ValueAwareTwoStepUkeirePolicy` | — | structural efficiency + lightweight value | component comparator | 公開dora indicator由来doraと赤ドラ保持をtie-breakへ追加。actual score / EVではない |
-| `HandValueAwareTwoStepUkeirePolicy` | `hand-value-aware` | structural efficiency + hand value heuristic | evaluated component candidate | 役牌・dora・赤dora・軽量yaku routeを同一shanten / ukeire候補内で比較。future branchはstructural semanticsを維持 |
-| `FiniteHorizonCompletionPolicy` | `finite-horizon` | exact finite-horizon structural search | component comparator | conditional 3-self-draw completion massをexact DPで比較。runtime costが高く、actual 3巡以内和了確率ではない |
-| `GenbutsuDefenseFiniteHorizonValueAwarePolicy` | `combined` | defense + finite-horizon + lightweight value | predecessor strength baseline / comparator | 共通現物constraint、exact finite-horizon DP、ValueAware fallbackを合成。`yakuhai-call`より前のbaseline |
-| `GenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `extended-combined` | defense + finite-horizon + hand value heuristic | no-call parent / historical causal comparator; not promoted | `combined`のvalue stageをHandValueAwareへ拡張。promotionせず、DP由来の高costを持つ |
-| `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `yakuhai-call` | defense + finite-horizon + hand value + conservative call | **current strength baseline** | no-call parentに役牌Pon起点のstrict shanten-improving callを追加。generic call EVではなく、DP由来の高costを持つ |
-| `MechanismRiichiDefenseYakuhaiCallPolicy` | — | yakuhai-call + mechanism-based riichi defense | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call`をparentとして、2向聴以上・被立直・common genbutsuなしだけを固定weightのrelative classical danger scoreでhard filter。calibrated放銃確率、learned HandBelief、one-chance段階weight、chiitoitsu / kokushi専用modelingではない |
-| `OpenHandYakuAwareCallPolicy` | — | yakuhai-call + bounded open-yaku call | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call`をbaselineとして、既存Tanyao / Honitsu / Chinitsu compatibilityを保つstrictly-improving initial Chi/Ponだけを追加。Tanyaoはcurrent first-party open-Tanyao rulesetに限定 |
-| `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | `OpenHandYakuAwareCallPolicy` + bounded cheap+far call guard | experimental strength candidate; not evaluated or promoted | exact `OpenHandYakuAwareCallPolicy`をbaselineとして、selected Chi/Ponがconservativeに`cheap AND far`（全allowed stable handsでshanten>=2かつcurrent visible value proxy<3han相当）と判定される場合だけlegal Passへ置換。alternate-call rescueなし。Issue #161のbounded hypothesis検証用 |
-| `KanCoverageYakuhaiCallPolicy` | — | deterministic coverage source | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | winning action > legal kan > `yakuhai-call` delegate。kan / rinshan trajectoryをtraining distributionへ供給する目的で使用 |
+| Public Policy | Arena identity | Current role | Notes |
+| --- | --- | --- | --- |
+| `MinimalPolicy` | — | foundational / boundary validation | deterministic total-order selector。strength 目的ではない |
+| `ShantenPolicy` | — | foundational comparator | shanten 中心 |
+| `UkeirePolicy` | — | foundational comparator | current ukeire を追加 |
+| `TwoStepUkeirePolicy` | `two-step` | historical structural baseline / cheap comparator | second-step ukeire まで比較 |
+| `GenbutsuDefenseTwoStepUkeirePolicy` | — | component comparator | 被立直時の共通現物優先 |
+| `ValueAwareTwoStepUkeirePolicy` | — | component comparator | lightweight value tie-break |
+| `HandValueAwareTwoStepUkeirePolicy` | `hand-value-aware` | evaluated component candidate | 役牌・dora・赤dora・軽量 yaku route |
+| `FiniteHorizonCompletionPolicy` | `finite-horizon` | component comparator | exact finite-horizon structural search。runtime cost が高い |
+| `GenbutsuDefenseFiniteHorizonValueAwarePolicy` | `combined` | predecessor strength baseline / comparator | `yakuhai-call` より前の baseline |
+| `GenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `extended-combined` | historical causal comparator; not promoted | hand-value 拡張。promotion なし |
+| `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `yakuhai-call` | **current strength baseline** | conservative Yakuhai call を追加 |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | — | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。#163のevaluation対象 |
+| `OpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | Tanyao / Honitsu / Chinitsu-compatible strictly-improving Chi/Pon を追加 |
+| `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | selected cheap+far Chi/Pon のみ Pass へ置換 |
+| `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
 
-ここでの`current role`はPolicy-strength / research management上の位置づけであり、public APIの安定性、
-deprecation、runtime profile assignmentを表さない。implementation時のmodule / class docstringに
-`experimental`とある場合も、current roleは本書のsnapshotを参照する。
+`current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。
 
-## Training coverage source Policy — current Stage 3 role
+## Recent bounded call-policy evidence
 
-`KanCoverageYakuhaiCallPolicy`は、HandBelief Stage 3 Entry Gateで確認されたkan / rinshan coverage holeへの
-対応として追加された、**strength改善を目的としないdeterministic first-party coverage source**である。
+### `OpenHandYakuAwareCallPolicy`
+
+Arena #196 の fresh bounded screen では `yakuhai-call` に対して **INCONCLUSIVE** だった。したがって、open-yaku call 拡張は baseline を置き換えていない。
+
+Representative reference: [Arena #196](https://github.com/lisbun/lisjong-arena/issues/196)
+
+### `CheapFarGuardOpenHandYakuAwareCallPolicy`
+
+`OpenHandYakuAwareCallPolicy` を exact parent とし、selected call が conservative に `cheap AND far` の場合だけ Pass へ置換する bounded hypothesis を検証した。
+
+Fresh 400-game screen の formal outcome は:
+
+```text
+CHEAP-FAR GUARD INCONCLUSIVE
+```
+
+positive mean direction は観測されたが locked 95% interval が zero を跨いだため、promotion も `yakuhai-call` との follow-up strength comparison も開始していない。
+
+Representative reference: [lisjong #161 final result](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134)
+
+## Current unevaluated strength candidate
+
+`MechanismRiichiDefenseYakuhaiCallPolicy` は current baseline `yakuhai-call` を parent とする bounded riichi-defense candidate である。implementationは存在するが、現時点では strength result は未確定であり promotion されていない。
+
+Current work: [lisjong #163](https://github.com/lisbun/lisjong/issues/163)
+
+## `KanCoverageYakuhaiCallPolicy` — training coverage role
+
+`KanCoverageYakuhaiCallPolicy` は strength 改善を目的としない HandBelief training-population source である。
 
 ```text
 kan-capable coverage source
@@ -87,41 +95,7 @@ kan-capable coverage source
 != production recommendation
 ```
 
-selection semanticsは次の優先順位で固定する。
-
-```text
-1. RonAction / TsumoAction
-2. DaiminkanAction / AnkanAction / KakanAction
-3. delegated normal-play decision (`yakuhai-call`)
-```
-
-合法性は常に`DecisionContext.legal_actions`を正本とし、Policy側でkan legalityを再判定しない。
-複数kan候補が同時にlegalな場合は、semantic fieldだけから作るdeterministic total orderで1件を選ぶ。
-kan種別間の固定順序はdeterminismを固定するimplementation choiceであり、麻雀上の優劣を意味しない。
-
-### Qualification / population handoff
-
-このPolicyは現在、単なる「将来測定予定」のsourceではない。
-Arena側のbounded researchで次の順序まで進んでいる。
-
-```text
-Stage 3 Entry Gate
-    -> kan / rinshan coverage hole identified
-
-Arena #146 / #147
-    -> KAN COVERAGE SOURCE QUALIFIED FOR MIX DESIGN
-
-Arena #148 / #149
-    -> MIX LOCKED — 12.5% AUGMENTATION
-
-Arena #150
-    -> PHASE10 SCALE SIGNAL
-```
-
-#146のqualificationでは、fresh first-party generation上でlegal kan opportunityからselected kan、
-publicly confirmed kan、rinshanまでをaccountでき、coverage sourceとしてmix designへ進める根拠が得られた。
-
-その後のpopulation-mix pilotでは、Stage 3 training recipeを次としてlockした。
+Current Stage 3 recipe:
 
 ```text
 primary source       yakuhai-call
@@ -132,17 +106,11 @@ seat balancing       canonical E/S/W/N balanced
 split semantics      whole hanchan / TRAIN + VALIDATION / formal TESTなし
 ```
 
-この12.5%は**Policy strength rankingではなくHandBelief training population recipe**である。
-`KanCoverageYakuhaiCallPolicy`自体をbaseline、recommended gameplay、production Policyへ昇格させたものではない。
+これは Policy strength ranking ではなく、HandBelief population design である。Current HandBelief research state は project-wide parent [lisjong-project #36](https://github.com/lisbun/lisjong-project/issues/36) を参照する。
 
-Phase 10では、このrecipeとselected sequential HandBelief familyを固定したままTRAIN data量を増やし、
-Belief qualityへpositive scale signalが出ることを確認した。これもPolicy strength claimではなく、
-**locked Stage 3 recipeでadditional training dataがcomponent quality改善へ変換された**というevidenceである。
+## Learned Policy research is separate from public Policy status
 
-## Learned Policy research status is separate from public Policy status
-
-ArenaにはBehavior Cloning / Offline Q等のexperiment-local Learned Policy researchが存在するが、
-これらのcheckpoint / experiment adapterは、現時点では本書のpublic Policy strength inventoryへ自動登録しない。
+Arena の Behavior Cloning / Offline Q 等は experiment-local research であり、その checkpoint / adapter は public Policy inventory へ自動昇格しない。
 
 ```text
 Arena experiment-local model / checkpoint
@@ -151,36 +119,34 @@ Arena experiment-local model / checkpoint
 != production Policy
 ```
 
-current Learned Policy研究では、simple Offline Q candidateのfailure diagnosisにより
-**hand-progression degradation**がmechanism-level evidenceとして確認され、次のresearch axisでは
-hand-progression structureを明示するbounded experimentへ進んでいる。
+Current Learned Policy research は P8 の **data scale / data source** 軸まで進んでいる。
 
-このresearch statusは、current strength baseline `yakuhai-call` を変更しない。
-Learned Policy candidateがstable AI semantics / production Policyへ昇格する場合は、
-Arena experiment-local ownershipからlisjong-owned stable contractへのpromotion boundaryを別途明示する。
+```text
+Arena #190  COMPLETE — same-source data-scale signal
+Arena #170  COMPLETE — bounded RiichiLab strong-bot corpus acquisition
+Arena #203  COMPLETE — player-safe reconstruction / supervision qualification
+Arena #211  CURRENT  — matched flat-BC RiichiLab source pilot
+```
+
+この研究進捗は current strength baseline `yakuhai-call` を変更しない。stable AI semantics / production Policy へ昇格する場合は、Arena experiment-local ownership から `lisjong` stable contract への promotion boundary を別途明示する。
+
+Parent roadmap: [lisjong-project #45](https://github.com/lisbun/lisjong-project/issues/45)
 
 ## Representative evidence
 
-代表的なdecision / evidenceだけを案内する。数値と完全な経緯はlink先のhistorical recordに残す。
-
 | Policy / role | Representative reference |
 | --- | --- |
-| `yakuhai-call` current baseline | [fresh Gate 2 promotion decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5471486662)、[Arena evaluation wiring](https://github.com/lisbun/lisjong-arena/blob/main/docs/yakuhai-call-evaluation.md) |
-| `combined` predecessor baseline | [fresh holdout promotion evidence](https://github.com/lisbun/lisjong/issues/121#issuecomment-5462935934) |
-| `extended-combined` not promoted | [bounded Gate 1 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5466162346)、[Arena historical evaluation document](https://github.com/lisbun/lisjong-arena/blob/main/docs/extended-combined-evaluation.md) |
-| `finite-horizon` component comparator | [10,000-game follow-up decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5439919623) |
-| `hand-value-aware` evaluated component candidate | [4,000-game follow-up interpretation](https://github.com/lisbun/lisjong/issues/121#issuecomment-5431486646) |
-| `KanCoverageYakuhaiCallPolicy` Stage 3 coverage source | [Arena #146 qualification](https://github.com/lisbun/lisjong-arena/issues/146)、[Arena #148 population mix lock](https://github.com/lisbun/lisjong-arena/issues/148)、[Arena #150 Phase 10 scale study](https://github.com/lisbun/lisjong-arena/issues/150) |
-| foundational / unevaluated exports | implementation / contract baselinesであり、本書ではformal strength claimを行わない |
+| `yakuhai-call` current baseline | [lisjong #121 Gate 2 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5471486662) |
+| `combined` predecessor baseline | [lisjong #121 historical promotion evidence](https://github.com/lisbun/lisjong/issues/121#issuecomment-5462935934) |
+| `extended-combined` not promoted | [lisjong #121 bounded Gate 1 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5466162346) |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | [lisjong #163](https://github.com/lisbun/lisjong/issues/163) — current unevaluated bounded candidate |
+| `OpenHandYakuAwareCallPolicy` | [Arena #196](https://github.com/lisbun/lisjong-arena/issues/196) — bounded strength inconclusive |
+| `CheapFarGuardOpenHandYakuAwareCallPolicy` | [lisjong #161](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134) — `CHEAP-FAR GUARD INCONCLUSIVE` |
+| `KanCoverageYakuhaiCallPolicy` | [Arena #146](https://github.com/lisbun/lisjong-arena/issues/146), [#148](https://github.com/lisbun/lisjong-arena/issues/148), [#150](https://github.com/lisbun/lisjong-arena/issues/150) |
 
-current Policy-vs-Policy ABBB runは、Arenaのversioned immutable artifactとreaggregationを
-measurement boundaryとして利用する。artifact対応範囲と制約は
-[Arena policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md#measurement-source-of-truth)
-を参照する。過去runにartifactが存在しない場合、存在するものとして扱わない。
+Historical measurement numbers belong in the corresponding Issue / immutable Arena artifact rather than this snapshot.
 
 ## Status update workflow
-
-今後のPolicy workは終了条件のあるbounded Issue / PRとして進める。
 
 ```text
 concrete stable Policy work
@@ -193,9 +159,7 @@ strength evaluation
     -> bounded lisjong-arena Issue / Arena artifact / decision
 
 current interpretation changed
-    -> relevant bounded PRで本書を更新
+    -> update this snapshot
 ```
 
-新しいPolicyやfuture candidateの存在だけを理由に、long-lived Policy-strength tracking Issueを作成しない。
-research experimentがpositiveでもstable/public Policyへのpromotionを自動化しない。
-過去のwork / decision historyは対応するclosed Issue / PRを参照する。
+Do not create a long-lived Policy-strength tracking Issue merely because a future candidate exists. Negative / inconclusive evidence remains historical evidence; it does not need to be copied into this document beyond the current role it establishes.
