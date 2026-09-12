@@ -507,6 +507,61 @@ class ParentAndStructuralPreservationTest(unittest.TestCase):
     ) -> DecisionContext:
         return DecisionContext(input=_input(concealed), legal_actions=actions)
 
+    def test_ordinary_discard_nonactivation_matches_exact_parent_decision(self) -> None:
+        cases = (
+            (
+                "no riichi",
+                "345m56679s333577z",
+                ("5s", "9s"),
+                (),
+                1,
+            ),
+            (
+                "riichi and best tenpai",
+                "234m567m234p567p5s7z",
+                ("5s", "7z"),
+                (("1m",),),
+                0,
+            ),
+            (
+                "riichi and best one shanten",
+                "345m56679s333577z",
+                ("5s", "9s"),
+                (("1m",),),
+                1,
+            ),
+            (
+                "riichi and best two shanten with legal common genbutsu",
+                "345m56679s333517z",
+                ("3m", "5z"),
+                (("3m",),),
+                2,
+            ),
+        )
+
+        for label, hand_spec, discard_specs, threat_specs, expected_shanten in cases:
+            with self.subTest(case=label):
+                concealed = _hand(hand_spec)
+                actions = tuple(_action(_hand(spec)[0]) for spec in discard_specs)
+                threats = tuple(
+                    tuple(_hand(spec)[0] for spec in river) for river in threat_specs
+                )
+                decision = DecisionContext(
+                    input=_input(concealed, threats=threats),
+                    legal_actions=actions,
+                )
+                evaluated = mechanism._evaluate_post_discard_hands(
+                    decision.input, actions, mechanism._DecisionShantenEvaluator()
+                )
+                self.assertEqual(
+                    min(candidate.post_discard_shanten for candidate in evaluated),
+                    expected_shanten,
+                )
+                self.assertEqual(
+                    self.policy.choose_action(decision),
+                    self.parent.choose_action(decision),
+                )
+
     def test_winning_and_riichi_are_exact_parent_decisions(self) -> None:
         tile = _tile(TileCategory.MANZU, 1)
         ron = RonAction(Seat.SEAT_0, Seat.SEAT_1, tile)
