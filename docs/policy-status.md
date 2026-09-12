@@ -49,7 +49,7 @@ Runtime profile への配備は別責務であり、RiichiLab 等の execution p
 | `GenbutsuDefenseFiniteHorizonValueAwarePolicy` | `combined` | predecessor strength baseline / comparator | `yakuhai-call` より前の baseline |
 | `GenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `extended-combined` | historical causal comparator; not promoted | hand-value 拡張。promotion なし |
 | `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `yakuhai-call` | **current strength baseline** | conservative Yakuhai call を追加 |
-| `MechanismRiichiDefenseYakuhaiCallPolicy` | — | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。#163のevaluation対象 |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | — | implemented experimental candidate; strength unestablished; not promoted | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。#163はclosedだがfinal strength classificationは記録されていない |
 | `OpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | Tanyao / Honitsu / Chinitsu-compatible strictly-improving Chi/Pon を追加 |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | selected cheap+far Chi/Pon のみ Pass へ置換 |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
@@ -78,11 +78,19 @@ positive mean direction は観測されたが locked 95% interval が zero を�
 
 Representative reference: [lisjong #161 final result](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134)
 
-## Current unevaluated strength candidate
+## Implemented candidate without recorded strength result
 
-`MechanismRiichiDefenseYakuhaiCallPolicy` は current baseline `yakuhai-call` を parent とする bounded riichi-defense candidate である。implementationは存在するが、現時点では strength result は未確定であり promotion されていない。
+`MechanismRiichiDefenseYakuhaiCallPolicy` は current baseline `yakuhai-call` を parent とする bounded riichi-defense candidateで、implementationはmainへ入っている。一方、[lisjong #163](https://github.com/lisbun/lisjong/issues/163) はclosedで、Issue上にpost-merge Gate 1のfinal strength classificationは記録されていない。
 
-Current work: [lisjong #163](https://github.com/lisbun/lisjong/issues/163)
+したがってcurrent statusは:
+
+```text
+implemented experimental candidate
+strength unestablished
+not promoted
+```
+
+とする。将来strength claimを行う場合は、purpose-appropriateな新しいbounded evaluation evidenceを正本として明示する。
 
 ## `KanCoverageYakuhaiCallPolicy` — training coverage role
 
@@ -139,7 +147,7 @@ Parent roadmap: [lisjong-project #45](https://github.com/lisbun/lisjong-project/
 | `yakuhai-call` current baseline | [lisjong #121 Gate 2 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5471486662) |
 | `combined` predecessor baseline | [lisjong #121 historical promotion evidence](https://github.com/lisbun/lisjong/issues/121#issuecomment-5462935934) |
 | `extended-combined` not promoted | [lisjong #121 bounded Gate 1 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5466162346) |
-| `MechanismRiichiDefenseYakuhaiCallPolicy` | [lisjong #163](https://github.com/lisbun/lisjong/issues/163) — current unevaluated bounded candidate |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | [lisjong #163](https://github.com/lisbun/lisjong/issues/163) — implementation scope; no final strength classification recorded before closure |
 | `OpenHandYakuAwareCallPolicy` | [Arena #196](https://github.com/lisbun/lisjong-arena/issues/196) — bounded strength inconclusive |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | [lisjong #161](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134) — `CHEAP-FAR GUARD INCONCLUSIVE` |
 | `KanCoverageYakuhaiCallPolicy` | [Arena #146](https://github.com/lisbun/lisjong-arena/issues/146), [#148](https://github.com/lisbun/lisjong-arena/issues/148), [#150](https://github.com/lisbun/lisjong-arena/issues/150) |
