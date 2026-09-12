@@ -22,7 +22,7 @@ bounded GitHub Issue / PR
 [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md)
 を正本とする。
 
-Snapshot date: **2026-09-06**
+Snapshot date: **2026-09-12**
 
 ## Current strength baseline
 
@@ -66,6 +66,7 @@ current-status更新が必要である。
 | `GenbutsuDefenseFiniteHorizonValueAwarePolicy` | `combined` | defense + finite-horizon + lightweight value | predecessor strength baseline / comparator | 共通現物constraint、exact finite-horizon DP、ValueAware fallbackを合成。`yakuhai-call`より前のbaseline |
 | `GenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `extended-combined` | defense + finite-horizon + hand value heuristic | no-call parent / historical causal comparator; not promoted | `combined`のvalue stageをHandValueAwareへ拡張。promotionせず、DP由来の高costを持つ |
 | `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `yakuhai-call` | defense + finite-horizon + hand value + conservative call | **current strength baseline** | no-call parentに役牌Pon起点のstrict shanten-improving callを追加。generic call EVではなく、DP由来の高costを持つ |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | — | yakuhai-call + mechanism-based riichi defense | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call`をparentとして、2向聴以上・被立直・common genbutsuなしだけを固定weightのrelative classical danger scoreでhard filter。calibrated放銃確率、learned HandBelief、one-chance段階weight、chiitoitsu / kokushi専用modelingではない |
 | `OpenHandYakuAwareCallPolicy` | — | yakuhai-call + bounded open-yaku call | experimental strength candidate; not evaluated or promoted | exact `yakuhai-call`をbaselineとして、既存Tanyao / Honitsu / Chinitsu compatibilityを保つstrictly-improving initial Chi/Ponだけを追加。Tanyaoはcurrent first-party open-Tanyao rulesetに限定 |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | `OpenHandYakuAwareCallPolicy` + bounded cheap+far call guard | experimental strength candidate; not evaluated or promoted | exact `OpenHandYakuAwareCallPolicy`をbaselineとして、selected Chi/Ponがconservativeに`cheap AND far`（全allowed stable handsでshanten>=2かつcurrent visible value proxy<3han相当）と判定される場合だけlegal Passへ置換。alternate-call rescueなし。Issue #161のbounded hypothesis検証用 |
 | `KanCoverageYakuhaiCallPolicy` | — | deterministic coverage source | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | winning action > legal kan > `yakuhai-call` delegate。kan / rinshan trajectoryをtraining distributionへ供給する目的で使用 |
