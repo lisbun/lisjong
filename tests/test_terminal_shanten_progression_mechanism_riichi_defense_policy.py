@@ -561,6 +561,21 @@ class ProgressionRecurrenceTest(unittest.TestCase):
             shanten * _falling_factorial(hidden, DEFAULT_HORIZON),
         )
 
+    def test_zero_depth_is_the_current_structural_shanten(self) -> None:
+        """`T(H, R, 0)`のbase caseがcurrent向聴数の1本だけになる。"""
+        evaluator = progression._TerminalShantenProgressionEvaluator()
+        remaining = _counts(m2=3, m6=2, s9=2, z3=1)
+        for hand_counts in (_THREE_MELD_HAND, _TWO_MELD_HAND, _CLOSED_FAR_HAND):
+            with self.subTest(hand=hand_counts):
+                distribution = evaluator.terminal_shanten_distribution(
+                    hand_counts, remaining, 0
+                )
+                self.assertEqual(sum(distribution), 1)
+                self.assertEqual(
+                    _mass(distribution),
+                    calculate_shanten(_tiles_for_oracle(hand_counts)),
+                )
+
     def test_selection_values_are_exact_integers(self) -> None:
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
         distribution = progression._TerminalShantenProgressionEvaluator().terminal_shanten_distribution(
