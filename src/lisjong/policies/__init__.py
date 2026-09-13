@@ -22,6 +22,9 @@ from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
 from lisjong.policies.minimal import MinimalPolicy
 from lisjong.policies.open_hand_yaku_aware_call import OpenHandYakuAwareCallPolicy
 from lisjong.policies.shanten import ShantenPolicy
+from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense import (
+    TerminalShantenProgressionMechanismRiichiDefensePolicy,
+)
 from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policies.ukeire import UkeirePolicy
 from lisjong.policies.value_aware_two_step_ukeire import ValueAwareTwoStepUkeirePolicy
@@ -40,6 +43,7 @@ __all__ = [
     "MinimalPolicy",
     "OpenHandYakuAwareCallPolicy",
     "ShantenPolicy",
+    "TerminalShantenProgressionMechanismRiichiDefensePolicy",
     "TwoStepUkeirePolicy",
     "UkeirePolicy",
     "ValueAwareTwoStepUkeirePolicy",
