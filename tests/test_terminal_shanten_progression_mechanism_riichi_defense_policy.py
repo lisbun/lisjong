@@ -20,6 +20,7 @@ from lisjong.policies import (
 )
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
+    FiniteHorizonCandidateEvaluation,
     FiniteHorizonCompletionPolicyError,
     _evaluate_completion_masses,
     _falling_factorial,
@@ -746,13 +747,52 @@ class ParentPreservationTest(unittest.TestCase):
                     self.parent.choose_action(decision),
                 )
 
+    def _completion_masses(
+        self, policy_input: PolicyInput, actions: tuple[DiscardAction, ...]
+    ) -> tuple[FiniteHorizonCandidateEvaluation, ...]:
+        return _evaluate_completion_masses(
+            policy_input,
+            actions,
+            derive_remaining_tile_inventory(policy_input).remaining_tile_counts,
+            DEFAULT_HORIZON,
+            _FiniteHorizonEvaluator(),
+        )
+
     def test_positive_completion_tie_matches_the_parent(self) -> None:
         concealed = _hand("234m567m234p567p5s7z")
         actions = _distinct_discard_actions(concealed)
-        decision = DecisionContext(input=_make_input(concealed), legal_actions=actions)
+        policy_input = _make_input(concealed)
+        masses = self._completion_masses(policy_input, actions)
+        maximum = max(evaluation.completion_mass for evaluation in masses)
+        self.assertGreater(maximum, 0)
+        self.assertEqual(
+            sum(1 for evaluation in masses if evaluation.completion_mass == maximum),
+            2,
+        )
+        decision = DecisionContext(input=policy_input, legal_actions=actions)
         self.assertEqual(
             self.policy.choose_action(decision), self.parent.choose_action(decision)
         )
+
+    def test_unique_positive_completion_maximum_matches_the_parent(self) -> None:
+        concealed = _hand("119m19p19s1234567z")
+        actions = _distinct_discard_actions(concealed)
+        policy_input = _make_input(concealed)
+        masses = self._completion_masses(policy_input, actions)
+        maximum = max(evaluation.completion_mass for evaluation in masses)
+        self.assertGreater(maximum, 0)
+        self.assertEqual(
+            sum(1 for evaluation in masses if evaluation.completion_mass == maximum),
+            1,
+        )
+        decision = DecisionContext(input=policy_input, legal_actions=actions)
+        with patch.object(
+            progression,
+            "_evaluate_progression_candidates",
+            side_effect=AssertionError("progression must not run"),
+        ):
+            selected = self.policy.choose_action(decision)
+        self.assertEqual(selected, self.parent.choose_action(decision))
 
     def test_winning_and_riichi_are_exact_parent_decisions(self) -> None:
         tile = _tile(TileCategory.MANZU, 1)
