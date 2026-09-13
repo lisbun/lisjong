@@ -17,7 +17,7 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-09-12**
+Snapshot date: **2026-09-13**
 
 ## Current strength baseline
 
@@ -62,6 +62,7 @@ Runtime profile への配備は別責務であり、RiichiLab 等の execution p
 | `MechanismRiichiDefenseYakuhaiCallPolicy` | `mechanism-riichi-defense` | **current promoted heuristic strength baseline (`ABBB` / `4p-red-single` scope)** | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。Arena #217 Gate 2で昇格、Arena #219でcurated alias登録 |
 | `OpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | Tanyao / Honitsu / Chinitsu-compatible strictly-improving Chi/Pon を追加 |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | selected cheap+far Chi/Pon のみ Pass へ置換 |
+| `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **experimental offensive-efficiency candidate; evaluation blocked pending exact-safe performance work; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
 
 `current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。
@@ -87,6 +88,42 @@ CHEAP-FAR GUARD INCONCLUSIVE
 positive mean direction は観測されたが locked 95% interval が zero を跨いだため、promotion も `yakuhai-call` との follow-up strength comparison も開始していない。
 
 Representative reference: [lisjong #161 final result](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134)
+
+## `TerminalShantenProgressionMechanismRiichiDefensePolicy` — experimental offensive-efficiency candidate
+
+current promoted baseline `MechanismRiichiDefenseYakuhaiCallPolicy` を exact parent とし、**FiniteHorizon completion mass が全 root discard candidate で 0 になった通常打牌 branch だけ**を、同じ horizon=3 self-draw model 上の expected terminal structural shanten 最小化へ置換した bounded hypothesis である。
+
+```text
+positive completion maximum -> exact current behavior
+all zero                    -> expected-terminal-shanten progression DP
+                                   unique best -> select
+                                   exact tie   -> existing HandValueAware
+```
+
+`max(root completion_mass) > 0` の decision では current baseline と exactly same Action を返す。baseline class / curated alias `mechanism-riichi-defense` / promotion evidence はいずれも変更していない。
+
+```text
+current status
+experimental offensive-efficiency candidate
+not evaluated
+not promoted
+evaluation blocked pending exact-safe performance work
+```
+
+semantic implementation / exactness validation / improvement-draw core fixture / performance characterization は完了しているが、**strength 評価はまだ開始できない**。exact progression DP の実測 runtime が
+
+```text
+progression activation rate   約 0.82
+baseline   p50                約 0.053 s
+candidate  p50                約 40 s
+activated decision            概ね 30-60 s
+```
+
+であり、Arena の 3x passive tsumogiri 400-game development evaluation をこのまま流せないためである。approximation で救済しない方針なので、**exact-safe performance work が先行**する。
+
+その後に Arena 3x passive tsumogiri 400-game development evaluation を別の Arena child Issue で pre-register する。positive な 400-game development result だけでは baseline へ自動昇格しない。
+
+Implementation / original hypothesis: [lisjong #169](https://github.com/lisbun/lisjong/issues/169)
 
 ## `MechanismRiichiDefenseYakuhaiCallPolicy` — promotion evidence
 
@@ -172,6 +209,7 @@ Parent roadmap: [lisjong-project #45](https://github.com/lisbun/lisjong-project/
 | `MechanismRiichiDefenseYakuhaiCallPolicy` current heuristic baseline (`ABBB` / `4p-red-single`) | [lisjong-arena #217](https://github.com/lisbun/lisjong-arena/issues/217) — Gate 2 CONFIRMED POSITIVE; [lisjong-arena #216](https://github.com/lisbun/lisjong-arena/issues/216) — prior evaluation step; [lisjong-arena #219](https://github.com/lisbun/lisjong-arena/issues/219) — curated `mechanism-riichi-defense` alias |
 | `OpenHandYakuAwareCallPolicy` | [Arena #196](https://github.com/lisbun/lisjong-arena/issues/196) — bounded strength inconclusive |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | [lisjong #161](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134) — `CHEAP-FAR GUARD INCONCLUSIVE` |
+| `TerminalShantenProgressionMechanismRiichiDefensePolicy` | [lisjong #169](https://github.com/lisbun/lisjong/issues/169) — experimental candidate; strength evaluation blocked on exact-safe performance work |
 | `KanCoverageYakuhaiCallPolicy` | [Arena #146](https://github.com/lisbun/lisjong-arena/issues/146), [#148](https://github.com/lisbun/lisjong-arena/issues/148), [#150](https://github.com/lisbun/lisjong-arena/issues/150) |
 
 Historical measurement numbers belong in the corresponding Issue / immutable Arena artifact rather than this snapshot.
