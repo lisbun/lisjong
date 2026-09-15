@@ -48,14 +48,30 @@ mutable working stateをuniverse間で共有・再利用しない。
 
 ## R5 optional terminal-shanten progression
 
-`include_terminal_progression=True`のexplicit opt-inかつ
-`baseline_eligible_summary.completion_all_zero`のときだけ、Issue #169 / PR #170
-のexact adaptive expected-terminal-shanten evaluator
+`include_terminal_progression=True`のexplicit opt-inのときだけ、Issue #169 /
+PR #170のexact adaptive expected-terminal-shanten evaluator
 （`terminal_shanten_progression_mechanism_riichi_defense._TerminalShantenProgressionEvaluator`）
-をbaseline-eligible universeへsingle-sourceで適用する。default callでは
-progression DPを絶対に起動しない。canonical値はexact integer
-（`terminal_shanten_mass` / `terminal_shanten_regret_mass`）であり、floatは
-consumer側の表示用derived valueにだけ現れる。
+を起動する。R1/R4と同じくfull-legal universeとbaseline-eligible universeを
+分離し、それぞれ`full_legal_terminal_progression_summary` /
+`baseline_eligible_terminal_progression_summary`として別々に保持する。
+
+`baseline_eligible_actions`はfull legalのsubsetなので、full legal universeが
+all-zeroならbaseline eligible universeも必ずall-zeroである。そのため
+
+    full legal universeがall-zero
+        -> full legal action全体でprogression DPを1回だけ実行し、
+           full-legalとbaseline-eligibleの両方のsummaryをそのcandidate結果
+           から導出する（baseline-eligible側のためにDPを再実行しない）
+    full legalは非all-zeroだがbaseline eligible universeがall-zero
+        -> baseline eligible actionだけでprogression DPを実行し、
+           baseline-eligible側のsummaryだけを持つ（full legal側はNone）
+    どちらもall-zeroでない
+        -> progression DPを実行せず、両方Noneのまま
+
+とする。default callおよびどちらのuniverseもall-zeroでない場合、progression
+DPを絶対に起動しない。canonical値はexact integer（`terminal_shanten_mass` /
+`terminal_shanten_regret_mass`）であり、floatはconsumer側の表示用derived
+valueにだけ現れる。
 """
 
 from collections.abc import Mapping
@@ -304,7 +320,8 @@ class MechanismRiichiDefenseOffensiveEfficiencyAnalysis:
     candidate_evaluations: tuple[OffensiveEfficiencyCandidateEvaluation, ...]
     full_legal_summary: UniverseEfficiencySummary
     baseline_eligible_summary: UniverseEfficiencySummary
-    terminal_progression_summary: TerminalProgressionSummary | None
+    full_legal_terminal_progression_summary: TerminalProgressionSummary | None
+    baseline_eligible_terminal_progression_summary: TerminalProgressionSummary | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.branch, OffensiveEfficiencyBranch):
@@ -356,21 +373,36 @@ class MechanismRiichiDefenseOffensiveEfficiencyAnalysis:
             raise TypeError(
                 "baseline_eligible_summary must be a UniverseEfficiencySummary"
             )
-        if self.terminal_progression_summary is not None and not isinstance(
-            self.terminal_progression_summary, TerminalProgressionSummary
+        for field_name, summary in (
+            (
+                "full_legal_terminal_progression_summary",
+                self.full_legal_terminal_progression_summary,
+            ),
+            (
+                "baseline_eligible_terminal_progression_summary",
+                self.baseline_eligible_terminal_progression_summary,
+            ),
         ):
-            raise TypeError(
-                "terminal_progression_summary must be None or a "
-                "TerminalProgressionSummary"
-            )
-        if not self.include_terminal_progression or (
-            not self.baseline_eligible_summary.completion_all_zero
-        ):
-            if self.terminal_progression_summary is not None:
+            if summary is not None and not isinstance(
+                summary, TerminalProgressionSummary
+            ):
+                raise TypeError(
+                    f"{field_name} must be None or a TerminalProgressionSummary"
+                )
+
+        full_legal_all_zero = self.full_legal_summary.completion_all_zero
+        baseline_eligible_all_zero = self.baseline_eligible_summary.completion_all_zero
+
+        if not self.include_terminal_progression:
+            if self.full_legal_terminal_progression_summary is not None:
                 raise ValueError(
-                    "terminal_progression_summary must be None unless "
-                    "include_terminal_progression is True and "
-                    "baseline_eligible_summary.completion_all_zero is True"
+                    "full_legal_terminal_progression_summary must be None unless "
+                    "include_terminal_progression is True"
+                )
+            if self.baseline_eligible_terminal_progression_summary is not None:
+                raise ValueError(
+                    "baseline_eligible_terminal_progression_summary must be None "
+                    "unless include_terminal_progression is True"
                 )
             if any(
                 candidate.terminal_shanten_mass is not None for candidate in candidates
@@ -378,6 +410,45 @@ class MechanismRiichiDefenseOffensiveEfficiencyAnalysis:
                 raise ValueError(
                     "terminal_shanten_mass must be None on every candidate unless "
                     "R5 is opted in and activated"
+                )
+        else:
+            if full_legal_all_zero:
+                if self.full_legal_terminal_progression_summary is None:
+                    raise ValueError(
+                        "full_legal_terminal_progression_summary must be present "
+                        "when include_terminal_progression is True and "
+                        "full_legal_summary.completion_all_zero is True"
+                    )
+            elif self.full_legal_terminal_progression_summary is not None:
+                raise ValueError(
+                    "full_legal_terminal_progression_summary must be None unless "
+                    "full_legal_summary.completion_all_zero is True"
+                )
+
+            if baseline_eligible_all_zero:
+                if self.baseline_eligible_terminal_progression_summary is None:
+                    raise ValueError(
+                        "baseline_eligible_terminal_progression_summary must be "
+                        "present when include_terminal_progression is True and "
+                        "baseline_eligible_summary.completion_all_zero is True"
+                    )
+            elif self.baseline_eligible_terminal_progression_summary is not None:
+                raise ValueError(
+                    "baseline_eligible_terminal_progression_summary must be None "
+                    "unless baseline_eligible_summary.completion_all_zero is True"
+                )
+
+            if (
+                not full_legal_all_zero
+                and not baseline_eligible_all_zero
+                and any(
+                    candidate.terminal_shanten_mass is not None
+                    for candidate in candidates
+                )
+            ):
+                raise ValueError(
+                    "terminal_shanten_mass must be None on every candidate when "
+                    "neither universe is completion all-zero"
                 )
 
         object.__setattr__(self, "legal_discard_actions", legal_actions)
@@ -494,6 +565,22 @@ def _summarize_universe(
     )
 
 
+def _summarize_terminal_progression(
+    terminal_by_action: Mapping[DiscardAction, tuple[int, tuple[int, ...]]],
+    universe_actions: tuple[DiscardAction, ...],
+    selected_action: DiscardAction,
+) -> TerminalProgressionSummary:
+    """R5 terminal-shanten massの`best` / `selected` / `regret`を1 universeについて集約する。"""
+    masses = tuple(terminal_by_action[action][0] for action in universe_actions)
+    best_mass = min(masses)
+    selected_mass = terminal_by_action[selected_action][0]
+    return TerminalProgressionSummary(
+        best_terminal_shanten_mass=best_mass,
+        selected_terminal_shanten_mass=selected_mass,
+        terminal_shanten_regret_mass=selected_mass - best_mass,
+    )
+
+
 def analyze_mechanism_riichi_defense_offensive_efficiency(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
@@ -506,9 +593,12 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
     selection behaviorはこの呼び出しによって一切変更されない。この関数を
     production decision pathから呼び出さない。
 
-    `include_terminal_progression=True`かつbaseline-eligible universeの
-    FiniteHorizon completion massが全candidateで0のときだけ、Issue #169の
-    exact adaptive terminal-shanten evaluatorを追加実行する。それ以外では
+    `include_terminal_progression=True`のときだけ、Issue #169のexact adaptive
+    terminal-shanten evaluatorを追加実行する。full legal universeが
+    completion all-zeroならfull legal全体でDPを1回だけ実行してfull-legal /
+    baseline-eligible両方のsummaryを導出し、full legalは非all-zeroだが
+    baseline eligible universeだけall-zeroならbaseline eligible universeだけ
+    DPを実行する。どちらもall-zeroでなければ、あるいはopt-inしていなければ、
     R5関連の重い評価を一切起動しない。
     """
     legal_discard_actions = tuple(discard_actions)
@@ -582,32 +672,65 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
         baseline_selected_action,
     )
 
-    # R5: explicit opt-inかつbaseline-eligible universeがall-zeroのときだけ、
-    # Issue #169のexact evaluatorをbaseline-eligible universeへ適用する。
+    # R5: explicit opt-inのときだけ、full-legal / baseline-eligible universeを
+    # 分離してIssue #169のexact evaluatorを適用する。baseline_eligible_actionsは
+    # full legalのsubsetなので、full legal universeがall-zeroならbaseline
+    # eligible universeも必ずall-zeroである。したがってfull legalがall-zeroの
+    # ときはfull legal action全体で1回だけDPを実行し、baseline-eligible側は
+    # そのcandidate結果をsubset filterして再利用する（DPを再実行しない）。
     terminal_by_action: dict[DiscardAction, tuple[int, tuple[int, ...]]] = {}
-    terminal_progression_summary: TerminalProgressionSummary | None = None
-    if include_terminal_progression and baseline_eligible_summary.completion_all_zero:
-        progression_candidates = _evaluate_progression_candidates(
-            policy_input,
-            baseline_eligible_completion_evaluations,
-            remaining_counts,
-            DEFAULT_HORIZON,
-            _TerminalShantenProgressionEvaluator(),
-        )
-        terminal_by_action = {
-            candidate.action: (
-                candidate.terminal_shanten_mass,
-                candidate.terminal_shanten_counts,
+    full_legal_terminal_progression_summary: TerminalProgressionSummary | None = None
+    baseline_eligible_terminal_progression_summary: (
+        TerminalProgressionSummary | None
+    ) = None
+    if include_terminal_progression:
+        if full_legal_summary.completion_all_zero:
+            progression_candidates = _evaluate_progression_candidates(
+                policy_input,
+                full_legal_completion_evaluations,
+                remaining_counts,
+                DEFAULT_HORIZON,
+                _TerminalShantenProgressionEvaluator(),
             )
-            for candidate in progression_candidates
-        }
-        best_terminal_mass = min(mass for mass, _ in terminal_by_action.values())
-        selected_terminal_mass = terminal_by_action[baseline_selected_action][0]
-        terminal_progression_summary = TerminalProgressionSummary(
-            best_terminal_shanten_mass=best_terminal_mass,
-            selected_terminal_shanten_mass=selected_terminal_mass,
-            terminal_shanten_regret_mass=selected_terminal_mass - best_terminal_mass,
-        )
+            terminal_by_action = {
+                candidate.action: (
+                    candidate.terminal_shanten_mass,
+                    candidate.terminal_shanten_counts,
+                )
+                for candidate in progression_candidates
+            }
+            full_legal_terminal_progression_summary = _summarize_terminal_progression(
+                terminal_by_action, legal_discard_actions, baseline_selected_action
+            )
+            baseline_eligible_terminal_progression_summary = (
+                _summarize_terminal_progression(
+                    terminal_by_action,
+                    baseline_eligible_actions,
+                    baseline_selected_action,
+                )
+            )
+        elif baseline_eligible_summary.completion_all_zero:
+            progression_candidates = _evaluate_progression_candidates(
+                policy_input,
+                baseline_eligible_completion_evaluations,
+                remaining_counts,
+                DEFAULT_HORIZON,
+                _TerminalShantenProgressionEvaluator(),
+            )
+            terminal_by_action = {
+                candidate.action: (
+                    candidate.terminal_shanten_mass,
+                    candidate.terminal_shanten_counts,
+                )
+                for candidate in progression_candidates
+            }
+            baseline_eligible_terminal_progression_summary = (
+                _summarize_terminal_progression(
+                    terminal_by_action,
+                    baseline_eligible_actions,
+                    baseline_selected_action,
+                )
+            )
 
     candidate_evaluations = tuple(
         OffensiveEfficiencyCandidateEvaluation(
@@ -655,5 +778,8 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
         candidate_evaluations=candidate_evaluations,
         full_legal_summary=full_legal_summary,
         baseline_eligible_summary=baseline_eligible_summary,
-        terminal_progression_summary=terminal_progression_summary,
+        full_legal_terminal_progression_summary=full_legal_terminal_progression_summary,
+        baseline_eligible_terminal_progression_summary=(
+            baseline_eligible_terminal_progression_summary
+        ),
     )

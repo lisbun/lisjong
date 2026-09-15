@@ -177,6 +177,55 @@ def _restricted_input(
     return _custom_input(concealed, players)
 
 
+def _restricted_input_with_common_genbutsu(
+    concealed: tuple[Tile, ...],
+    drawable_specs: tuple[str, ...],
+    genbutsu_specs: tuple[str, ...],
+) -> PolicyInput:
+    """`_restricted_input()`にopponent riichi + common genbutsu riverを加える。
+
+    seat 1をriichi中とし、その河へ`genbutsu_specs`の牌種を置く。それ以外の
+    Policy-visible残り牌は`_restricted_input()`と同じ手順でseat 2・3へ配る。
+    """
+    drawable = {_hand(spec)[0].tile_type for spec in drawable_specs}
+    accounted: dict[TileType, int] = {}
+    for tile in concealed:
+        accounted[tile.tile_type] = accounted.get(tile.tile_type, 0) + 1
+    red_seen = {tile.tile_type.category for tile in concealed if tile.is_red}
+
+    visible: list[Tile] = []
+    for tile_type in _all_tile_types():
+        if tile_type in drawable:
+            continue
+        copies = _MAX_COPIES_PER_TILE_TYPE - accounted.get(tile_type, 0)
+        needs_red = (
+            tile_type.rank == 5
+            and tile_type.category is not TileCategory.HONOR
+            and tile_type.category not in red_seen
+        )
+        for index in range(copies):
+            visible.append(Tile(tile_type, is_red=needs_red and index == 0))
+
+    genbutsu_river = [_hand(spec)[0] for spec in genbutsu_specs]
+    genbutsu_types = {tile.tile_type for tile in genbutsu_river}
+    remaining_visible = [
+        tile for tile in visible if tile.tile_type not in genbutsu_types
+    ]
+
+    rivers: list[list[Tile]] = [[], list(genbutsu_river), [], []]
+    for index, tile in enumerate(remaining_visible):
+        rivers[2 + (index % 2)].append(tile)
+
+    players = tuple(
+        _player(
+            riichi=(RiichiState.ACCEPTED if seat == 1 else RiichiState.NONE),
+            discards=tuple(river),
+        )
+        for seat, river in enumerate(rivers)
+    )
+    return _custom_input(concealed, players)
+
+
 def _action(tile: Tile) -> DiscardAction:
     return DiscardAction(actor=Seat.SEAT_0, tile=tile, tsumogiri=False)
 
@@ -250,10 +299,30 @@ def _mechanism_activated_fixture() -> tuple[PolicyInput, tuple[DiscardAction, ..
 
 
 def _all_zero_progression_fixture() -> tuple[PolicyInput, tuple[DiscardAction, ...]]:
+    """full legal / baseline eligibleが同一集合のall-zero fixture（PUSH branch）。"""
     concealed = _hand("147m258p369s13577z")
     actions = _distinct_discard_actions(concealed)
     policy_input = _restricted_input(
         concealed, tuple(f"{rank}m" for rank in range(1, 10))
+    )
+    return policy_input, actions
+
+
+def _all_zero_progression_with_excluded_better_fixture() -> tuple[
+    PolicyInput, tuple[DiscardAction, ...]
+]:
+    """full legal / baseline eligibleがともにall-zeroだがR5 bestが異なるfixture。
+
+    `_all_zero_progression_fixture()`と同じ手牌・同じdrawable制限を使うが、
+    opponent riichi + common genbutsu (1m, 4m)を加えてFOLD_COMMON_GENBUTSU
+    branchにする。eligible universe（1m・4mだけ）から除外された候補の方が
+    実際にはterminal-shanten massが小さく、full-legalとbaseline-eligibleの
+    R5 opportunity costを分離できることを示す。
+    """
+    concealed = _hand("147m258p369s13577z")
+    actions = _distinct_discard_actions(concealed)
+    policy_input = _restricted_input_with_common_genbutsu(
+        concealed, tuple(f"{rank}m" for rank in range(1, 10)), ("1m", "4m")
     )
     return policy_input, actions
 
@@ -449,7 +518,7 @@ class CompletionMassReuseTest(unittest.TestCase):
 
 
 class TerminalProgressionOptInTest(unittest.TestCase):
-    """R5 explicit opt-in / #169 exact reuse / default起動禁止を固定する。"""
+    """R5 explicit opt-in / #169 exact reuse / full-legal-eligible分離を固定する。"""
 
     def test_default_call_does_not_invoke_the_progression_evaluator(self) -> None:
         policy_input, actions = _all_zero_progression_fixture()
@@ -457,12 +526,14 @@ class TerminalProgressionOptInTest(unittest.TestCase):
             diagnostic,
             "_evaluate_progression_candidates",
             side_effect=AssertionError("progression must not run by default"),
-        ):
+        ) as spy:
             analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
                 policy_input, actions
             )
         self.assertFalse(analysis.include_terminal_progression)
-        self.assertIsNone(analysis.terminal_progression_summary)
+        self.assertEqual(spy.call_count, 0)
+        self.assertIsNone(analysis.full_legal_terminal_progression_summary)
+        self.assertIsNone(analysis.baseline_eligible_terminal_progression_summary)
         self.assertTrue(
             all(
                 candidate.terminal_shanten_mass is None
@@ -470,13 +541,31 @@ class TerminalProgressionOptInTest(unittest.TestCase):
             )
         )
 
+    def test_both_universes_all_zero_run_progression_once_with_both_summaries(
+        self,
+    ) -> None:
+        """full legal == baseline eligibleがともにall-zero: DPは1回だけ、両summaryあり。"""
+        policy_input, actions = _all_zero_progression_fixture()
+        with patch.object(
+            diagnostic,
+            "_evaluate_progression_candidates",
+            wraps=diagnostic._evaluate_progression_candidates,
+        ) as spy:
+            analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
+                policy_input, actions, include_terminal_progression=True
+            )
+        self.assertEqual(spy.call_count, 1)
+        self.assertTrue(analysis.full_legal_summary.completion_all_zero)
+        self.assertTrue(analysis.baseline_eligible_summary.completion_all_zero)
+        self.assertIsNotNone(analysis.full_legal_terminal_progression_summary)
+        self.assertIsNotNone(analysis.baseline_eligible_terminal_progression_summary)
+
     def test_opt_in_all_zero_matches_the_exact_169_evaluator(self) -> None:
         policy_input, actions = _all_zero_progression_fixture()
         analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
             policy_input, actions, include_terminal_progression=True
         )
         self.assertTrue(analysis.baseline_eligible_summary.completion_all_zero)
-        self.assertIsNotNone(analysis.terminal_progression_summary)
 
         remaining_counts = _root_remaining_counts(policy_input)
         completion_evaluations = _evaluate_completion_masses(
@@ -504,7 +593,39 @@ class TerminalProgressionOptInTest(unittest.TestCase):
         self.assertEqual(actual, expected)
         best = min(expected.values())
         self.assertEqual(
-            analysis.terminal_progression_summary.best_terminal_shanten_mass, best
+            analysis.full_legal_terminal_progression_summary.best_terminal_shanten_mass,
+            best,
+        )
+        self.assertEqual(
+            analysis.baseline_eligible_terminal_progression_summary.best_terminal_shanten_mass,
+            best,
+        )
+
+    def test_full_legal_positive_eligible_all_zero_has_only_eligible_summary(
+        self,
+    ) -> None:
+        """full legalはpositive completion、baseline eligibleだけall-zero。"""
+        policy_input, actions = _fold_common_genbutsu_fixture()
+        analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
+            policy_input, actions, include_terminal_progression=True
+        )
+        self.assertFalse(analysis.full_legal_summary.completion_all_zero)
+        self.assertTrue(analysis.baseline_eligible_summary.completion_all_zero)
+        self.assertIsNone(analysis.full_legal_terminal_progression_summary)
+        self.assertIsNotNone(analysis.baseline_eligible_terminal_progression_summary)
+        self.assertTrue(
+            all(
+                candidate.terminal_shanten_mass is None
+                for candidate in analysis.candidate_evaluations
+                if not candidate.baseline_eligible
+            )
+        )
+        self.assertTrue(
+            all(
+                candidate.terminal_shanten_mass is not None
+                for candidate in analysis.candidate_evaluations
+                if candidate.baseline_eligible
+            )
         )
 
     def test_opt_in_without_all_zero_stays_inactive(self) -> None:
@@ -513,11 +634,74 @@ class TerminalProgressionOptInTest(unittest.TestCase):
             diagnostic,
             "_evaluate_progression_candidates",
             side_effect=AssertionError("progression must not run when not all-zero"),
-        ):
+        ) as spy:
             analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
                 policy_input, actions, include_terminal_progression=True
             )
-        self.assertIsNone(analysis.terminal_progression_summary)
+        self.assertEqual(spy.call_count, 0)
+        self.assertIsNone(analysis.full_legal_terminal_progression_summary)
+        self.assertIsNone(analysis.baseline_eligible_terminal_progression_summary)
+
+    def test_full_legal_and_eligible_regret_come_from_exact_candidate_subsets(
+        self,
+    ) -> None:
+        """excludeされた候補の方がbestなfixtureで、full-legal / eligible regretが分離される。"""
+        policy_input, actions = _all_zero_progression_with_excluded_better_fixture()
+        analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
+            policy_input, actions, include_terminal_progression=True
+        )
+        self.assertTrue(analysis.full_legal_summary.completion_all_zero)
+        self.assertTrue(analysis.baseline_eligible_summary.completion_all_zero)
+        self.assertLess(len(analysis.baseline_eligible_actions), len(actions))
+
+        terminal_by_action = {
+            candidate.action: candidate.terminal_shanten_mass
+            for candidate in analysis.candidate_evaluations
+        }
+        expected_full_best = min(terminal_by_action[action] for action in actions)
+        expected_eligible_best = min(
+            terminal_by_action[action] for action in analysis.baseline_eligible_actions
+        )
+        self.assertEqual(
+            analysis.full_legal_terminal_progression_summary.best_terminal_shanten_mass,
+            expected_full_best,
+        )
+        self.assertEqual(
+            analysis.baseline_eligible_terminal_progression_summary.best_terminal_shanten_mass,
+            expected_eligible_best,
+        )
+        # excluded (non-eligible) candidateの方がbestなので、full-legal regretは
+        # baseline-eligible regretより大きいはずである。
+        self.assertGreater(
+            analysis.full_legal_terminal_progression_summary.terminal_shanten_regret_mass,
+            analysis.baseline_eligible_terminal_progression_summary.terminal_shanten_regret_mass,
+        )
+
+    def test_terminal_histogram_sums_to_the_sequence_denominator(self) -> None:
+        policy_input, actions = _all_zero_progression_fixture()
+        analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
+            policy_input, actions, include_terminal_progression=True
+        )
+        for candidate in analysis.candidate_evaluations:
+            with self.subTest(action=candidate.action):
+                self.assertIsNotNone(candidate.terminal_shanten_counts)
+                self.assertEqual(
+                    sum(candidate.terminal_shanten_counts),
+                    analysis.sequence_denominator,
+                )
+
+    def test_terminal_shanten_mass_equals_the_histogram_mass(self) -> None:
+        policy_input, actions = _all_zero_progression_fixture()
+        analysis = analyze_mechanism_riichi_defense_offensive_efficiency(
+            policy_input, actions, include_terminal_progression=True
+        )
+        for candidate in analysis.candidate_evaluations:
+            with self.subTest(action=candidate.action):
+                histogram_mass = sum(
+                    index * count
+                    for index, count in enumerate(candidate.terminal_shanten_counts)
+                )
+                self.assertEqual(candidate.terminal_shanten_mass, histogram_mass)
 
 
 class ProductionSelectionParityTest(unittest.TestCase):
@@ -674,7 +858,8 @@ class TypedResultValueTest(unittest.TestCase):
                 ),
                 full_legal_summary=UniverseEfficiencySummary(**summary_kwargs),
                 baseline_eligible_summary=UniverseEfficiencySummary(**summary_kwargs),
-                terminal_progression_summary=None,
+                full_legal_terminal_progression_summary=None,
+                baseline_eligible_terminal_progression_summary=None,
             )
 
 
