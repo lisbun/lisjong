@@ -52,6 +52,7 @@ winning action、Always Riichi、pass、既存fallbackのorchestrationは基底c
 `analysis`は`None`とする。
 """
 
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from lisjong.policies.finite_horizon_completion import (
@@ -128,6 +129,56 @@ def _discard_safety(
     return _DiscardSafety.UNKNOWN
 
 
+class DefenseFilterBranch(Enum):
+    """Issue #172診断seamが観測するPush/Fold・Safety typed branch classification。
+
+    `FOLD_FALLBACK_ALL_LEGAL`は、FOLDかつ共通現物が1件もなく全legal discardへ
+    fallbackしたことを表す。set size比較だけでは`PUSH`（無制限）と区別できない
+    ため、このbranch自身をtyped valueとして公開する。
+    """
+
+    PUSH = auto()
+    FOLD_COMMON_GENBUTSU = auto()
+    FOLD_FALLBACK_ALL_LEGAL = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class DefenseFilterEvaluation:
+    """Push/Fold・Safetyの2段decisionが実際に選んだbranchとeligible set。"""
+
+    branch: DefenseFilterBranch
+    eligible_actions: tuple[DiscardAction, ...]
+
+
+def _evaluate_defense_filter(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+) -> DefenseFilterEvaluation:
+    """Push/Fold・Safety semanticsのsingle-source typed評価。
+
+    production `_defense_eligible_actions()`とIssue #172診断seamの両方が
+    このhelperからeligible setとbranch classificationを得る。filtering logicは
+    ここに1回だけ実装する。
+    """
+    if _decide_push_fold(policy_input, discard_actions) is _PushFoldDecision.PUSH:
+        return DefenseFilterEvaluation(DefenseFilterBranch.PUSH, discard_actions)
+
+    riichi_players = _opponent_riichi_players(policy_input)
+    common_tile_types = _common_genbutsu_tile_types(riichi_players)
+    genbutsu_actions = tuple(
+        action
+        for action in discard_actions
+        if _discard_safety(action, common_tile_types) is _DiscardSafety.COMMON_GENBUTSU
+    )
+    if genbutsu_actions:
+        return DefenseFilterEvaluation(
+            DefenseFilterBranch.FOLD_COMMON_GENBUTSU, genbutsu_actions
+        )
+    return DefenseFilterEvaluation(
+        DefenseFilterBranch.FOLD_FALLBACK_ALL_LEGAL, discard_actions
+    )
+
+
 def _defense_eligible_actions(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
@@ -137,17 +188,7 @@ def _defense_eligible_actions(
     PUSHでは全legal discardをそのまま返す。FOLDではCOMMON_GENBUTSUの候補だけへ
     絞り、1件もなければ既存Combinedと同じく全legal discardへfallbackする。
     """
-    if _decide_push_fold(policy_input, discard_actions) is _PushFoldDecision.PUSH:
-        return discard_actions
-
-    riichi_players = _opponent_riichi_players(policy_input)
-    common_tile_types = _common_genbutsu_tile_types(riichi_players)
-    genbutsu_actions = tuple(
-        action
-        for action in discard_actions
-        if _discard_safety(action, common_tile_types) is _DiscardSafety.COMMON_GENBUTSU
-    )
-    return genbutsu_actions or discard_actions
+    return _evaluate_defense_filter(policy_input, discard_actions).eligible_actions
 
 
 def _hand_value_aware_fallback(
