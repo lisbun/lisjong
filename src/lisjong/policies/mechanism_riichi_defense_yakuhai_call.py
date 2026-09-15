@@ -9,6 +9,7 @@ calibrated放銃確率は扱わない。
 """
 
 from dataclasses import dataclass
+from enum import Enum, auto
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
@@ -129,23 +130,55 @@ def _classical_riichi_danger_score(
     )
 
 
-def _mechanism_defense_eligible_actions(
+class MechanismDefenseActivation(Enum):
+    """Issue #172診断seamが観測するIssue #163 activation typed classification。
+
+    `NOT_ACTIVATED`は「他家リーチなし」「打牌後最小向聴数が2未満」「legal discard
+    のいずれかがすでに共通現物」のいずれかを意味し、この場合`eligible_actions`は
+    入力`discard_actions`とidentical、tie（set sizeが変わらない）でも起こり得る
+    `ACTIVATED`とは区別する。set size比較だけでactivationを推測しない。
+    """
+
+    NOT_ACTIVATED = auto()
+    ACTIVATED = auto()
+
+
+@dataclass(frozen=True, slots=True)
+class MechanismDefenseFilterEvaluation:
+    """Issue #163 mechanism defense filterの1回のactivation判定とその結果。"""
+
+    activation: MechanismDefenseActivation
+    eligible_actions: tuple[DiscardAction, ...]
+
+
+def _evaluate_mechanism_defense_filter(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
-) -> tuple[DiscardAction, ...]:
-    """Issue #163 activation時だけminimum worst-opponent scoreへhard filterする。"""
+) -> MechanismDefenseFilterEvaluation:
+    """Issue #163 activation semanticsのsingle-source typed評価。
+
+    production `_mechanism_defense_eligible_actions()`とIssue #172診断seamの
+    両方がこのhelperから`eligible_actions`とactivation classificationを得る。
+    filtering logicはここに1回だけ実装する。
+    """
     riichi_players = _opponent_riichi_players(policy_input)
     if not riichi_players:
-        return discard_actions
+        return MechanismDefenseFilterEvaluation(
+            MechanismDefenseActivation.NOT_ACTIVATED, discard_actions
+        )
 
     evaluator = _DecisionShantenEvaluator()
     evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     if min(candidate.post_discard_shanten for candidate in evaluated) < 2:
-        return discard_actions
+        return MechanismDefenseFilterEvaluation(
+            MechanismDefenseActivation.NOT_ACTIVATED, discard_actions
+        )
 
     common_genbutsu = _common_genbutsu_tile_types(riichi_players)
     if any(action.tile.tile_type in common_genbutsu for action in discard_actions):
-        return discard_actions
+        return MechanismDefenseFilterEvaluation(
+            MechanismDefenseActivation.NOT_ACTIVATED, discard_actions
+        )
 
     remaining_counts = derive_remaining_tile_inventory(
         policy_input
@@ -163,7 +196,22 @@ def _mechanism_defense_eligible_actions(
         for action in discard_actions
     )
     minimum_danger = min(score for _, score in overall_dangers)
-    return tuple(action for action, score in overall_dangers if score == minimum_danger)
+    filtered = tuple(
+        action for action, score in overall_dangers if score == minimum_danger
+    )
+    return MechanismDefenseFilterEvaluation(
+        MechanismDefenseActivation.ACTIVATED, filtered
+    )
+
+
+def _mechanism_defense_eligible_actions(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+) -> tuple[DiscardAction, ...]:
+    """Issue #163 activation時だけminimum worst-opponent scoreへhard filterする。"""
+    return _evaluate_mechanism_defense_filter(
+        policy_input, discard_actions
+    ).eligible_actions
 
 
 class MechanismRiichiDefenseYakuhaiCallPolicy(
