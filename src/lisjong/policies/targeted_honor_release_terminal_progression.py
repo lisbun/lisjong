@@ -478,7 +478,7 @@ def _evaluate_and_choose_discard(
             f"{hidden_tile_count} hidden tiles cannot fill {DEFAULT_HORIZON} future "
             "self-draw slots"
         )
-    sequence_denominator = _falling_factorial(hidden_tile_count, DEFAULT_HORIZON)
+    sequence_denominator: int | None = None
     completion_evaluations = _evaluate_completion_masses(
         policy_input,
         eligible_actions,
@@ -603,6 +603,7 @@ def _evaluate_and_choose_discard(
             sequence_denominator=sequence_denominator,
         )
 
+    sequence_denominator = _falling_factorial(hidden_tile_count, DEFAULT_HORIZON)
     completion_by_action = {
         evaluation.action: evaluation for evaluation in completion_evaluations
     }
