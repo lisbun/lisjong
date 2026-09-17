@@ -9,6 +9,7 @@ import lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense as
 from lisjong.policies.finite_horizon_completion import FiniteHorizonCandidateEvaluation
 from lisjong.policies.hand_value_aware_two_step_ukeire import (
     HandValueCandidateEvaluation,
+    _retained_real_value,
 )
 from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
     MechanismRiichiDefenseYakuhaiCallPolicy,
@@ -35,6 +36,7 @@ def _tile(category: TileCategory, rank: int, *, red: bool = False) -> Tile:
 M3 = _tile(TileCategory.MANZU, 3)
 M4 = _tile(TileCategory.MANZU, 4)
 M5 = _tile(TileCategory.MANZU, 5)
+M5_RED = _tile(TileCategory.MANZU, 5, red=True)
 EAST = _tile(TileCategory.HONOR, 1)
 SOUTH = _tile(TileCategory.HONOR, 2)
 
@@ -57,6 +59,7 @@ def _input(
     *,
     drawn_tile: Tile | None = M5,
     own_melds: tuple[PublicMeld, ...] = (),
+    dora_indicators: tuple[Tile, ...] = (),
 ) -> PolicyInput:
     players = [_player() for _ in range(4)]
     players[0] = _player(melds=own_melds)
@@ -69,7 +72,7 @@ def _input(
             dealer_seat=Seat.SEAT_0,
             honba=0,
             riichi_sticks=0,
-            dora_indicators=(),
+            dora_indicators=dora_indicators,
             live_wall_tiles_remaining=70,
         ),
         players=tuple(players),
@@ -208,6 +211,44 @@ class TargetUniverseTest(unittest.TestCase):
             ),
             (A_M3,),
         )
+
+    def test_concrete_dora_red_dora_and_yakuhai_losses_are_excluded(self) -> None:
+        cases = (
+            (
+                "indicator dora",
+                _input(dora_indicators=(M4,)),
+                (M5,),
+                (M3,),
+            ),
+            (
+                "red dora",
+                _input(),
+                (M5_RED,),
+                (M3,),
+            ),
+            (
+                "completed double-wind yakuhai",
+                _input(),
+                (EAST, EAST, EAST),
+                (EAST, EAST, M3),
+            ),
+        )
+        for label, policy_input, parent_hand, peer_hand in cases:
+            with self.subTest(label=label):
+                parent_value = _retained_real_value(parent_hand, policy_input)
+                peer_value = _retained_real_value(peer_hand, policy_input)
+                self.assertGreater(parent_value, peer_value)
+                snapshots = (
+                    _hva(A_M3, retained=parent_value),
+                    _hva(A_EAST, retained=peer_value),
+                )
+                self.assertEqual(
+                    tuple(
+                        snapshot.action
+                        for snapshot in targeted._target_candidates(A_M3, snapshots)
+                    ),
+                    (A_M3,),
+                )
 
 
 class DecisiveStageTest(unittest.TestCase):
