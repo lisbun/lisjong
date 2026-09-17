@@ -603,11 +603,11 @@ def _evaluate_and_choose_discard(
             sequence_denominator=sequence_denominator,
         )
 
-    target_actions = frozenset(snapshot.action for snapshot in target_snapshots)
+    completion_by_action = {
+        evaluation.action: evaluation for evaluation in completion_evaluations
+    }
     target_completion_evaluations = tuple(
-        evaluation
-        for evaluation in completion_evaluations
-        if evaluation.action in target_actions
+        completion_by_action[snapshot.action] for snapshot in target_snapshots
     )
     progression_evaluations = _evaluate_progression_candidates(
         policy_input,
