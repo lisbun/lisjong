@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import lisjong.policies.targeted_honor_release_terminal_progression as targeted
+import lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense as progression
 from lisjong.policies.finite_horizon_completion import FiniteHorizonCandidateEvaluation
 from lisjong.policies.hand_value_aware_two_step_ukeire import (
     HandValueCandidateEvaluation,
@@ -101,9 +102,7 @@ def _completion(
     return FiniteHorizonCandidateEvaluation(action, mass)
 
 
-def _progression(
-    action: DiscardAction, mass: int
-) -> ProgressionCandidateEvaluation:
+def _progression(action: DiscardAction, mass: int) -> ProgressionCandidateEvaluation:
     counts = (0, mass, 0, 0, 0, 0, 0, 0, 0)
     return ProgressionCandidateEvaluation(
         action=action,
@@ -122,6 +121,21 @@ class PolicyBoundaryTest(unittest.TestCase):
         self.assertIs(
             pickle.loads(pickle.dumps(policy)).__class__,
             targeted.TargetedHonorReleaseTerminalProgressionPolicy,
+        )
+
+    def test_non_discard_orchestration_is_inherited_from_exact_parent(self) -> None:
+        policy_type = targeted.TargetedHonorReleaseTerminalProgressionPolicy
+        self.assertIs(policy_type.choose_action, MechanismRiichiDefenseYakuhaiCallPolicy.choose_action)
+        self.assertIs(policy_type._decide, MechanismRiichiDefenseYakuhaiCallPolicy._decide)
+
+    def test_exact_r5_implementation_is_single_source_reuse(self) -> None:
+        self.assertIs(
+            targeted._evaluate_progression_candidates,
+            progression._evaluate_progression_candidates,
+        )
+        self.assertIs(
+            targeted._TerminalShantenProgressionEvaluator,
+            progression._TerminalShantenProgressionEvaluator,
         )
 
     def test_ankan_only_is_closed_but_open_meld_is_not(self) -> None:
@@ -204,7 +218,9 @@ class DecisiveStageTest(unittest.TestCase):
 
 
 class ActivationAndSwitchTest(unittest.TestCase):
-    def _active_patches(self, snapshots, progression_results):
+    def _active_patches(
+        self, snapshots, progression_results, *, parent_action=A_M3
+    ):
         actions = tuple(snapshot.action for snapshot in snapshots)
         return (
             actions,
@@ -222,7 +238,7 @@ class ActivationAndSwitchTest(unittest.TestCase):
             patch.object(
                 targeted,
                 "_hand_value_aware_evaluate_and_choose_discard",
-                return_value=(A_M3, snapshots),
+                return_value=(parent_action, snapshots),
             ),
             patch.object(
                 targeted,
@@ -324,9 +340,7 @@ class ActivationAndSwitchTest(unittest.TestCase):
                 "_evaluate_completion_masses",
                 return_value=(_completion(A_M3, 3), _completion(A_EAST, 1)),
             ),
-            patch.object(
-                targeted, "_select_from_completion_masses", return_value=A_M3
-            ),
+            patch.object(targeted, "_select_from_completion_masses", return_value=A_M3),
             patch.object(
                 targeted,
                 "_evaluate_progression_candidates",
@@ -374,6 +388,64 @@ class ActivationAndSwitchTest(unittest.TestCase):
         self.assertIs(selected, A_M3)
         self.assertEqual(analysis.target_candidate_count, 1)
         self.assertEqual(analysis.honor_target_candidate_count, 0)
+
+    def test_shanten_two_parent_never_runs_r5(self) -> None:
+        snapshots = (_hva(A_M3, shanten=2), _hva(A_EAST, shanten=2))
+        actions, *patches = self._active_patches(snapshots, ())
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as run_r5:
+            selected, analysis = targeted._evaluate_and_choose_discard(
+                _input(), actions
+            )
+        self.assertIs(selected, A_M3)
+        self.assertIs(
+            analysis.activation_stage,
+            targeted.TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE,
+        )
+        run_r5.assert_not_called()
+
+    def test_parent_not_minimum_shanten_never_runs_r5(self) -> None:
+        snapshots = (_hva(A_M3, shanten=4), _hva(A_EAST, shanten=3))
+        actions, *patches = self._active_patches(snapshots, ())
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as run_r5:
+            selected, analysis = targeted._evaluate_and_choose_discard(
+                _input(), actions
+            )
+        self.assertIs(selected, A_M3)
+        self.assertIs(
+            analysis.activation_stage,
+            targeted.TargetedHonorReleaseActivationStage.PARENT_NOT_MINIMUM_SHANTEN,
+        )
+        run_r5.assert_not_called()
+
+    def test_parent_not_maximum_ukeire_never_runs_r5(self) -> None:
+        snapshots = (_hva(A_M3, ukeire=7), _hva(A_EAST, ukeire=8))
+        actions, *patches = self._active_patches(snapshots, ())
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as run_r5:
+            selected, analysis = targeted._evaluate_and_choose_discard(
+                _input(), actions
+            )
+        self.assertIs(selected, A_M3)
+        self.assertIs(
+            analysis.activation_stage,
+            targeted.TargetedHonorReleaseActivationStage.PARENT_NOT_MAXIMUM_UKEIRE,
+        )
+        run_r5.assert_not_called()
+
+    def test_parent_already_honor_never_runs_r5(self) -> None:
+        snapshots = (_hva(A_EAST, route=2), _hva(A_M3, route=1))
+        actions, *patches = self._active_patches(
+            snapshots, (), parent_action=A_EAST
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as run_r5:
+            selected, analysis = targeted._evaluate_and_choose_discard(
+                _input(), actions
+            )
+        self.assertIs(selected, A_EAST)
+        self.assertIs(
+            analysis.activation_stage,
+            targeted.TargetedHonorReleaseActivationStage.PARENT_ALREADY_HONOR,
+        )
+        run_r5.assert_not_called()
 
     def test_honor_only_unique_r5_best_switches_once(self) -> None:
         snapshots = (
@@ -434,6 +506,50 @@ class ActivationAndSwitchTest(unittest.TestCase):
             analysis.activation_stage,
             targeted.TargetedHonorReleaseActivationStage.R5_NON_HONOR_ONLY_BEST,
         )
+
+    def test_suited_only_r5_best_preserves_parent(self) -> None:
+        snapshots = (
+            _hva(A_M3, route=2),
+            _hva(A_EAST, route=1),
+            _hva(A_M4, route=1),
+        )
+        progression_results = (
+            _progression(A_M3, 30),
+            _progression(A_EAST, 20),
+            _progression(A_M4, 10),
+        )
+        actions, *patches = self._active_patches(snapshots, progression_results)
+        with patches[0], patches[1], patches[2], patches[3], patches[4]:
+            selected, analysis = targeted._evaluate_and_choose_discard(
+                _input(), actions
+            )
+        self.assertIs(selected, A_M3)
+        self.assertIs(
+            analysis.activation_stage,
+            targeted.TargetedHonorReleaseActivationStage.R5_NON_HONOR_ONLY_BEST,
+        )
+
+    def test_active_selection_is_independent_of_legal_action_order(self) -> None:
+        results = set()
+        for snapshots in (
+            (_hva(A_M3, route=2), _hva(A_EAST, route=1)),
+            (_hva(A_EAST, route=1), _hva(A_M3, route=2)),
+        ):
+            progression_results = tuple(
+                _progression(
+                    snapshot.action, 30 if snapshot.action == A_M3 else 10
+                )
+                for snapshot in snapshots
+            )
+            actions, *patches = self._active_patches(
+                snapshots, progression_results
+            )
+            with patches[0], patches[1], patches[2], patches[3], patches[4]:
+                selected, _ = targeted._evaluate_and_choose_discard(
+                    _input(), actions
+                )
+            results.add(selected)
+        self.assertEqual(results, {A_EAST})
 
     def test_multiple_honor_only_best_reuses_hva_tiebreak(self) -> None:
         snapshots = (
