@@ -62,7 +62,8 @@ Runtime profile への配備は別責務であり、RiichiLab 等の execution p
 | `MechanismRiichiDefenseYakuhaiCallPolicy` | `mechanism-riichi-defense` | **current promoted heuristic strength baseline (`ABBB` / `4p-red-single` scope)** | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。Arena #217 Gate 2で昇格、Arena #219でcurated alias登録 |
 | `OpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | Tanyao / Honitsu / Chinitsu-compatible strictly-improving Chi/Pon を追加 |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | selected cheap+far Chi/Pon のみ Pass へ置換 |
-| `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |\n| `TargetedHonorReleaseTerminalProgressionPolicy` | — | **experimental targeted offensive-efficiency candidate; not yet strength-evaluated; not promoted** | far closed PUSH / all-zeroでshanten・ukeire・retained value同等のsuited-discard / honor conflictだけをexact R5で再判定 |
+| `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |
+| `TargetedHonorReleaseTerminalProgressionPolicy` | — | **experimental targeted offensive-efficiency candidate; not yet strength-evaluated; not promoted** | far closed PUSH / all-zeroでshanten・ukeire・retained value同等のsuited-discard / honor conflictだけをexact R5で再判定 |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
 
 `current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。
