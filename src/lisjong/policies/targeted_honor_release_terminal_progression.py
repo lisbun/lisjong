@@ -133,9 +133,7 @@ class TargetedHonorReleaseAnalysis:
     r5_best_count: int
 
     def __post_init__(self) -> None:
-        if not isinstance(
-            self.activation_stage, TargetedHonorReleaseActivationStage
-        ):
+        if not isinstance(self.activation_stage, TargetedHonorReleaseActivationStage):
             raise TypeError(
                 "activation_stage must be a TargetedHonorReleaseActivationStage"
             )
@@ -332,9 +330,7 @@ def _classify_hva_decisive_stage(
             else HandValueDecisiveStage.UNRESOLVED
         )
 
-    if any(
-        snapshot.second_step_ukeire_score is None for snapshot in route_finalists
-    ):
+    if any(snapshot.second_step_ukeire_score is None for snapshot in route_finalists):
         return HandValueDecisiveStage.UNRESOLVED
     maximum_second_step = max(
         snapshot.second_step_ukeire_score for snapshot in route_finalists
@@ -513,9 +509,7 @@ def _evaluate_and_choose_discard(
     parent_snapshot = by_action[parent_action]
     decisive_stage = _classify_hva_decisive_stage(parent_action, hva_snapshots)
 
-    minimum_shanten = min(
-        snapshot.post_discard_shanten for snapshot in hva_snapshots
-    )
+    minimum_shanten = min(snapshot.post_discard_shanten for snapshot in hva_snapshots)
     if parent_snapshot.post_discard_shanten < 3:
         return parent_action, _analysis(
             stage=TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE,
