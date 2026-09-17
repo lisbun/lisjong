@@ -132,6 +132,10 @@ class PolicyBoundaryTest(unittest.TestCase):
         self.assertIs(
             policy_type._decide, MechanismRiichiDefenseYakuhaiCallPolicy._decide
         )
+        self.assertIs(
+            policy_type.choose_action_with_analysis,
+            MechanismRiichiDefenseYakuhaiCallPolicy.choose_action_with_analysis,
+        )
 
     def test_exact_r5_implementation_is_single_source_reuse(self) -> None:
         self.assertIs(
@@ -142,6 +146,29 @@ class PolicyBoundaryTest(unittest.TestCase):
             targeted._TerminalShantenProgressionEvaluator,
             progression._TerminalShantenProgressionEvaluator,
         )
+
+    def test_discard_analysis_uses_standard_trace_contract(self) -> None:
+        analysis = targeted._analysis(
+            stage=targeted.TargetedHonorReleaseActivationStage.NO_QUALIFYING_HONOR_PEER,
+            parent_action=A_M3,
+            selected_action=A_M3,
+            branch=targeted.TargetedHonorReleaseBranch.PUSH,
+            closed_hand=True,
+            parent_snapshot=None,
+            eligible_candidate_count=1,
+        )
+        with patch.object(
+            targeted,
+            "_evaluate_and_choose_discard",
+            return_value=(A_M3, analysis),
+        ) as evaluate:
+            decision = targeted.TargetedHonorReleaseTerminalProgressionPolicy()._decide_discard(
+                _input(), (A_M3,)
+            )
+        self.assertIs(decision.action, A_M3)
+        self.assertIs(decision.analysis, analysis)
+        self.assertIsInstance(decision.analysis, targeted.AnalysisTrace)
+        evaluate.assert_called_once()
 
     def test_ankan_only_is_closed_but_open_meld_is_not(self) -> None:
         ankan = PublicMeld(MeldKind.ANKAN, (EAST,) * 4, None, None)
