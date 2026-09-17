@@ -698,7 +698,5 @@ class TargetedHonorReleaseTerminalProgressionPolicy(
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
     ) -> PolicyDecision:
-        selected, analysis = _evaluate_and_choose_discard(
-            policy_input, discard_actions
-        )
+        selected, analysis = _evaluate_and_choose_discard(policy_input, discard_actions)
         return PolicyDecision(action=selected, analysis=analysis)
