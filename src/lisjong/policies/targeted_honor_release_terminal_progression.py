@@ -23,7 +23,6 @@ from enum import Enum, auto
 
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
-    FiniteHorizonCandidateEvaluation,
     FiniteHorizonCompletionPolicyError,
     _evaluate_completion_masses,
     _falling_factorial,
@@ -39,6 +38,8 @@ from lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware import (
 )
 from lisjong.policies.hand_value_aware_two_step_ukeire import (
     HandValueCandidateEvaluation,
+)
+from lisjong.policies.hand_value_aware_two_step_ukeire import (
     _evaluate_and_choose_discard as _hand_value_aware_evaluate_and_choose_discard,
 )
 from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
