@@ -14,8 +14,9 @@ R5はIssue #169のexact integer evaluatorをsingle-sourceで再利用する。cu
 R5 bestに含まれる場合、R5 bestがhonor-onlyでない場合、qualifying honor peerがない
 場合は必ずparent actionを維持する。
 
-PolicyDecision.analysisはexact parentと同じくNoneのままにし、purpose-specificな
-`TargetedHonorReleaseAnalysis`はprivate evaluation helperの戻り値としてだけ公開する。
+`choose_action()`のAction契約はexact parentと同じまま、traced executionでは
+purpose-specificな`TargetedHonorReleaseAnalysis`を同じ1回のdecision計算から返す。
+analysisのためにR5やselectionを二重実行しない。
 """
 
 from dataclasses import dataclass
@@ -55,6 +56,7 @@ from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense impo
 )
 from lisjong.policies.two_step_ukeire import _discard_action_sort_key
 from lisjong.policy_contract.action import DiscardAction
+from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.meld import MeldKind
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
@@ -111,7 +113,7 @@ class HandValueDecisiveStage(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class TargetedHonorReleaseAnalysis:
+class TargetedHonorReleaseAnalysis(AnalysisTrace):
     """1 discard decisionで#174 pathが実際に観測したpurpose-specific値。"""
 
     activation_stage: TargetedHonorReleaseActivationStage
@@ -696,5 +698,7 @@ class TargetedHonorReleaseTerminalProgressionPolicy(
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
     ) -> PolicyDecision:
-        selected, _ = _evaluate_and_choose_discard(policy_input, discard_actions)
-        return PolicyDecision(action=selected, analysis=None)
+        selected, analysis = _evaluate_and_choose_discard(
+            policy_input, discard_actions
+        )
+        return PolicyDecision(action=selected, analysis=analysis)
