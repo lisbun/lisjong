@@ -125,8 +125,13 @@ class PolicyBoundaryTest(unittest.TestCase):
 
     def test_non_discard_orchestration_is_inherited_from_exact_parent(self) -> None:
         policy_type = targeted.TargetedHonorReleaseTerminalProgressionPolicy
-        self.assertIs(policy_type.choose_action, MechanismRiichiDefenseYakuhaiCallPolicy.choose_action)
-        self.assertIs(policy_type._decide, MechanismRiichiDefenseYakuhaiCallPolicy._decide)
+        self.assertIs(
+            policy_type.choose_action,
+            MechanismRiichiDefenseYakuhaiCallPolicy.choose_action,
+        )
+        self.assertIs(
+            policy_type._decide, MechanismRiichiDefenseYakuhaiCallPolicy._decide
+        )
 
     def test_exact_r5_implementation_is_single_source_reuse(self) -> None:
         self.assertIs(
@@ -218,9 +223,7 @@ class DecisiveStageTest(unittest.TestCase):
 
 
 class ActivationAndSwitchTest(unittest.TestCase):
-    def _active_patches(
-        self, snapshots, progression_results, *, parent_action=A_M3
-    ):
+    def _active_patches(self, snapshots, progression_results, *, parent_action=A_M3):
         actions = tuple(snapshot.action for snapshot in snapshots)
         return (
             actions,
@@ -433,9 +436,7 @@ class ActivationAndSwitchTest(unittest.TestCase):
 
     def test_parent_already_honor_never_runs_r5(self) -> None:
         snapshots = (_hva(A_EAST, route=2), _hva(A_M3, route=1))
-        actions, *patches = self._active_patches(
-            snapshots, (), parent_action=A_EAST
-        )
+        actions, *patches = self._active_patches(snapshots, (), parent_action=A_EAST)
         with patches[0], patches[1], patches[2], patches[3], patches[4] as run_r5:
             selected, analysis = targeted._evaluate_and_choose_discard(
                 _input(), actions
@@ -536,18 +537,12 @@ class ActivationAndSwitchTest(unittest.TestCase):
             (_hva(A_EAST, route=1), _hva(A_M3, route=2)),
         ):
             progression_results = tuple(
-                _progression(
-                    snapshot.action, 30 if snapshot.action == A_M3 else 10
-                )
+                _progression(snapshot.action, 30 if snapshot.action == A_M3 else 10)
                 for snapshot in snapshots
             )
-            actions, *patches = self._active_patches(
-                snapshots, progression_results
-            )
+            actions, *patches = self._active_patches(snapshots, progression_results)
             with patches[0], patches[1], patches[2], patches[3], patches[4]:
-                selected, _ = targeted._evaluate_and_choose_discard(
-                    _input(), actions
-                )
+                selected, _ = targeted._evaluate_and_choose_discard(_input(), actions)
             results.add(selected)
         self.assertEqual(results, {A_EAST})
 
