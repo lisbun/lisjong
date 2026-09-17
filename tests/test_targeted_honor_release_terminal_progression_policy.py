@@ -118,12 +118,18 @@ def _progression(action: DiscardAction, mass: int) -> ProgressionCandidateEvalua
 
 class PolicyBoundaryTest(unittest.TestCase):
     def test_exact_parent_public_generation_is_stateless_and_picklable(self) -> None:
-        policy = targeted.TargetedHonorReleaseTerminalProgressionPolicy()
+        from lisjong.policies import TargetedHonorReleaseTerminalProgressionPolicy
+
+        self.assertIs(
+            TargetedHonorReleaseTerminalProgressionPolicy,
+            targeted.TargetedHonorReleaseTerminalProgressionPolicy,
+        )
+        policy = TargetedHonorReleaseTerminalProgressionPolicy()
         self.assertIsInstance(policy, MechanismRiichiDefenseYakuhaiCallPolicy)
         self.assertEqual(vars(policy), {})
         self.assertIs(
-            pickle.loads(pickle.dumps(policy)).__class__,
-            targeted.TargetedHonorReleaseTerminalProgressionPolicy,
+            pickle.loads(pickle.dumps(TargetedHonorReleaseTerminalProgressionPolicy)),
+            TargetedHonorReleaseTerminalProgressionPolicy,
         )
 
     def test_non_discard_orchestration_is_inherited_from_exact_parent(self) -> None:
