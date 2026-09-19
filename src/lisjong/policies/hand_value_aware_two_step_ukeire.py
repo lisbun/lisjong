@@ -204,17 +204,22 @@ def _retained_real_value(
     return dora_value + yakuhai_value
 
 
+def _is_tanyao_compatible(tiles: Sequence[Tile]) -> bool:
+    """全自牌が中張牌だけで構成されるcurrent Tanyao routeかを返す。"""
+    return bool(tiles) and all(
+        tile.tile_type.category is not TileCategory.HONOR
+        and 2 <= tile.tile_type.rank <= 8
+        for tile in tiles
+    )
+
+
 def _yaku_route_value_for_tiles(tiles: Sequence[Tile]) -> int:
     """全自牌のtanyao / honitsu / chinitsu compatibility値を返す。"""
     if not tiles:
         return 0
 
     value = 0
-    if all(
-        tile.tile_type.category is not TileCategory.HONOR
-        and 2 <= tile.tile_type.rank <= 8
-        for tile in tiles
-    ):
+    if _is_tanyao_compatible(tiles):
         value += 1
 
     suited_categories = {
