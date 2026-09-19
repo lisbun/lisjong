@@ -24,6 +24,7 @@ from enum import Enum, auto
 
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
+    FiniteHorizonCandidateEvaluation,
     FiniteHorizonCompletionPolicyError,
     _evaluate_completion_masses,
     _falling_factorial,
@@ -420,91 +421,22 @@ def _analysis(
     )
 
 
-def _evaluate_and_choose_discard(
+def _evaluate_all_zero_targeted_honor_release(
     policy_input: PolicyInput,
-    discard_actions: tuple[DiscardAction, ...],
+    *,
+    branch: TargetedHonorReleaseBranch,
+    eligible_actions: tuple[DiscardAction, ...],
+    remaining_counts: tuple[int, ...],
+    hidden_tile_count: int,
+    completion_evaluations: tuple[FiniteHorizonCandidateEvaluation, ...],
 ) -> tuple[DiscardAction, TargetedHonorReleaseAnalysis]:
-    """#174のnarrow gateとselectionを1 decision分だけ評価する。"""
-    discard_actions = tuple(discard_actions)
-    if not discard_actions:
-        raise ValueError("discard_actions must not be empty")
+    """all-zero PUSH branchだけを#174 exact targeted gateで評価する。
 
-    branch, eligible_actions = _classify_branch(policy_input, discard_actions)
-    closed_hand = _is_closed_hand(policy_input)
-
-    # current OwnHandStateではdrawn_tileがnormal self-drawのphase metadataであり、
-    # post-call discardではNoneになる。metadataがない局面へ#174を外挿せずparent維持。
-    if policy_input.own_hand.drawn_tile is None:
-        parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.NOT_NORMAL_TURN,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=closed_hand,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
-        )
-
-    if not closed_hand:
-        parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.OPEN_HAND,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=False,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
-        )
-
-    if branch is not TargetedHonorReleaseBranch.PUSH:
-        parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.NON_PUSH_BRANCH,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
-        )
-
-    remaining_counts = _root_remaining_counts(policy_input)
-    hidden_tile_count = sum(remaining_counts)
-    if hidden_tile_count < DEFAULT_HORIZON:
-        raise FiniteHorizonCompletionPolicyError(
-            "remaining hidden tile count is smaller than the search horizon: "
-            f"{hidden_tile_count} hidden tiles cannot fill {DEFAULT_HORIZON} future "
-            "self-draw slots"
-        )
+    callerがmechanism / defense filteringとFiniteHorizon evaluationをすでに
+    完了していることを前提にし、current HandValueAware parent actionから先の
+    narrow target gate / R5 overrideだけをsingle-sourceで実行する。
+    """
     sequence_denominator: int | None = None
-    completion_evaluations = _evaluate_completion_masses(
-        policy_input,
-        eligible_actions,
-        remaining_counts,
-        DEFAULT_HORIZON,
-        _FiniteHorizonEvaluator(),
-    )
-    maximum_completion = max(
-        evaluation.completion_mass for evaluation in completion_evaluations
-    )
-    if maximum_completion > 0:
-        parent_action = _select_from_completion_masses(
-            policy_input, completion_evaluations, maximum_completion
-        )
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.POSITIVE_COMPLETION,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
-        )
-
     parent_action, hva_snapshots = _hand_value_aware_evaluate_and_choose_discard(
         policy_input, eligible_actions
     )
@@ -686,6 +618,101 @@ def _evaluate_and_choose_discard(
         sequence_denominator=sequence_denominator,
         progression_evaluations=progression_evaluations,
         r5_best_count=len(r5_best),
+    )
+
+
+def _evaluate_and_choose_discard(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+) -> tuple[DiscardAction, TargetedHonorReleaseAnalysis]:
+    """#174のnarrow gateとselectionを1 decision分だけ評価する。"""
+    discard_actions = tuple(discard_actions)
+    if not discard_actions:
+        raise ValueError("discard_actions must not be empty")
+
+    branch, eligible_actions = _classify_branch(policy_input, discard_actions)
+    closed_hand = _is_closed_hand(policy_input)
+
+    # current OwnHandStateではdrawn_tileがnormal self-drawのphase metadataであり、
+    # post-call discardではNoneになる。metadataがない局面へ#174を外挿せずparent維持。
+    if policy_input.own_hand.drawn_tile is None:
+        parent_action = _parent_action(policy_input, discard_actions)
+        return parent_action, _analysis(
+            stage=TargetedHonorReleaseActivationStage.NOT_NORMAL_TURN,
+            parent_action=parent_action,
+            selected_action=parent_action,
+            branch=branch,
+            closed_hand=closed_hand,
+            parent_snapshot=None,
+            eligible_candidate_count=len(eligible_actions),
+        )
+
+    if not closed_hand:
+        parent_action = _parent_action(policy_input, discard_actions)
+        return parent_action, _analysis(
+            stage=TargetedHonorReleaseActivationStage.OPEN_HAND,
+            parent_action=parent_action,
+            selected_action=parent_action,
+            branch=branch,
+            closed_hand=False,
+            parent_snapshot=None,
+            eligible_candidate_count=len(eligible_actions),
+        )
+
+    if branch is not TargetedHonorReleaseBranch.PUSH:
+        parent_action = _parent_action(policy_input, discard_actions)
+        return parent_action, _analysis(
+            stage=TargetedHonorReleaseActivationStage.NON_PUSH_BRANCH,
+            parent_action=parent_action,
+            selected_action=parent_action,
+            branch=branch,
+            closed_hand=True,
+            parent_snapshot=None,
+            eligible_candidate_count=len(eligible_actions),
+        )
+
+    remaining_counts = _root_remaining_counts(policy_input)
+    hidden_tile_count = sum(remaining_counts)
+    if hidden_tile_count < DEFAULT_HORIZON:
+        raise FiniteHorizonCompletionPolicyError(
+            "remaining hidden tile count is smaller than the search horizon: "
+            f"{hidden_tile_count} hidden tiles cannot fill {DEFAULT_HORIZON} future "
+            "self-draw slots"
+        )
+    sequence_denominator: int | None = None
+    completion_evaluations = _evaluate_completion_masses(
+        policy_input,
+        eligible_actions,
+        remaining_counts,
+        DEFAULT_HORIZON,
+        _FiniteHorizonEvaluator(),
+    )
+    maximum_completion = max(
+        evaluation.completion_mass for evaluation in completion_evaluations
+    )
+    if maximum_completion > 0:
+        parent_action = _select_from_completion_masses(
+            policy_input, completion_evaluations, maximum_completion
+        )
+        return parent_action, _analysis(
+            stage=TargetedHonorReleaseActivationStage.POSITIVE_COMPLETION,
+            parent_action=parent_action,
+            selected_action=parent_action,
+            branch=branch,
+            closed_hand=True,
+            parent_snapshot=None,
+            eligible_candidate_count=len(eligible_actions),
+            hidden_tile_count=hidden_tile_count,
+            sequence_denominator=sequence_denominator,
+        )
+
+    return _evaluate_all_zero_targeted_honor_release(
+        policy_input,
+        branch=branch,
+        eligible_actions=eligible_actions,
+        remaining_counts=remaining_counts,
+        hidden_tile_count=hidden_tile_count,
+        completion_evaluations=completion_evaluations,
     )
 
 
