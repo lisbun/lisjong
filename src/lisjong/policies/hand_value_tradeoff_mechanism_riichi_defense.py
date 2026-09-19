@@ -242,6 +242,30 @@ def _hand_value_v2_from_finite_horizon(
     )
 
 
+def _select_finite_horizon_hand_value_v2(
+    policy_input: PolicyInput,
+    evaluations: tuple[FiniteHorizonCandidateEvaluation, ...],
+    remaining_counts: tuple[int, ...],
+) -> DiscardAction:
+    """Precomputed FiniteHorizon valuesからexact #175 selectionを行う。"""
+    maximum_mass = max(evaluation.completion_mass for evaluation in evaluations)
+    if maximum_mass == 0:
+        return _hand_value_v2_from_finite_horizon(
+            policy_input, evaluations, remaining_counts
+        )
+
+    maximum_candidates = tuple(
+        evaluation
+        for evaluation in evaluations
+        if evaluation.completion_mass == maximum_mass
+    )
+    if len(maximum_candidates) == 1:
+        return maximum_candidates[0].action
+    return _hand_value_v2_from_finite_horizon(
+        policy_input, maximum_candidates, remaining_counts
+    )
+
+
 def _evaluate_finite_horizon_hand_value_v2(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
@@ -264,21 +288,8 @@ def _evaluate_finite_horizon_hand_value_v2(
         DEFAULT_HORIZON,
         _FiniteHorizonEvaluator(),
     )
-    maximum_mass = max(evaluation.completion_mass for evaluation in evaluations)
-    if maximum_mass == 0:
-        return _hand_value_v2_from_finite_horizon(
-            policy_input, evaluations, remaining_counts
-        )
-
-    maximum_candidates = tuple(
-        evaluation
-        for evaluation in evaluations
-        if evaluation.completion_mass == maximum_mass
-    )
-    if len(maximum_candidates) == 1:
-        return maximum_candidates[0].action
-    return _hand_value_v2_from_finite_horizon(
-        policy_input, maximum_candidates, remaining_counts
+    return _select_finite_horizon_hand_value_v2(
+        policy_input, evaluations, remaining_counts
     )
 
 
