@@ -175,10 +175,10 @@ from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
     MechanismRiichiDefenseYakuhaiCallPolicy,
     _mechanism_defense_eligible_actions,
 )
-from lisjong.policies.two_step_ukeire import _remove_one_matching_tile
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
+from lisjong.structural_efficiency import post_discard_concealed_hand
 
 TERMINAL_SHANTEN_AXIS = 9
 """terminal distributionのindex空間（structural shanten 0..8）。
@@ -575,7 +575,7 @@ def _evaluate_progression_candidates(
 ) -> tuple[ProgressionCandidateEvaluation, ...]:
     """canonical順のroot candidateごとにexact terminal shanten massを評価する。
 
-    root `DiscardAction` identityは`_remove_one_matching_tile()`で維持し、
+    root `DiscardAction` identityは`post_discard_concealed_hand()`で維持し、
     structural DPへ渡す時点で34基礎牌種countへ落とす。したがって赤5と通常5、
     手出しとツモ切りのように異なるactual identityが同じstructural stateへ落ちる
     場合、共有transposition cacheがそのまま再利用される。
@@ -584,7 +584,7 @@ def _evaluate_progression_candidates(
     candidates: list[ProgressionCandidateEvaluation] = []
     for evaluation in evaluations:
         hand_counts = _tile_type_counts(
-            _remove_one_matching_tile(concealed_tiles, evaluation.action.tile)
+            post_discard_concealed_hand(concealed_tiles, evaluation.action.tile)
         )
         distribution = evaluator.terminal_shanten_distribution(
             hand_counts, remaining_counts, horizon

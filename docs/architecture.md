@@ -399,6 +399,70 @@ model action indexは麻雀上の合法性の根拠ではない。`DecisionConte
 
 このpackageはaction semanticsを再定義せず、tensor / model architecture / trainingを所有しない。
 
+## `structural_efficiency`
+
+`lisjong.structural_efficiency`は、複数のPolicy / diagnosticが共有するstructural discard / 牌効率calculation semanticsを所有するreusable AI-domain componentである。
+
+ownership boundaryを次のように分ける。
+
+```text
+policy_contract
+    = Policy境界 / visible state / action contract
+
+structural-efficiency component
+    = reusable AI-domain structural calculation semantics
+
+concrete Policy
+    = reusable semanticsを組み合わせてselection behaviorを定義
+```
+
+このcomponentが所有するsupported semantic:
+
+- canonical `DiscardAction` ordering
+- actual discard identityによるpost-discard concealed hand導出
+- Policy-visible known tile counting
+- decision-local structural shanten evaluation / memoization
+- post-discard structural shanten evaluation
+- effective tile types
+- current ukeire
+- second-step ukeire
+
+shantenは`hand_evaluation`の公開`calculate_shanten()`だけを正本とし、このcomponentは別のshanten algorithmを持たない。known tile countingはown concealed tiles / public melds / uncalled public discards / dora indicatorsを数え、called discardとmeldで同一物理牌を二重計上せず、4枚を超える不整合をfail closedする。ukeireは「shantenを実際に下げる34基礎牌種 × Policy-visible remaining copies」であり、second-stepは`Σ remaining(t) * best_next_ukeire(t)`のexact integerである。赤5と通常5はstructuralには同じ`TileType`として扱い、actual `DiscardAction` identityは維持する。
+
+supported semanticとimplementation detailを区別する。module-level publicな名前が内部consumerの依存先であり、decision-local shanten cacheのような具体実装は引き続きprivateである。supported evaluatorは公開するが、内部dict cacheやmutable work objectをsupported contractへ露出しない。
+
+```text
+supported structural evaluator
+    ↓ internally
+private decision-local cache
+```
+
+このcomponentは次ではない。
+
+```text
+lisjong external / top-level public APIの永久固定
+external semver contract
+generic Policy framework
+universal CandidateEvaluation
+ML feature schema
+```
+
+concrete Policyのstaged selection semanticsはPolicy側が所有する。例えばTwoStepUkeireの`TwoStepUkeireCandidateEvaluation`（Issue #87）は、`post_discard_shanten` / `current_ukeire_count` / `second_step_ukeire_score`の`None = stage未評価`と`0 = 評価済み結果0`を区別するPolicy-specific staged snapshotであり、このreusable componentのlow-level structural valueとは別物である。
+
+```text
+reusable low-level structural evaluation
+        ↓
+Policy固有のstaged evaluation
+        ↓
+TwoStepUkeireCandidateEvaluation
+```
+
+依存方向はconcrete Policy / diagnostic → structural-efficiency componentの一方向とし、逆依存を作らない。新しい牌効率系Policyは、他のconcrete Policy moduleのprivate helperへ依存せずこのcomponentをreuseする。
+
+このcomponentは`PolicyInput`-visible informationだけを使用し、山・王牌・他家concealed truth・future event・`GameTrace` privileged truth・RiichiEnv / Arena固有情報へ依存しない。
+
+歴史的に似たhelper実装を持つlegacy `UkeirePolicy` / `ShantenPolicy`は、Policy世代の独立性のため意図的に小さな重複を保持しており、このcomponentへ移行しない。
+
 ## `policies`
 
 `lisjong.policies`はstable / first-party Policy implementationを所有する。
@@ -592,6 +656,8 @@ policy_contract
     ↑
 hand_evaluation / belief / action_vocabulary
     ↑
+structural_efficiency
+    ↑
 policies / stable AI consumers
 ```
 
@@ -600,8 +666,11 @@ policies / stable AI consumers
 特に:
 
 - `policy_contract`は`policies`へ依存しない
+- `policy_contract`はshanten / ukeire / second-step等の具体AI evaluation semanticsを所有しない
 - `policy_contract`はArenaへ依存しない
 - `belief`はPolicy implementationへ依存しない
+- `structural_efficiency`はconcrete Policy implementationへ依存しない
+- concrete Policy / diagnosticは、共有structural semanticについて他Policy moduleのprivate helperへ依存しない
 - experiment-local Arena model codeをlisjong stable modulesからimportしない
 - Arenaがstable lisjong APIをconsumerとして利用する
 

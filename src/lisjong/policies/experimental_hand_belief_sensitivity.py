@@ -35,17 +35,17 @@ from lisjong.belief.canonical_axes import (
     wind_index,
 )
 from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
-from lisjong.policies.two_step_ukeire import (
-    _DecisionShantenEvaluator,
-    _discard_action_sort_key,
-    _effective_tile_types,
-    _evaluate_post_discard_hands,
-    _known_tile_counts,
-    _ukeire_count,
-)
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileType
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    discard_action_sort_key,
+    effective_tile_types,
+    evaluate_post_discard_hands,
+    known_tile_counts,
+    ukeire_count,
+)
 
 _MAX_COPIES_PER_TILE_TYPE = 4
 _OPPONENT_COUNT = 3
@@ -151,10 +151,10 @@ def _non_opponent_effective_tile_mass(
     post_discard_hand: tuple | list,
     shanten: int,
     known_counts: dict,
-    evaluator: _DecisionShantenEvaluator,
+    evaluator: StructuralShantenEvaluator,
 ) -> float:
     mass = 0.0
-    for tile_type in _effective_tile_types(post_discard_hand, shanten, evaluator):
+    for tile_type in effective_tile_types(post_discard_hand, shanten, evaluator):
         unseen_count = _MAX_COPIES_PER_TILE_TYPE - known_counts.get(tile_type, 0)
         opponent_count = opponent_counts.total(tile_type)
         available = unseen_count - opponent_count
@@ -194,9 +194,9 @@ def evaluate_expected_count_sensitive_discard(
     if any(not isinstance(action, DiscardAction) for action in discard_actions):
         raise TypeError("discard_actions must contain only DiscardAction values")
 
-    known_counts = _known_tile_counts(policy_input)
-    evaluator = _DecisionShantenEvaluator()
-    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
+    known_counts = known_tile_counts(policy_input)
+    evaluator = StructuralShantenEvaluator()
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
 
     minimum_shanten = min(candidate.post_discard_shanten for candidate in evaluated)
     minimum_shanten_candidates = tuple(
@@ -204,21 +204,21 @@ def evaluate_expected_count_sensitive_discard(
         for candidate in evaluated
         if candidate.post_discard_shanten == minimum_shanten
     )
-    for candidate in minimum_shanten_candidates:
-        candidate.current_ukeire_count = _ukeire_count(
+    ukeire_by_action: dict[DiscardAction, int] = {
+        candidate.action: ukeire_count(
             candidate.post_discard_hand,
             known_counts,
             minimum_shanten,
             evaluator,
         )
+        for candidate in minimum_shanten_candidates
+    }
 
-    maximum_current_ukeire = max(
-        candidate.current_ukeire_count for candidate in minimum_shanten_candidates
-    )
+    maximum_current_ukeire = max(ukeire_by_action.values())
     finalists = tuple(
         candidate
         for candidate in minimum_shanten_candidates
-        if candidate.current_ukeire_count == maximum_current_ukeire
+        if ukeire_by_action[candidate.action] == maximum_current_ukeire
     )
 
     scores_by_action: dict[DiscardAction, float] = {}
@@ -239,7 +239,7 @@ def evaluate_expected_count_sensitive_discard(
                 for candidate in finalists
                 if scores_by_action[candidate.action] == best_score
             ),
-            key=_discard_action_sort_key,
+            key=discard_action_sort_key,
         )
     else:
         selected = finalists[0].action
@@ -248,12 +248,12 @@ def evaluate_expected_count_sensitive_discard(
         HandBeliefSensitivityCandidateEvaluation(
             action=candidate.action,
             post_discard_shanten=candidate.post_discard_shanten,
-            current_ukeire_count=candidate.current_ukeire_count,
+            current_ukeire_count=ukeire_by_action.get(candidate.action),
             non_opponent_effective_tile_mass=scores_by_action.get(candidate.action),
         )
         for candidate in sorted(
             evaluated,
-            key=lambda candidate: _discard_action_sort_key(candidate.action),
+            key=lambda candidate: discard_action_sort_key(candidate.action),
         )
     )
     return HandBeliefSensitivityDecision(

@@ -26,7 +26,6 @@ from lisjong.policies.finite_horizon_completion import (
     _falling_factorial,
     _FiniteHorizonEvaluator,
 )
-from lisjong.policies.two_step_ukeire import _known_tile_counts, _ukeire_count
 from lisjong.policy_contract.action import (
     AnkanAction,
     DiscardAction,
@@ -46,6 +45,7 @@ from lisjong.policy_contract.round_state import RoundState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
+from lisjong.structural_efficiency import known_tile_counts, ukeire_count
 
 _CATEGORIES = {
     "m": TileCategory.MANZU,
@@ -1123,7 +1123,7 @@ class ImprovementDrawCoreTest(unittest.TestCase):
         self.concealed = _hand(self.CONCEALED_SPEC)
         self.actions = _distinct_discard_actions(self.concealed)
         self.policy_input = _restricted_input(self.concealed, self.DRAWABLE_SPECS)
-        self.known_counts = _known_tile_counts(self.policy_input)
+        self.known_counts = known_tile_counts(self.policy_input)
         self.remaining = derive_remaining_tile_inventory(
             self.policy_input
         ).remaining_tile_counts
@@ -1136,7 +1136,7 @@ class ImprovementDrawCoreTest(unittest.TestCase):
         return tuple(remaining)
 
     def _ukeire(self, hand: tuple[Tile, ...]) -> int:
-        return _ukeire_count(hand, self.known_counts, calculate_shanten(hand), None)
+        return ukeire_count(hand, self.known_counts, calculate_shanten(hand), None)
 
     def _improvement_draws(self, hand: tuple[Tile, ...]) -> dict[TileType, int]:
         """向聴数を下げないのに、best structural discard後の受け入れを増やすdraw。"""

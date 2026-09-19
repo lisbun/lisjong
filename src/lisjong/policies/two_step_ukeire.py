@@ -13,6 +13,22 @@
 公開`calculate_shanten()`だけを正本とし、赤5と通常5は仮想branchでは同じ
 `TileType`として扱う。実際の最初の`DiscardAction` identityは維持する。
 
+Issue #177により、structural discard / 牌効率semanticそのものは
+`lisjong.structural_efficiency`が所有する。このmoduleが所有するのは、
+そのreusable semanticを組み合わせたTwoStepUkeire固有のstaged selection
+semanticsだけである。
+
+    lisjong.structural_efficiency
+        canonical discard ordering
+        post-discard concealed hand / structural shanten
+        known tile counting
+        effective tile types / current ukeire / second-step ukeire
+            ↓
+    two_step_ukeire
+        staged selection（`_evaluate_and_choose_prepared()`）
+        `TwoStepUkeireCandidateEvaluation`
+        `TwoStepUkeireAnalysis`
+
 Issue #76により、`choose_action()`は次の優先順位でAlways Riichi baselineを
 持つ。
 
@@ -38,7 +54,6 @@ analysisはIssue #87の`TwoStepUkeireCandidateEvaluation`をsource of truthと�
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policy_contract.action import (
     DiscardAction,
     InternalAction,
@@ -51,36 +66,38 @@ from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
-from lisjong.policy_contract.tile import (
-    Tile,
-    TileCategory,
-    TileType,
-    tile_sort_key,
+from lisjong.policy_contract.tile import Tile, TileType, tile_sort_key
+from lisjong.structural_efficiency import (
+    PostDiscardStructuralEvaluation,
+    StructuralEfficiencyError,
+    StructuralShantenEvaluator,
+    discard_action_sort_key,
+    evaluate_post_discard_hands,
+    known_tile_counts,
+    second_step_ukeire_score,
+    ukeire_count,
 )
 
 _WINNING_ACTION_TYPES = (RonAction, TsumoAction)
-_MAX_COPIES_PER_TILE_TYPE = 4
 
-_ALL_TILE_TYPES: tuple[TileType, ...] = tuple(
-    TileType(category, rank)
-    for category, maximum_rank in (
-        (TileCategory.MANZU, 9),
-        (TileCategory.PINZU, 9),
-        (TileCategory.SOUZU, 9),
-        (TileCategory.HONOR, 7),
-    )
-    for rank in range(1, maximum_rank + 1)
-)
-"""`tile_sort_key()`と同じ明示的な順序を持つ34基礎牌種。"""
+TwoStepUkeirePolicyError = StructuralEfficiencyError
+"""入力不整合または未定義の状況をPolicyがfail closedする場合。
 
-
-class TwoStepUkeirePolicyError(Exception):
-    """入力不整合または未定義の状況をPolicyがfail closedする場合。"""
+Issue #177でstructural efficiency semanticのownershipを
+`lisjong.structural_efficiency`へ移したため、この名前は
+`StructuralEfficiencyError`のcompatibility aliasである。既存のtests / callerが
+観測するfail-closed behaviorとexception identityを変えないために維持する。
+"""
 
 
 @dataclass(frozen=True, slots=True)
 class TwoStepUkeireCandidateEvaluation:
-    """TwoStepUkeireが実際に使用した1打牌候補のsemantic評価値。"""
+    """TwoStepUkeireが実際に使用した1打牌候補のsemantic評価値。
+
+    Issue #87のPolicy-specific staged snapshotであり、Issue #177のreusable
+    structural componentが返すlow-level valueではない。`None = stage未評価`と
+    `0 = 評価済み結果0`の区別はTwoStepUkeireのevaluation pathを表す。
+    """
 
     action: DiscardAction
     post_discard_shanten: int
@@ -143,10 +160,15 @@ class TwoStepUkeireAnalysis(AnalysisTrace):
 
 @dataclass(slots=True)
 class _DiscardCandidateWork:
-    """1 decision内だけで使う、後続計算用のprivate mutable候補状態。"""
+    """1 decision内だけで使う、TwoStep staged評価用のprivate mutable候補状態。
+
+    reusable structural componentのimmutable
+    `PostDiscardStructuralEvaluation`から作り、TwoStep固有のstage値だけを
+    後から埋める。この型をsupported contractへ露出しない。
+    """
 
     action: DiscardAction
-    post_discard_hand: list[Tile]
+    post_discard_hand: tuple[Tile, ...]
     post_discard_shanten: int
     current_ukeire_count: int | None = None
     second_step_ukeire_score: int | None = None
@@ -160,13 +182,6 @@ class _DiscardCandidateWork:
         )
 
 
-def _discard_action_sort_key(
-    action: DiscardAction,
-) -> tuple[tuple[int, int, bool], bool]:
-    """既存stable tie-breakと共通のDiscardAction canonical順。"""
-    return (tile_sort_key(action.tile), action.tsumogiri)
-
-
 def _winning_action_sort_key(action: RonAction | TsumoAction) -> tuple[object, ...]:
     if isinstance(action, RonAction):
         return (
@@ -176,201 +191,6 @@ def _winning_action_sort_key(action: RonAction | TsumoAction) -> tuple[object, .
             tile_sort_key(action.winning_tile),
         )
     return (1, int(action.actor), tile_sort_key(action.winning_tile))
-
-
-def _remove_one_matching_tile(
-    concealed_tiles: tuple[Tile, ...], tile: Tile
-) -> list[Tile]:
-    """実際のdiscard identityと一致する牌を純手牌から1枚だけ除く。"""
-    remaining = list(concealed_tiles)
-    for index, candidate in enumerate(remaining):
-        if candidate == tile:
-            del remaining[index]
-            return remaining
-    raise TwoStepUkeirePolicyError(
-        "DiscardAction.tile has no matching tile in own_hand.concealed_tiles"
-    )
-
-
-def _remove_one_tile_type(tiles: Sequence[Tile], tile_type: TileType) -> list[Tile]:
-    """仮想branchで基礎牌種が一致する牌を1枚だけ除く。"""
-    remaining = list(tiles)
-    for index, candidate in enumerate(remaining):
-        if candidate.tile_type == tile_type:
-            del remaining[index]
-            return remaining
-    raise TwoStepUkeirePolicyError(
-        "virtual discard tile type has no matching tile in the hypothetical hand"
-    )
-
-
-def _count_tile_types(tiles: Sequence[Tile]) -> dict[TileType, int]:
-    counts: dict[TileType, int] = {}
-    for tile in tiles:
-        counts[tile.tile_type] = counts.get(tile.tile_type, 0) + 1
-    return counts
-
-
-class _DecisionShantenEvaluator:
-    """1 decision内の同一structural handだけを再利用する局所cache。"""
-
-    def __init__(self) -> None:
-        self._cache: dict[tuple[int, ...], int] = {}
-
-    def calculate(self, hand: Sequence[Tile]) -> int:
-        counts = _count_tile_types(hand)
-        key = tuple(counts.get(tile_type, 0) for tile_type in _ALL_TILE_TYPES)
-        if key not in self._cache:
-            self._cache[key] = calculate_shanten(hand)
-        return self._cache[key]
-
-
-def _calculate_shanten(
-    hand: Sequence[Tile], evaluator: _DecisionShantenEvaluator | None
-) -> int:
-    if evaluator is None:
-        return calculate_shanten(hand)
-    return evaluator.calculate(hand)
-
-
-def _known_tile_counts(policy_input: PolicyInput) -> dict[TileType, int]:
-    """Policy-visibleな既知牌を基礎牌種単位で数える。"""
-    counts: dict[TileType, int] = {}
-
-    def add(tile: Tile) -> None:
-        counts[tile.tile_type] = counts.get(tile.tile_type, 0) + 1
-
-    for tile in policy_input.own_hand.concealed_tiles:
-        add(tile)
-
-    for player in policy_input.players:
-        for meld in player.melds:
-            for tile in meld.tiles:
-                add(tile)
-        for discard in player.discards:
-            if discard.called_by is None:
-                add(discard.tile)
-
-    for tile in policy_input.round.dora_indicators:
-        add(tile)
-
-    for tile_type in _ALL_TILE_TYPES:
-        count = counts.get(tile_type, 0)
-        if count > _MAX_COPIES_PER_TILE_TYPE:
-            raise TwoStepUkeirePolicyError(
-                "known tile count is inconsistent with the PolicyInput contract: "
-                f"{count} copies of {tile_type} are visible, but at most "
-                f"{_MAX_COPIES_PER_TILE_TYPE} exist"
-            )
-    return counts
-
-
-def _effective_tile_types(
-    hand: Sequence[Tile],
-    current_shanten: int | None = None,
-    evaluator: _DecisionShantenEvaluator | None = None,
-) -> tuple[TileType, ...]:
-    """現在向聴数を実際に下げるstructuralな基礎牌種を返す。"""
-    shanten = (
-        _calculate_shanten(hand, evaluator)
-        if current_shanten is None
-        else current_shanten
-    )
-    hand_counts = _count_tile_types(hand)
-    return tuple(
-        tile_type
-        for tile_type in _ALL_TILE_TYPES
-        if hand_counts.get(tile_type, 0) < _MAX_COPIES_PER_TILE_TYPE
-        and _calculate_shanten([*hand, Tile(tile_type)], evaluator) < shanten
-    )
-
-
-def _ukeire_count(
-    hand: Sequence[Tile],
-    known_counts: Mapping[TileType, int],
-    current_shanten: int | None = None,
-    evaluator: _DecisionShantenEvaluator | None = None,
-) -> int:
-    """Policy-visibleな未見枚数による現在受け入れを返す。"""
-    return sum(
-        _MAX_COPIES_PER_TILE_TYPE - known_counts.get(tile_type, 0)
-        for tile_type in _effective_tile_types(hand, current_shanten, evaluator)
-    )
-
-
-def _known_counts_after_draw(
-    known_counts: Mapping[TileType, int], tile_type: TileType
-) -> dict[TileType, int]:
-    """仮想ツモを新しい既知牌として1枚追加する。"""
-    current = known_counts.get(tile_type, 0)
-    if current >= _MAX_COPIES_PER_TILE_TYPE:
-        raise TwoStepUkeirePolicyError(
-            "cannot draw a tile type with no Policy-visible remaining copy"
-        )
-    updated = dict(known_counts)
-    updated[tile_type] = current + 1
-    return updated
-
-
-def _virtual_discard_tile_types(hand: Sequence[Tile]) -> tuple[TileType, ...]:
-    """仮想手牌に存在する基礎牌種をcanonical順で重複なく返す。"""
-    present = frozenset(tile.tile_type for tile in hand)
-    return tuple(tile_type for tile_type in _ALL_TILE_TYPES if tile_type in present)
-
-
-def _best_next_ukeire(
-    post_discard_hand: Sequence[Tile],
-    drawn_tile_type: TileType,
-    known_counts_after_draw: Mapping[TileType, int],
-    evaluator: _DecisionShantenEvaluator | None = None,
-) -> int:
-    """第1有効牌ツモ後の「最小向聴、次いで最大受け入れ」を返す。"""
-    hypothetical_hand = [*post_discard_hand, Tile(drawn_tile_type)]
-    evaluated = tuple(
-        (
-            _calculate_shanten(
-                _remove_one_tile_type(hypothetical_hand, discard_tile_type),
-                evaluator,
-            ),
-            discard_tile_type,
-        )
-        for discard_tile_type in _virtual_discard_tile_types(hypothetical_hand)
-    )
-    minimum_shanten = min(shanten for shanten, _ in evaluated)
-    return max(
-        _ukeire_count(
-            _remove_one_tile_type(hypothetical_hand, discard_tile_type),
-            known_counts_after_draw,
-            shanten,
-            evaluator,
-        )
-        for shanten, discard_tile_type in evaluated
-        if shanten == minimum_shanten
-    )
-
-
-def _second_step_score(
-    post_discard_hand: Sequence[Tile],
-    known_counts: Mapping[TileType, int],
-    current_shanten: int | None = None,
-    evaluator: _DecisionShantenEvaluator | None = None,
-) -> int:
-    """`Σ remaining(t) * best_next_ukeire(t)`を整数で返す。"""
-    shanten = (
-        _calculate_shanten(post_discard_hand, evaluator)
-        if current_shanten is None
-        else current_shanten
-    )
-    score = 0
-    for tile_type in _effective_tile_types(post_discard_hand, shanten, evaluator):
-        remaining = _MAX_COPIES_PER_TILE_TYPE - known_counts.get(tile_type, 0)
-        if remaining <= 0:
-            continue
-        after_draw = _known_counts_after_draw(known_counts, tile_type)
-        score += remaining * _best_next_ukeire(
-            post_discard_hand, tile_type, after_draw, evaluator
-        )
-    return score
 
 
 def _choose_discard(
@@ -383,9 +203,9 @@ def _choose_discard(
 def _evaluate_and_choose_discard(
     policy_input: PolicyInput, discard_actions: tuple[DiscardAction, ...]
 ) -> tuple[DiscardAction, tuple[TwoStepUkeireCandidateEvaluation, ...]]:
-    known_counts = _known_tile_counts(policy_input)
-    evaluator = _DecisionShantenEvaluator()
-    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
+    known_counts = known_tile_counts(policy_input)
+    evaluator = StructuralShantenEvaluator()
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     return _evaluate_and_choose_prepared(
         policy_input,
         evaluated,
@@ -396,23 +216,38 @@ def _evaluate_and_choose_discard(
 
 def _evaluate_and_choose_prepared(
     policy_input: PolicyInput,
-    evaluated: tuple[_DiscardCandidateWork, ...],
-    evaluator: _DecisionShantenEvaluator,
+    evaluated: Sequence[PostDiscardStructuralEvaluation],
+    evaluator: StructuralShantenEvaluator,
     *,
     known_counts: Mapping[TileType, int] | None = None,
 ) -> tuple[DiscardAction, tuple[TwoStepUkeireCandidateEvaluation, ...]]:
-    """準備済み候補をstagedに評価し、選択とcanonical snapshotを返す。"""
+    """評価済みpost-discard候補をstagedに比較し、選択とcanonical snapshotを返す。
+
+    これはTwoStepUkeire固有のstaged selection semanticsであり、Issue #177の
+    reusable structural componentへ昇格させない。stage値を持つmutable work
+    objectはこの呼び出しの内部だけで作るため、同じ
+    `PostDiscardStructuralEvaluation`集合を複数のuniverseへ独立に渡しても
+    先行結果に汚染されない。
+    """
     if known_counts is None:
-        known_counts = _known_tile_counts(policy_input)
-    minimum_shanten = min(candidate.post_discard_shanten for candidate in evaluated)
+        known_counts = known_tile_counts(policy_input)
+    candidates = tuple(
+        _DiscardCandidateWork(
+            action=evaluation.action,
+            post_discard_hand=evaluation.post_discard_hand,
+            post_discard_shanten=evaluation.post_discard_shanten,
+        )
+        for evaluation in evaluated
+    )
+    minimum_shanten = min(candidate.post_discard_shanten for candidate in candidates)
     minimum_shanten_candidates = tuple(
         candidate
-        for candidate in evaluated
+        for candidate in candidates
         if candidate.post_discard_shanten == minimum_shanten
     )
 
     for candidate in minimum_shanten_candidates:
-        candidate.current_ukeire_count = _ukeire_count(
+        candidate.current_ukeire_count = ukeire_count(
             candidate.post_discard_hand,
             known_counts,
             minimum_shanten,
@@ -432,11 +267,11 @@ def _evaluate_and_choose_prepared(
     elif minimum_shanten == 0:
         selected = min(
             (candidate.action for candidate in finalists),
-            key=_discard_action_sort_key,
+            key=discard_action_sort_key,
         )
     else:
         for candidate in finalists:
-            candidate.second_step_ukeire_score = _second_step_score(
+            candidate.second_step_ukeire_score = second_step_ukeire_score(
                 candidate.post_discard_hand,
                 known_counts,
                 minimum_shanten,
@@ -451,35 +286,17 @@ def _evaluate_and_choose_prepared(
                 for candidate in finalists
                 if candidate.second_step_ukeire_score == maximum_second_step
             ),
-            key=_discard_action_sort_key,
+            key=discard_action_sort_key,
         )
 
     snapshots = tuple(
         candidate.snapshot()
         for candidate in sorted(
-            evaluated,
-            key=lambda candidate: _discard_action_sort_key(candidate.action),
+            candidates,
+            key=lambda candidate: discard_action_sort_key(candidate.action),
         )
     )
     return selected, snapshots
-
-
-def _evaluate_post_discard_hands(
-    policy_input: PolicyInput,
-    discard_actions: tuple[DiscardAction, ...],
-    evaluator: _DecisionShantenEvaluator,
-) -> tuple[_DiscardCandidateWork, ...]:
-    """元のlegal discardごとの打牌後向聴数と手牌を評価する。"""
-    concealed_tiles = policy_input.own_hand.concealed_tiles
-    return tuple(
-        _DiscardCandidateWork(
-            action=action,
-            post_discard_hand=remaining_hand,
-            post_discard_shanten=evaluator.calculate(remaining_hand),
-        )
-        for action in discard_actions
-        for remaining_hand in (_remove_one_matching_tile(concealed_tiles, action.tile),)
-    )
 
 
 def _choose_riichi(

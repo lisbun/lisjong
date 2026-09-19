@@ -70,15 +70,15 @@ from lisjong.policies.genbutsu_defense_two_step_ukeire import (
 from lisjong.policies.hand_value_aware_two_step_ukeire import (
     _evaluate_and_choose_discard as _hand_value_aware_evaluate_and_choose_discard,
 )
-from lisjong.policies.two_step_ukeire import (
-    TwoStepUkeirePolicy,
-    _DecisionShantenEvaluator,
-    _evaluate_post_discard_hands,
-)
+from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileType
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    evaluate_post_discard_hands,
+)
 
 
 class _PushFoldDecision(Enum):
@@ -112,8 +112,8 @@ def _decide_push_fold(
     if not riichi_players:
         return _PushFoldDecision.PUSH
 
-    evaluator = _DecisionShantenEvaluator()
-    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
+    evaluator = StructuralShantenEvaluator()
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     if min(candidate.post_discard_shanten for candidate in evaluated) < 1:
         return _PushFoldDecision.PUSH
     return _PushFoldDecision.FOLD

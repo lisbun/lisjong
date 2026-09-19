@@ -18,9 +18,7 @@ defense activationの順序も変わらない。Policyも1回しか実行しな�
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeirePolicy,
     _choose_discard,
-    _DecisionShantenEvaluator,
     _evaluate_and_choose_prepared,
-    _evaluate_post_discard_hands,
 )
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.player_state import PlayerPublicState
@@ -29,6 +27,10 @@ from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import TileType
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    evaluate_post_discard_hands,
+)
 
 
 def _opponent_riichi_players(
@@ -90,8 +92,8 @@ class GenbutsuDefenseTwoStepUkeirePolicy(TwoStepUkeirePolicy):
         if not riichi_players:
             return _choose_discard(policy_input, discard_actions)
 
-        evaluator = _DecisionShantenEvaluator()
-        evaluated = _evaluate_post_discard_hands(
+        evaluator = StructuralShantenEvaluator()
+        evaluated = evaluate_post_discard_hands(
             policy_input, discard_actions, evaluator
         )
         if min(candidate.post_discard_shanten for candidate in evaluated) < 1:

@@ -219,12 +219,12 @@ def _mass_patch(
 def _equal_hand_value_structural_stages():
     with (
         patch.object(
-            hand_value._DecisionShantenEvaluator,
+            hand_value.StructuralShantenEvaluator,
             "calculate",
             return_value=1,
         ),
-        patch.object(hand_value, "_ukeire_count", return_value=10),
-        patch.object(hand_value, "_second_step_score", return_value=0),
+        patch.object(hand_value, "ukeire_count", return_value=10),
+        patch.object(hand_value, "second_step_ukeire_score", return_value=0),
     ):
         yield
 

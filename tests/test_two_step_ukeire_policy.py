@@ -14,13 +14,7 @@ from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeireCandidateEvaluation,
     TwoStepUkeirePolicyError,
-    _best_next_ukeire,
     _evaluate_and_choose_discard,
-    _known_counts_after_draw,
-    _known_tile_counts,
-    _remove_one_matching_tile,
-    _second_step_score,
-    _ukeire_count,
 )
 from lisjong.policy_contract.action import (
     DiscardAction,
@@ -34,7 +28,7 @@ from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.decision_trace import DecisionTraceRecorder
 from lisjong.policy_contract.discard import Discard
-from lisjong.policy_contract.meld import MeldKind, PublicMeld
+from lisjong.policy_contract.meld import PublicMeld
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy_decision import PolicyDecision
@@ -48,6 +42,12 @@ from lisjong.policy_contract.round_state import RoundState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
+from lisjong.structural_efficiency import (
+    known_tile_counts,
+    post_discard_concealed_hand,
+    second_step_ukeire_score,
+    ukeire_count,
+)
 
 
 def _tile(category: TileCategory, rank: int, *, red: bool = False) -> Tile:
@@ -206,10 +206,10 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
         keep_tenpai = _discard(RED_DRAGON)
 
         with (
-            patch.object(two_step, "_ukeire_count", return_value=0),
+            patch.object(two_step, "ukeire_count", return_value=0),
             patch.object(
                 two_step,
-                "_second_step_score",
+                "second_step_ukeire_score",
                 side_effect=AssertionError("tenpai must not enter second step"),
             ),
         ):
@@ -237,7 +237,7 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
 
         with patch.object(
             two_step,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("unique current ukeire must end evaluation"),
         ):
             selected, evaluations = _evaluate_and_choose_discard(
@@ -276,7 +276,7 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
         discard_9s = _discard(SOUZU_9)
         discard_white = _discard(WHITE_DRAGON)
 
-        with patch.object(two_step, "_second_step_score", return_value=0):
+        with patch.object(two_step, "second_step_ukeire_score", return_value=0):
             selected, evaluations = _evaluate_and_choose_discard(
                 _make_input(_TWO_STEP_HAND),
                 (discard_white, discard_9s),
@@ -351,7 +351,7 @@ class PolicyPriorityTest(unittest.TestCase):
 
         with patch.object(
             two_step,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("second step must not evaluate worse shanten"),
         ):
             self.assertEqual(self.policy.choose_action(decision), keep_tenpai)
@@ -366,7 +366,7 @@ class PolicyPriorityTest(unittest.TestCase):
 
         with patch.object(
             two_step,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("second step must not evaluate lower ukeire"),
         ):
             self.assertEqual(self.policy.choose_action(decision), higher_current_ukeire)
@@ -375,18 +375,18 @@ class PolicyPriorityTest(unittest.TestCase):
         discard_9s = _discard(SOUZU_9)
         discard_white = _discard(WHITE_DRAGON)
         policy_input = _make_input(_TWO_STEP_HAND)
-        known_counts = _known_tile_counts(policy_input)
+        known_counts = known_tile_counts(policy_input)
 
         rows = []
         for action in (discard_9s, discard_white):
-            hand = _remove_one_matching_tile(_TWO_STEP_HAND, action.tile)
+            hand = post_discard_concealed_hand(_TWO_STEP_HAND, action.tile)
             shanten = calculate_shanten(hand)
             rows.append(
                 (
                     action,
                     shanten,
-                    _ukeire_count(hand, known_counts, shanten),
-                    _second_step_score(hand, known_counts, shanten),
+                    ukeire_count(hand, known_counts, shanten),
+                    second_step_ukeire_score(hand, known_counts, shanten),
                 )
             )
 
@@ -412,7 +412,7 @@ class PolicyPriorityTest(unittest.TestCase):
         discard_9s = _discard(SOUZU_9)
         discard_white = _discard(WHITE_DRAGON)
 
-        with patch.object(two_step, "_second_step_score", return_value=100):
+        with patch.object(two_step, "second_step_ukeire_score", return_value=100):
             for actions in itertools.permutations((discard_9s, discard_white)):
                 with self.subTest(actions=actions):
                     self.assertEqual(
@@ -427,7 +427,7 @@ class PolicyPriorityTest(unittest.TestCase):
 
         with patch.object(
             two_step,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("winning draw must end the lookahead"),
         ):
             for actions in itertools.permutations((discard_east, discard_south)):
@@ -498,133 +498,7 @@ class AlwaysRiichiTest(unittest.TestCase):
         )
 
 
-class TwoStepScoreTest(unittest.TestCase):
-    def test_decision_cache_reuses_red_and_normal_structural_hand(self) -> None:
-        evaluator = two_step._DecisionShantenEvaluator()
-
-        with patch.object(
-            two_step, "calculate_shanten", wraps=calculate_shanten
-        ) as shanten:
-            normal_result = evaluator.calculate((MANZU_1, MANZU_5))
-            red_result = evaluator.calculate((MANZU_1, MANZU_5_RED))
-
-        self.assertEqual(normal_result, red_result)
-        self.assertEqual(shanten.call_count, 1)
-
-    def test_first_draw_remaining_count_is_the_integer_weight(self) -> None:
-        known_counts = {MANZU_1_TYPE: 3, MANZU_2_TYPE: 1}
-
-        def next_ukeire(_hand, tile_type, after_draw, _evaluator):
-            expected_count = 4 if tile_type == MANZU_1_TYPE else 2
-            self.assertEqual(after_draw[tile_type], expected_count)
-            return 10 if tile_type == MANZU_1_TYPE else 2
-
-        with (
-            patch.object(
-                two_step,
-                "_effective_tile_types",
-                return_value=(MANZU_1_TYPE, MANZU_2_TYPE),
-            ),
-            patch.object(two_step, "_best_next_ukeire", side_effect=next_ukeire),
-        ):
-            score = _second_step_score((PINZU_1,), known_counts, current_shanten=2)
-
-        self.assertEqual(score, 1 * 10 + 3 * 2)
-
-    def test_branch_minimizes_shanten_before_comparing_next_ukeire(self) -> None:
-        def branch_shanten(hand):
-            return 0 if hand[0].tile_type == MANZU_2_TYPE else 1
-
-        with (
-            patch.object(two_step, "calculate_shanten", side_effect=branch_shanten),
-            patch.object(two_step, "_ukeire_count", return_value=7) as ukeire,
-        ):
-            result = _best_next_ukeire((MANZU_1,), MANZU_2_TYPE, {MANZU_2_TYPE: 1})
-
-        self.assertEqual(result, 7)
-        self.assertEqual(ukeire.call_count, 1)
-        self.assertEqual(ukeire.call_args.args[0], [MANZU_2])
-
-    def test_same_branch_shanten_uses_maximum_next_ukeire(self) -> None:
-        visited: list[tuple[Tile, ...]] = []
-
-        def branch_ukeire(hand, _known_counts, _shanten, _evaluator):
-            snapshot = tuple(hand)
-            visited.append(snapshot)
-            return 9 if snapshot == (MANZU_1,) else 3
-
-        with (
-            patch.object(two_step, "calculate_shanten", return_value=0),
-            patch.object(two_step, "_ukeire_count", side_effect=branch_ukeire),
-        ):
-            result = _best_next_ukeire((MANZU_1,), MANZU_2_TYPE, {MANZU_2_TYPE: 1})
-
-        self.assertEqual(result, 9)
-        self.assertEqual(set(visited), {(MANZU_1,), (MANZU_2,)})
-
-    def test_virtual_discard_does_not_decrement_known_count(self) -> None:
-        seen_counts: list[int] = []
-
-        def capture_known(_hand, known_counts, _shanten, _evaluator):
-            seen_counts.append(known_counts[MANZU_2_TYPE])
-            return 1
-
-        with (
-            patch.object(two_step, "calculate_shanten", return_value=0),
-            patch.object(two_step, "_ukeire_count", side_effect=capture_known),
-        ):
-            _best_next_ukeire((MANZU_1,), MANZU_2_TYPE, {MANZU_2_TYPE: 2})
-
-        self.assertEqual(seen_counts, [2, 2])
-
-
-class KnownCountAndZeroRemainingTest(unittest.TestCase):
-    def test_known_counts_cover_every_policy_visible_source_once(self) -> None:
-        called_discard = Discard(
-            tile=PINZU_5,
-            tsumogiri=False,
-            order=0,
-            called_by=Seat.SEAT_2,
-        )
-        uncalled_discard = Discard(
-            tile=MANZU_5,
-            tsumogiri=False,
-            order=1,
-            called_by=None,
-        )
-        pon = PublicMeld(
-            kind=MeldKind.PON,
-            tiles=(PINZU_5, PINZU_5, PINZU_5),
-            from_seat=Seat.SEAT_1,
-            called_tile=PINZU_5,
-        )
-        players = (
-            _player(),
-            _player((called_discard, uncalled_discard)),
-            _player(melds=(pon,)),
-            _player(),
-        )
-        policy_input = _make_input(
-            (MANZU_5,),
-            players=players,
-            dora_indicators=(SOUZU_9,),
-        )
-
-        counts = _known_tile_counts(policy_input)
-
-        self.assertEqual(counts[MANZU_5_TYPE], 2)
-        self.assertEqual(counts[PINZU_5.tile_type], 3)
-        self.assertEqual(counts[SOUZU_9.tile_type], 1)
-
-    def test_virtual_draw_adds_one_without_mutating_original_counts(self) -> None:
-        original = {MANZU_1_TYPE: 2}
-
-        updated = _known_counts_after_draw(original, MANZU_1_TYPE)
-
-        self.assertEqual(original[MANZU_1_TYPE], 2)
-        self.assertEqual(updated[MANZU_1_TYPE], 3)
-        self.assertIsNot(updated, original)
-
+class PolicyVisibleKnownCountTest(unittest.TestCase):
     def test_first_candidate_discard_does_not_reduce_known_count(self) -> None:
         discard_9s = _discard(SOUZU_9)
         discard_white = _discard(WHITE_DRAGON)
@@ -634,72 +508,16 @@ class KnownCountAndZeroRemainingTest(unittest.TestCase):
             captured.append(dict(known_counts))
             return 0
 
-        with patch.object(two_step, "_second_step_score", side_effect=capture):
+        with patch.object(two_step, "second_step_ukeire_score", side_effect=capture):
             TwoStepUkeirePolicy().choose_action(
                 _decision(_TWO_STEP_HAND, (discard_9s, discard_white))
             )
 
-        original = _known_tile_counts(_make_input(_TWO_STEP_HAND))
+        original = known_tile_counts(_make_input(_TWO_STEP_HAND))
         self.assertEqual(captured, [original, original])
 
-    def test_zero_remaining_effective_tile_is_not_expanded(self) -> None:
-        with (
-            patch.object(
-                two_step,
-                "_effective_tile_types",
-                return_value=(MANZU_1_TYPE,),
-            ),
-            patch.object(two_step, "_best_next_ukeire") as next_ukeire,
-        ):
-            score = _second_step_score((PINZU_1,), {MANZU_1_TYPE: 4}, current_shanten=1)
 
-        self.assertEqual(score, 0)
-        next_ukeire.assert_not_called()
-
-    def test_no_positive_first_branch_has_zero_score(self) -> None:
-        with patch.object(two_step, "_effective_tile_types", return_value=()):
-            self.assertEqual(_second_step_score((PINZU_1,), {}, current_shanten=1), 0)
-
-    def test_drawing_a_fifth_visible_copy_fails_closed(self) -> None:
-        with self.assertRaises(TwoStepUkeirePolicyError):
-            _known_counts_after_draw({MANZU_1_TYPE: 4}, MANZU_1_TYPE)
-
-
-class HandSizeAndRedFiveTest(unittest.TestCase):
-    def test_closed_and_open_hands_use_n_to_n_plus_one_to_n(self) -> None:
-        cases = (
-            _hand("123456789m1p24s7z"),
-            _hand("19m19p19s1234z"),
-            _hand("1111p666z"),
-            _hand("1111m"),
-        )
-        for hand in cases:
-            known_counts = two_step._count_tile_types(hand)
-            with (
-                self.subTest(size=len(hand)),
-                patch.object(
-                    two_step, "calculate_shanten", wraps=calculate_shanten
-                ) as shanten,
-            ):
-                score = _second_step_score(hand, known_counts)
-
-                observed_sizes = {len(call.args[0]) for call in shanten.call_args_list}
-                self.assertIsInstance(score, int)
-                self.assertIn(len(hand), observed_sizes)
-                self.assertIn(len(hand) + 1, observed_sizes)
-
-    def test_red_and_normal_five_have_the_same_structural_score(self) -> None:
-        normal = _hand("345m5667s333577z")
-        red = _hand("340m5667s333577z")
-        normal_known = two_step._count_tile_types(normal)
-        red_known = two_step._count_tile_types(red)
-
-        self.assertEqual(normal_known, red_known)
-        self.assertEqual(
-            _second_step_score(normal, normal_known),
-            _second_step_score(red, red_known),
-        )
-
+class RedFiveDiscardIdentityTest(unittest.TestCase):
     def test_actual_first_discard_keeps_red_identity(self) -> None:
         concealed = (MANZU_5, MANZU_5, MANZU_5, MANZU_5_RED, MANZU_2)
         discard_normal = _discard(MANZU_5)
@@ -955,10 +773,10 @@ class TwoStepUkeireDecisionAnalysisTest(unittest.TestCase):
         )
 
         with (
-            patch.object(two_step, "_ukeire_count", return_value=0),
+            patch.object(two_step, "ukeire_count", return_value=0),
             patch.object(
                 two_step,
-                "_second_step_score",
+                "second_step_ukeire_score",
                 side_effect=AssertionError("tenpai must not enter second step"),
             ),
         ):
@@ -1055,7 +873,7 @@ class TwoStepUkeireTraceNonInterferenceTest(unittest.TestCase):
     def test_stable_tie_break_is_unchanged_by_tracing(self) -> None:
         actions = (_discard(SOUZU_9), _discard(WHITE_DRAGON))
 
-        with patch.object(two_step, "_second_step_score", return_value=100):
+        with patch.object(two_step, "second_step_ukeire_score", return_value=100):
             for ordered_actions in itertools.permutations(actions):
                 with self.subTest(actions=ordered_actions):
                     self._assert_same_selection(

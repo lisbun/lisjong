@@ -30,17 +30,17 @@ from lisjong.policies.genbutsu_defense_two_step_ukeire import (
     _common_genbutsu_tile_types,
     _opponent_riichi_players,
 )
-from lisjong.policies.two_step_ukeire import (
-    TwoStepUkeirePolicy,
-    _DecisionShantenEvaluator,
-    _evaluate_post_discard_hands,
-)
+from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policies.value_aware_two_step_ukeire import (
     _evaluate_and_choose_discard as _value_aware_evaluate_and_choose_discard,
 )
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    evaluate_post_discard_hands,
+)
 
 
 def _genbutsu_eligible_actions(
@@ -52,8 +52,8 @@ def _genbutsu_eligible_actions(
     if not riichi_players:
         return discard_actions
 
-    evaluator = _DecisionShantenEvaluator()
-    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
+    evaluator = StructuralShantenEvaluator()
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     if min(candidate.post_discard_shanten for candidate in evaluated) < 1:
         return discard_actions
 

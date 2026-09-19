@@ -31,7 +31,6 @@ from lisjong.policies.finite_horizon_completion import (
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeirePolicyError,
-    _remove_one_matching_tile,
 )
 from lisjong.policies.two_step_ukeire import (
     _evaluate_and_choose_discard as two_step_evaluate_and_choose_discard,
@@ -61,6 +60,7 @@ from lisjong.policy_contract.round_state import RoundState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
+from lisjong.structural_efficiency import post_discard_concealed_hand
 
 _CATEGORY_OFFSETS = {
     TileCategory.MANZU: 0,
@@ -975,7 +975,7 @@ class RootSelectionPrecedenceTest(unittest.TestCase):
                     action=action, completion_mass=masses[action.tile]
                 )
                 for action in sorted(
-                    discard_actions, key=finite_horizon._discard_action_sort_key
+                    discard_actions, key=finite_horizon.discard_action_sort_key
                 )
             )
 
@@ -1785,7 +1785,7 @@ class ExactnessAgainstUnprunedOracleTest(unittest.TestCase):
                 self.assertNotEqual(analysis.candidate_evaluations, ())
                 for evaluation in analysis.candidate_evaluations:
                     post_discard = _tile_type_counts(
-                        _remove_one_matching_tile(concealed, evaluation.action.tile)
+                        post_discard_concealed_hand(concealed, evaluation.action.tile)
                     )
                     self.assertEqual(
                         evaluation.completion_mass,

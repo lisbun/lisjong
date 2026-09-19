@@ -104,14 +104,14 @@ class HandBeliefSensitivityTest(unittest.TestCase):
     def test_belief_only_ranks_candidates_after_structural_tie(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
             patch.object(
                 sensitivity,
-                "_effective_tile_types",
+                "effective_tile_types",
                 side_effect=_effective_tiles,
             ),
         ):
@@ -138,11 +138,11 @@ class HandBeliefSensitivityTest(unittest.TestCase):
     def test_worse_shanten_candidate_cannot_be_resurrected_by_belief(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 side_effect=_shanten_by_remaining_tile,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
         ):
             decision = sensitivity.evaluate_hand_belief_sensitive_discard(
                 self.policy_input,
@@ -156,11 +156,11 @@ class HandBeliefSensitivityTest(unittest.TestCase):
     def test_unique_public_ukeire_winner_does_not_activate_consumer(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", side_effect=(10, 8)),
+            patch.object(sensitivity, "ukeire_count", side_effect=(10, 8)),
         ):
             decision = sensitivity.evaluate_hand_belief_sensitive_discard(
                 self.policy_input,
@@ -180,14 +180,14 @@ class HandBeliefSensitivityTest(unittest.TestCase):
     def test_self_hand_belief_is_not_subtracted_as_opponent_mass(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
             patch.object(
                 sensitivity,
-                "_effective_tile_types",
+                "effective_tile_types",
                 side_effect=_effective_tiles,
             ),
         ):
@@ -206,14 +206,14 @@ class HandBeliefSensitivityTest(unittest.TestCase):
     def test_opponent_mass_cannot_exceed_publicly_unseen_copies(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
             patch.object(
                 sensitivity,
-                "_effective_tile_types",
+                "effective_tile_types",
                 side_effect=_effective_tiles,
             ),
         ):
@@ -266,14 +266,14 @@ class ExpectedCountSeamEquivalenceTest(unittest.TestCase):
     def _both_paths(self, belief):
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
             patch.object(
                 sensitivity,
-                "_effective_tile_types",
+                "effective_tile_types",
                 side_effect=_effective_tiles,
             ),
         ):
@@ -307,14 +307,14 @@ class ExpectedCountSeamEquivalenceTest(unittest.TestCase):
     def test_expected_count_seam_preserves_conservation_failure(self) -> None:
         with (
             patch.object(
-                sensitivity._DecisionShantenEvaluator,
+                sensitivity.StructuralShantenEvaluator,
                 "calculate",
                 return_value=1,
             ),
-            patch.object(sensitivity, "_ukeire_count", return_value=10),
+            patch.object(sensitivity, "ukeire_count", return_value=10),
             patch.object(
                 sensitivity,
-                "_effective_tile_types",
+                "effective_tile_types",
                 side_effect=_effective_tiles,
             ),
         ):

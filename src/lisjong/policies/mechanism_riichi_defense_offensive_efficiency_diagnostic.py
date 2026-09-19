@@ -105,15 +105,17 @@ from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense impo
 )
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireCandidateEvaluation,
-    _DecisionShantenEvaluator,
-    _discard_action_sort_key,
     _evaluate_and_choose_prepared,
-    _evaluate_post_discard_hands,
-    _known_tile_counts,
 )
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileType
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    discard_action_sort_key,
+    evaluate_post_discard_hands,
+    known_tile_counts,
+)
 
 
 class MechanismRiichiDefenseOffensiveEfficiencyDiagnosticError(Exception):
@@ -487,17 +489,18 @@ def _classify_branch(
 def _universe_stage_snapshots(
     policy_input: PolicyInput,
     universe_actions: tuple[DiscardAction, ...],
-    evaluator: _DecisionShantenEvaluator,
+    evaluator: StructuralShantenEvaluator,
     known_counts: Mapping[TileType, int],
 ) -> tuple[TwoStepUkeireCandidateEvaluation, ...]:
     """既存TwoStep semanticsを1つのuniverseへ独立実行し、stage-correctなsnapshotを返す。
 
-    universeごとに新しい`_DiscardCandidateWork`集合を作る。full-legal universe
-    とbaseline-eligible universeの評価結果を同じmutable working objectで共有
-    すると、後段の`_evaluate_and_choose_prepared()`呼び出しが先行universeの
-    結果を上書きしてしまうため、これを避ける。
+    `evaluate_post_discard_hands()`が返すのはimmutableな
+    `PostDiscardStructuralEvaluation`であり、TwoStep固有のstage値を持つmutable
+    work objectは`_evaluate_and_choose_prepared()`の内部だけで作られる。
+    したがってfull-legal universeとbaseline-eligible universeの評価が、
+    先行universeの結果へ上書きで干渉することはない。
     """
-    worklist = _evaluate_post_discard_hands(policy_input, universe_actions, evaluator)
+    worklist = evaluate_post_discard_hands(policy_input, universe_actions, evaluator)
     _, snapshots = _evaluate_and_choose_prepared(
         policy_input, worklist, evaluator, known_counts=known_counts
     )
@@ -622,8 +625,8 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
 
     # R1: shanten evaluatorとworklistはfull legal universeで1回だけ評価し、
     # baseline-eligible universeはmembership filterで再利用する。
-    shanten_evaluator = _DecisionShantenEvaluator()
-    known_counts = _known_tile_counts(policy_input)
+    shanten_evaluator = StructuralShantenEvaluator()
+    known_counts = known_tile_counts(policy_input)
 
     full_legal_snapshots = _universe_stage_snapshots(
         policy_input, legal_discard_actions, shanten_evaluator, known_counts
@@ -763,7 +766,7 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
                 terminal_by_action[action][1] if action in terminal_by_action else None
             ),
         )
-        for action in sorted(legal_discard_actions, key=_discard_action_sort_key)
+        for action in sorted(legal_discard_actions, key=discard_action_sort_key)
     )
 
     return MechanismRiichiDefenseOffensiveEfficiencyAnalysis(

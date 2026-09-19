@@ -20,10 +20,6 @@ from lisjong.policies.genbutsu_defense_two_step_ukeire import (
     _common_genbutsu_tile_types,
     _opponent_riichi_players,
 )
-from lisjong.policies.two_step_ukeire import (
-    _DecisionShantenEvaluator,
-    _evaluate_post_discard_hands,
-)
 from lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aware import (
     YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy,
 )
@@ -32,6 +28,10 @@ from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileCategory, TileType
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    evaluate_post_discard_hands,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,8 +167,8 @@ def _evaluate_mechanism_defense_filter(
             MechanismDefenseActivation.NOT_ACTIVATED, discard_actions
         )
 
-    evaluator = _DecisionShantenEvaluator()
-    evaluated = _evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
+    evaluator = StructuralShantenEvaluator()
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
     if min(candidate.post_discard_shanten for candidate in evaluated) < 2:
         return MechanismDefenseFilterEvaluation(
             MechanismDefenseActivation.NOT_ACTIVATED, discard_actions

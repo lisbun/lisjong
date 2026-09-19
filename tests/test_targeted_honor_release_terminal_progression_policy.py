@@ -279,7 +279,7 @@ class DecisiveStageTest(unittest.TestCase):
             targeted._classify_hva_decisive_stage(A_M3, second),
             targeted.HandValueDecisiveStage.SECOND_STEP,
         )
-        expected_stable = min((A_M3, A_EAST), key=targeted._discard_action_sort_key)
+        expected_stable = min((A_M3, A_EAST), key=targeted.discard_action_sort_key)
         self.assertIs(
             targeted._classify_hva_decisive_stage(expected_stable, tied),
             targeted.HandValueDecisiveStage.STABLE_TIE,
