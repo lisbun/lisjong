@@ -35,8 +35,8 @@ from lisjong.policies.hand_value_aware_two_step_ukeire import (
     _own_melds,
     _retained_real_value,
     _seat_wind_rank,
-    _yakuhai_han_value,
     _yaku_route_value,
+    _yakuhai_han_value,
 )
 from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
     MechanismRiichiDefenseYakuhaiCallPolicy,
