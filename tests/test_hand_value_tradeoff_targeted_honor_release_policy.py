@@ -97,8 +97,7 @@ def _completion(
     masses: dict[DiscardAction, int],
 ) -> tuple[FiniteHorizonCandidateEvaluation, ...]:
     return tuple(
-        FiniteHorizonCandidateEvaluation(action, masses[action])
-        for action in actions
+        FiniteHorizonCandidateEvaluation(action, masses[action]) for action in actions
     )
 
 
@@ -469,9 +468,7 @@ class CompositionSelectionTest(unittest.TestCase):
                     return_value=A_EAST,
                 ),
             ):
-                selected, _ = combined._evaluate_and_choose_discard(
-                    _input(), actions
-                )
+                selected, _ = combined._evaluate_and_choose_discard(_input(), actions)
             selections.add(selected)
         self.assertEqual(selections, {A_EAST})
 
@@ -514,9 +511,7 @@ class PolicyBoundaryTest(unittest.TestCase):
         self.assertEqual(vars(policy), {})
         self.assertIs(
             pickle.loads(
-                pickle.dumps(
-                    combined.HandValueTradeoffTargetedHonorReleasePolicy
-                )
+                pickle.dumps(combined.HandValueTradeoffTargetedHonorReleasePolicy)
             ),
             combined.HandValueTradeoffTargetedHonorReleasePolicy,
         )
