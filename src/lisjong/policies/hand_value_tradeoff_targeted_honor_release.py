@@ -143,10 +143,7 @@ class HandValueTradeoffTargetedHonorReleaseAnalysis(AnalysisTrace):
         if self.hand_value_v2_action != self.selected_action:
             raise ValueError("hand_value_v2_action must equal selected_action")
 
-        if (
-            source
-            is HandValueTradeoffTargetedHonorReleaseSelectionSource.SHARED_ACTION
-        ):
+        if source is HandValueTradeoffTargetedHonorReleaseSelectionSource.SHARED_ACTION:
             if self.selected_action != self.champion_action:
                 raise ValueError("SHARED_ACTION requires Champion and v2 agreement")
         elif self.selected_action == self.champion_action:
@@ -160,9 +157,7 @@ def _current_parent_from_completion(
     """Precomputed FiniteHorizon valuesからformer Champion parent actionを返す。"""
     maximum_mass = max(evaluation.completion_mass for evaluation in evaluations)
     if maximum_mass > 0:
-        return _select_from_completion_masses(
-            policy_input, evaluations, maximum_mass
-        )
+        return _select_from_completion_masses(policy_input, evaluations, maximum_mass)
     selected, _ = _hand_value_aware_evaluate_and_choose_discard(
         policy_input, tuple(evaluation.action for evaluation in evaluations)
     )
@@ -208,15 +203,13 @@ def _evaluate_and_choose_discard(
         and branch is TargetedHonorReleaseBranch.PUSH
         and maximum_completion == 0
     ):
-        champion_action, champion_analysis = (
-            _evaluate_all_zero_targeted_honor_release(
-                policy_input,
-                branch=branch,
-                eligible_actions=eligible_actions,
-                remaining_counts=remaining_counts,
-                hidden_tile_count=hidden_tile_count,
-                completion_evaluations=completion_evaluations,
-            )
+        champion_action, champion_analysis = _evaluate_all_zero_targeted_honor_release(
+            policy_input,
+            branch=branch,
+            eligible_actions=eligible_actions,
+            remaining_counts=remaining_counts,
+            hidden_tile_count=hidden_tile_count,
+            completion_evaluations=completion_evaluations,
         )
         former_parent_action = champion_analysis.parent_action
         if (
@@ -260,9 +253,7 @@ def _evaluate_and_choose_discard(
         selected_action=hand_value_v2_action,
         selection_source=source,
         action_changed_vs_champion=hand_value_v2_action != champion_action,
-        action_changed_vs_former_parent=(
-            hand_value_v2_action != former_parent_action
-        ),
+        action_changed_vs_former_parent=(hand_value_v2_action != former_parent_action),
     )
     return hand_value_v2_action, analysis
 
@@ -277,7 +268,5 @@ class HandValueTradeoffTargetedHonorReleasePolicy(
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
     ) -> PolicyDecision:
-        selected, analysis = _evaluate_and_choose_discard(
-            policy_input, discard_actions
-        )
+        selected, analysis = _evaluate_and_choose_discard(policy_input, discard_actions)
         return PolicyDecision(action=selected, analysis=analysis)
