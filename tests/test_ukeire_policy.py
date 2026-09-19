@@ -1033,6 +1033,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "GenbutsuDefenseTwoStepUkeirePolicy",
                 "HandValueAwareTwoStepUkeirePolicy",
                 "HandValueTradeoffMechanismRiichiDefensePolicy",
+                "HandValueTradeoffTargetedHonorReleasePolicy",
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",
                 "OpenHandYakuAwareCallPolicy",
