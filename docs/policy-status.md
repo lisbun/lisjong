@@ -135,7 +135,7 @@ classification          TARGETED HONOR-RELEASE CONFIRMED POSITIVE
 paired result identity  04cc12834b25365e3146dde64115162378b329117ba007dd368abb1affcb95dc
 ```
 
-Project #67 therefore promotes the exact lineage to:
+Project #67では、このexact lineageを次のHeuristic Championへ昇格する。
 
 ```text
 Heuristic Champion
