@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+
 import lisjong.policies.hand_value_tradeoff_mechanism_riichi_defense as v2
 import lisjong.policies.hand_value_tradeoff_targeted_honor_release as combined
 import lisjong.policies.targeted_honor_release_terminal_progression as targeted
