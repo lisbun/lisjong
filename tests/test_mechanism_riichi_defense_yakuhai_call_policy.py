@@ -333,7 +333,7 @@ class ActivationAndFilteringTest(unittest.TestCase):
         with (
             patch.object(
                 mechanism,
-                "_evaluate_post_discard_hands",
+                "evaluate_post_discard_hands",
                 return_value=tuple(
                     SimpleNamespace(action=action, post_discard_shanten=shanten)
                     for action in selected_actions
@@ -376,8 +376,8 @@ class ActivationAndFilteringTest(unittest.TestCase):
                     threats=((_tile(TileCategory.PINZU, 9),),),
                 )
                 actions = (manzu_three, honor)
-                evaluated = mechanism._evaluate_post_discard_hands(
-                    policy_input, actions, mechanism._DecisionShantenEvaluator()
+                evaluated = mechanism.evaluate_post_discard_hands(
+                    policy_input, actions, mechanism.StructuralShantenEvaluator()
                 )
                 self.assertGreaterEqual(
                     min(candidate.post_discard_shanten for candidate in evaluated),
@@ -408,7 +408,7 @@ class ActivationAndFilteringTest(unittest.TestCase):
         with (
             patch.object(
                 mechanism,
-                "_evaluate_post_discard_hands",
+                "evaluate_post_discard_hands",
                 return_value=tuple(
                     SimpleNamespace(action=action, post_discard_shanten=2)
                     for action in self.actions
@@ -470,7 +470,7 @@ class ActivationAndFilteringTest(unittest.TestCase):
         with (
             patch.object(
                 mechanism,
-                "_evaluate_post_discard_hands",
+                "evaluate_post_discard_hands",
                 return_value=tuple(
                     SimpleNamespace(action=action, post_discard_shanten=2)
                     for action in self.actions
@@ -550,8 +550,8 @@ class ParentAndStructuralPreservationTest(unittest.TestCase):
                     input=_input(concealed, threats=threats),
                     legal_actions=actions,
                 )
-                evaluated = mechanism._evaluate_post_discard_hands(
-                    decision.input, actions, mechanism._DecisionShantenEvaluator()
+                evaluated = mechanism.evaluate_post_discard_hands(
+                    decision.input, actions, mechanism.StructuralShantenEvaluator()
                 )
                 self.assertEqual(
                     min(candidate.post_discard_shanten for candidate in evaluated),

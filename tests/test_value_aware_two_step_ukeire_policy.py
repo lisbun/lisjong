@@ -327,7 +327,7 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
             ),
             patch.object(
                 value_aware,
-                "_second_step_score",
+                "second_step_ukeire_score",
                 side_effect=AssertionError("shanten loser must not reach second step"),
             ),
         ):
@@ -356,7 +356,7 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
             ),
             patch.object(
                 value_aware,
-                "_second_step_score",
+                "second_step_ukeire_score",
                 side_effect=AssertionError("unique current ukeire must end evaluation"),
             ),
         ):
@@ -472,7 +472,7 @@ class CandidateEvaluationPipelineTest(unittest.TestCase):
 
         with patch.object(
             value_aware,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("tenpai must not enter second step"),
         ):
             selected, evaluations = _evaluate_and_choose_discard(

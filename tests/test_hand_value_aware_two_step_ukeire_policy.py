@@ -161,12 +161,12 @@ def _discard(tile: Tile) -> DiscardAction:
 def _equal_structural_stages():
     with (
         patch.object(
-            hand_value._DecisionShantenEvaluator,
+            hand_value.StructuralShantenEvaluator,
             "calculate",
             return_value=1,
         ),
-        patch.object(hand_value, "_ukeire_count", return_value=10),
-        patch.object(hand_value, "_second_step_score", return_value=0),
+        patch.object(hand_value, "ukeire_count", return_value=10),
+        patch.object(hand_value, "second_step_ukeire_score", return_value=0),
     ):
         yield
 
@@ -435,7 +435,7 @@ class SelectionPriorityTest(unittest.TestCase):
         lose_dora = _discard(WHITE)
         with patch.object(
             hand_value,
-            "_second_step_score",
+            "second_step_ukeire_score",
             side_effect=AssertionError("value winner must end selection"),
         ):
             selected, evaluations = _evaluate_and_choose_discard(

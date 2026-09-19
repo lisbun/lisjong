@@ -166,8 +166,6 @@ from lisjong.hand_evaluation.shanten import (
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireAnalysis,
     TwoStepUkeirePolicy,
-    _discard_action_sort_key,
-    _remove_one_matching_tile,
 )
 from lisjong.policies.two_step_ukeire import (
     _evaluate_and_choose_discard as _two_step_evaluate_and_choose_discard,
@@ -177,6 +175,10 @@ from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import Tile
+from lisjong.structural_efficiency import (
+    discard_action_sort_key,
+    post_discard_concealed_hand,
+)
 
 DEFAULT_HORIZON = 3
 """初期世代のpublic Policyが探索するfuture self-draw slot数。"""
@@ -567,7 +569,7 @@ def _evaluate_completion_masses(
 ) -> tuple[FiniteHorizonCandidateEvaluation, ...]:
     """canonical順のroot candidateごとにexact completion massを評価する。
 
-    root `DiscardAction` identityは`_remove_one_matching_tile()`で維持し、
+    root `DiscardAction` identityは`post_discard_concealed_hand()`で維持し、
     structural DPへ渡す時点で34基礎牌種countへ落とす。したがって赤5と通常5、
     手出しとツモ切りのように異なるactual identityが同じstructural stateへ
     落ちる場合、共有transposition cacheがそのまま再利用される。
@@ -578,13 +580,13 @@ def _evaluate_completion_masses(
             action=action,
             completion_mass=evaluator.completion_mass(
                 _tile_type_counts(
-                    _remove_one_matching_tile(concealed_tiles, action.tile)
+                    post_discard_concealed_hand(concealed_tiles, action.tile)
                 ),
                 remaining_counts,
                 horizon,
             ),
         )
-        for action in sorted(discard_actions, key=_discard_action_sort_key)
+        for action in sorted(discard_actions, key=discard_action_sort_key)
     )
 
 

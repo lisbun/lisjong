@@ -378,7 +378,7 @@ class BranchClassificationTest(unittest.TestCase):
         with (
             patch.object(
                 mechanism,
-                "_evaluate_post_discard_hands",
+                "evaluate_post_discard_hands",
                 return_value=tuple(
                     SimpleNamespace(action=action, post_discard_shanten=2)
                     for action in actions

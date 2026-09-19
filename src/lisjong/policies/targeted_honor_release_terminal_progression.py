@@ -54,13 +54,13 @@ from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense impo
     _select_from_completion_masses,
     _TerminalShantenProgressionEvaluator,
 )
-from lisjong.policies.two_step_ukeire import _discard_action_sort_key
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.analysis_trace import AnalysisTrace
 from lisjong.policy_contract.meld import MeldKind
 from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileCategory
+from lisjong.structural_efficiency import discard_action_sort_key
 
 
 class TargetedHonorReleaseBranch(Enum):
@@ -325,7 +325,7 @@ def _classify_hva_decisive_stage(
     if minimum_shanten == 0:
         stable = min(
             (snapshot.action for snapshot in route_finalists),
-            key=_discard_action_sort_key,
+            key=discard_action_sort_key,
         )
         return (
             HandValueDecisiveStage.STABLE_TIE
@@ -350,7 +350,7 @@ def _classify_hva_decisive_stage(
 
     stable = min(
         (snapshot.action for snapshot in second_step_finalists),
-        key=_discard_action_sort_key,
+        key=discard_action_sort_key,
     )
     return (
         HandValueDecisiveStage.STABLE_TIE

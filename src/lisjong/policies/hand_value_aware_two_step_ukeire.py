@@ -24,15 +24,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from lisjong.policies.two_step_ukeire import (
-    TwoStepUkeirePolicy,
-    _DecisionShantenEvaluator,
-    _discard_action_sort_key,
-    _known_tile_counts,
-    _remove_one_matching_tile,
-    _second_step_score,
-    _ukeire_count,
-)
+from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policies.value_aware_two_step_ukeire import (
     _retained_concealed_dora_count,
 )
@@ -43,6 +35,14 @@ from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 from lisjong.policy_contract.wind import Wind
+from lisjong.structural_efficiency import (
+    StructuralShantenEvaluator,
+    discard_action_sort_key,
+    evaluate_post_discard_hands,
+    known_tile_counts,
+    second_step_ukeire_score,
+    ukeire_count,
+)
 
 _WIND_RANK = {
     Wind.EAST: 1,
@@ -110,7 +110,7 @@ class HandValueAwareTwoStepUkeireAnalysis(AnalysisTrace):
 @dataclass(slots=True)
 class _HandValueDiscardCandidateWork:
     action: DiscardAction
-    post_discard_hand: list[Tile]
+    post_discard_hand: tuple[Tile, ...]
     post_discard_shanten: int
     current_ukeire_count: int | None = None
     retained_real_value: int | None = None
@@ -243,17 +243,17 @@ def _evaluate_and_choose_discard(
     policy_input: PolicyInput, discard_actions: tuple[DiscardAction, ...]
 ) -> tuple[DiscardAction, tuple[HandValueCandidateEvaluation, ...]]:
     """selectionとanalysisで共有する1回のstaged candidate evaluation。"""
-    known_counts = _known_tile_counts(policy_input)
-    evaluator = _DecisionShantenEvaluator()
-    concealed_tiles = policy_input.own_hand.concealed_tiles
+    known_counts = known_tile_counts(policy_input)
+    evaluator = StructuralShantenEvaluator()
     evaluated = tuple(
         _HandValueDiscardCandidateWork(
-            action=action,
-            post_discard_hand=remaining_hand,
-            post_discard_shanten=evaluator.calculate(remaining_hand),
+            action=structural.action,
+            post_discard_hand=structural.post_discard_hand,
+            post_discard_shanten=structural.post_discard_shanten,
         )
-        for action in discard_actions
-        for remaining_hand in (_remove_one_matching_tile(concealed_tiles, action.tile),)
+        for structural in evaluate_post_discard_hands(
+            policy_input, discard_actions, evaluator
+        )
     )
 
     minimum_shanten = min(candidate.post_discard_shanten for candidate in evaluated)
@@ -263,7 +263,7 @@ def _evaluate_and_choose_discard(
         if candidate.post_discard_shanten == minimum_shanten
     )
     for candidate in shanten_finalists:
-        candidate.current_ukeire_count = _ukeire_count(
+        candidate.current_ukeire_count = ukeire_count(
             candidate.post_discard_hand,
             known_counts,
             minimum_shanten,
@@ -316,11 +316,11 @@ def _evaluate_and_choose_discard(
             elif minimum_shanten == 0:
                 selected = min(
                     (candidate.action for candidate in route_finalists),
-                    key=_discard_action_sort_key,
+                    key=discard_action_sort_key,
                 )
             else:
                 for candidate in route_finalists:
-                    candidate.second_step_ukeire_score = _second_step_score(
+                    candidate.second_step_ukeire_score = second_step_ukeire_score(
                         candidate.post_discard_hand,
                         known_counts,
                         minimum_shanten,
@@ -335,14 +335,14 @@ def _evaluate_and_choose_discard(
                         for candidate in route_finalists
                         if candidate.second_step_ukeire_score == maximum_second_step
                     ),
-                    key=_discard_action_sort_key,
+                    key=discard_action_sort_key,
                 )
 
     snapshots = tuple(
         candidate.snapshot()
         for candidate in sorted(
             evaluated,
-            key=lambda candidate: _discard_action_sort_key(candidate.action),
+            key=lambda candidate: discard_action_sort_key(candidate.action),
         )
     )
     return selected, snapshots
