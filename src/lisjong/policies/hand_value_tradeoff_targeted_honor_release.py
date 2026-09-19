@@ -230,8 +230,7 @@ def _evaluate_and_choose_discard(
                 former_parent_action=former_parent_action,
                 selected_action=champion_action,
                 selection_source=(
-                    HandValueTradeoffTargetedHonorReleaseSelectionSource.
-                    CHAMPION_TARGETED_HONOR_RELEASE
+                    HandValueTradeoffTargetedHonorReleaseSelectionSource.CHAMPION_TARGETED_HONOR_RELEASE
                 ),
                 action_changed_vs_champion=False,
                 action_changed_vs_former_parent=(
