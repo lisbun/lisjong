@@ -16,6 +16,9 @@ from lisjong.policies.genbutsu_defense_two_step_ukeire import (
 from lisjong.policies.hand_value_aware_two_step_ukeire import (
     HandValueAwareTwoStepUkeirePolicy,
 )
+from lisjong.policies.hand_value_tradeoff_mechanism_riichi_defense import (
+    HandValueTradeoffMechanismRiichiDefensePolicy,
+)
 from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
     MechanismRiichiDefenseYakuhaiCallPolicy,
 )
@@ -42,6 +45,7 @@ __all__ = [
     "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
     "GenbutsuDefenseTwoStepUkeirePolicy",
     "HandValueAwareTwoStepUkeirePolicy",
+    "HandValueTradeoffMechanismRiichiDefensePolicy",
     "MechanismRiichiDefenseYakuhaiCallPolicy",
     "MinimalPolicy",
     "OpenHandYakuAwareCallPolicy",
