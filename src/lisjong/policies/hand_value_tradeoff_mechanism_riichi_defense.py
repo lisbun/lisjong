@@ -107,9 +107,7 @@ def _supported_yaku_han_potential(
 ) -> int:
     """Return the single best supported incomplete-yaku potential."""
     return max(
-        _yakuhai_pair_potential(
-            post_discard_hand, policy_input, remaining_counts
-        ),
+        _yakuhai_pair_potential(post_discard_hand, policy_input, remaining_counts),
         _tanyao_potential(post_discard_hand, policy_input),
     )
 
@@ -128,13 +126,9 @@ def _hand_value_v2_fallback(
         else remaining_counts
     )
     evaluator = StructuralShantenEvaluator()
-    evaluated = evaluate_post_discard_hands(
-        policy_input, discard_actions, evaluator
-    )
+    evaluated = evaluate_post_discard_hands(policy_input, discard_actions, evaluator)
 
-    minimum_shanten = min(
-        candidate.post_discard_shanten for candidate in evaluated
-    )
+    minimum_shanten = min(candidate.post_discard_shanten for candidate in evaluated)
     shanten_finalists = tuple(
         candidate
         for candidate in evaluated
@@ -270,9 +264,7 @@ def _evaluate_finite_horizon_hand_value_v2(
         DEFAULT_HORIZON,
         _FiniteHorizonEvaluator(),
     )
-    maximum_mass = max(
-        evaluation.completion_mass for evaluation in evaluations
-    )
+    maximum_mass = max(evaluation.completion_mass for evaluation in evaluations)
     if maximum_mass == 0:
         return _hand_value_v2_from_finite_horizon(
             policy_input, evaluations, remaining_counts
