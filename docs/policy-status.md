@@ -17,30 +17,42 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-09-13**
+Snapshot date: **2026-09-20**
 
 ## Current strength baseline
 
 | Field | Current value |
 | --- | --- |
-| Arena identity | `mechanism-riichi-defense` |
-| Implementation class | `MechanismRiichiDefenseYakuhaiCallPolicy` |
-| Family | `yakuhai-call` + bounded mechanism-based riichi defense |
-| Role | **current heuristic strength baseline (protocol-scoped)** |
-| Evidence scope | `ABBB` / `4p-red-single` |
+| Arena identity | `targeted-honor-release-terminal-progression` |
+| Implementation class | `TargetedHonorReleaseTerminalProgressionPolicy` |
+| Family | targeted offensive-efficiency heuristic over `mechanism-riichi-defense` |
+| Role | **current Heuristic Champion / heuristic strength baseline (protocol-scoped)** |
+| Evidence scope | paired passive-x3 / `4p-red-single` |
 
-`MechanismRiichiDefenseYakuhaiCallPolicy` は Arena #217 の strict-read / provenance-locked 10,000-game Gate 2 評価で `yakuhai-call` に対する positive delta が確定し、`mechanism-riichi-defense` として Arena #219 経由で curated `POLICY_CATALOG` alias に登録された。この promotion は **`ABBB` / `4p-red-single` protocol の評価結果に限定** される。hanchan superiority、universal/generalized superiority、production default、runtime profile default、Champion 等の広い主張はこの evidence からは行わない。
-
-`yakuhai-call`（`YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy`）は predecessor / historical anchor として残る。過去の fresh holdout comparison に基づく promotion evidence、および Arena #211 等で明示的に retain されている research source としての役割は変更されない。
+`TargetedHonorReleaseTerminalProgressionPolicy` is the current Heuristic Champion following lisjong-project #67. The authoritative promotion evidence is Arena #270, which compared the exact challenger at lisjong revision `f29d129c67e5232d06563c6e457754377734ed14` with the exact incumbent `MechanismRiichiDefenseYakuhaiCallPolicy` on a fresh locked population of 2,200 paired seed blocks / 17,600 games.
 
 ```text
-current gameplay strength baseline promotion
-!= migration of locked teacher/source populations
+mean(H - C)             +49.54545454545455
+95% interval            [+14.855898839342167, +84.23501025156693]
+classification          TARGETED HONOR-RELEASE CONFIRMED POSITIVE
+paired result identity  04cc12834b25365e3146dde64115162378b329117ba007dd368abb1affcb95dc
 ```
 
-今回の strength baseline promotion は、Arena #211 の `Arm Y`（exact retained `yakuhai-call` source）や `Arm R`（exact qualified RiichiLab source）等、既存 research protocol が明示的に固定した teacher/source population を自動的に移行するものではない。
+The result was strict-read / provenance-verified and used no result-driven seed extension, replacement, threshold change, or pooling with #263.
 
-Runtime profile への配備は別責務であり、RiichiLab 等の execution profile mapping は `lisjong-arena` が所有する。
+The evaluated revision remains the strength-evidence anchor. Subsequent #177 / PR #178 structural-efficiency extraction was explicitly behavior-preserving; its deterministic before/after harness included the terminal-progression lineage and produced byte-identical output. Same-name identity alone is not used as evidence of continuity.
+
+`mechanism-riichi-defense` remains the predecessor Heuristic Champion / historical strength baseline and comparator. `yakuhai-call` remains an earlier predecessor / historical anchor and retains any explicitly locked research-source roles.
+
+```text
+Heuristic Champion promotion
+!= migration of locked teacher/source populations
+!= Overall Champion designation
+!= hanchan superiority
+!= production/runtime default
+```
+
+Arena #211 `Arm Y` / `Arm R` and other historically locked research populations are not silently migrated by this designation. Runtime profile deployment remains a separate responsibility.
 
 ## Public Policy inventory
 
@@ -59,11 +71,11 @@ Runtime profile への配備は別責務であり、RiichiLab 等の execution p
 | `GenbutsuDefenseFiniteHorizonValueAwarePolicy` | `combined` | predecessor strength baseline / comparator | `yakuhai-call` より前の baseline |
 | `GenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `extended-combined` | historical causal comparator; not promoted | hand-value 拡張。promotion なし |
 | `YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy` | `yakuhai-call` | predecessor strength baseline / historical anchor | conservative Yakuhai call を追加。#211等で明示的にlockされたresearch source としては継続利用 |
-| `MechanismRiichiDefenseYakuhaiCallPolicy` | `mechanism-riichi-defense` | **current promoted heuristic strength baseline (`ABBB` / `4p-red-single` scope)** | exact `yakuhai-call` parentにbounded mechanism-based riichi defenseを追加。Arena #217 Gate 2で昇格、Arena #219でcurated alias登録 |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` | `mechanism-riichi-defense` | **predecessor Heuristic Champion / historical strength baseline** | Arena #217 Gate 2で`yakuhai-call`を上回り初代Heuristic Championとなったが、Arena #270 / project #67で後継へ交代 |
 | `OpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | Tanyao / Honitsu / Chinitsu-compatible strictly-improving Chi/Pon を追加 |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | selected cheap+far Chi/Pon のみ Pass へ置換 |
 | `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |
-| `TargetedHonorReleaseTerminalProgressionPolicy` | — | **experimental targeted offensive-efficiency candidate; not yet strength-evaluated; not promoted** | far closed PUSH / all-zeroでshanten・ukeire・retained value同等のsuited-discard / honor conflictだけをexact R5で再判定 |
+| `TargetedHonorReleaseTerminalProgressionPolicy` | `targeted-honor-release-terminal-progression` | **current Heuristic Champion / current heuristic strength baseline** | far closed PUSH / all-zeroのtargeted honor-release conflictだけをexact R5で再判定。Arena #270でexact incumbentにCONFIRMED POSITIVE、project #67で昇格 |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
 
 `current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。
@@ -106,44 +118,52 @@ classification           PROGRESSION DEVELOPMENT INCONCLUSIVE
 
 Representative evidence: [Arena #252 final result](https://github.com/lisbun/lisjong-arena/issues/252#issuecomment-5664824746)
 
-## `TargetedHonorReleaseTerminalProgressionPolicy` — targeted #174 candidate
+## `TargetedHonorReleaseTerminalProgressionPolicy` — current Heuristic Champion
 
-Arena #256 で broad #169 のdisagreementが特定のshapeへ集中したことを受け、#174はexact parentを変更せず、次をすべて満たす通常打牌だけを再判定する。
+Arena #256 で broad #169 のdisagreementが特定のshapeへ集中したことを受け、#174はexact parentを変更せず、far closed PUSH / all-zeroの限定された suited-discard / honor-release conflictだけをexact R5で再判定する。
+
+Arena #263の100-block development populationはINCONCLUSIVEだったためconfirmation observationには使用せず、Arena #270で unchanged candidate を exact incumbent `mechanism-riichi-defense` と fresh independent 2,200 paired seed blocksで評価した。
 
 ```text
-closed hand (ANKAN-onlyはclosed)
-current filtering branch = PUSH
-FiniteHorizon completion mass = all-zero
-parent post-discard shanten >= 3
-parent is minimum-shanten / maximum-current-ukeire
-parent selected action = suited discard
-
-target universe:
-  same post-discard shanten
-  same current ukeire
-  same retained real value
-  at least one honor-discard peer
+seed blocks             2,200
+games                   17,600
+mean paired delta       +49.54545454545455
+sample SD               830.1450958429708
+SE                      17.698752911281826
+95% interval            [+14.855898839342167, +84.23501025156693]
+classification          TARGETED HONOR-RELEASE CONFIRMED POSITIVE
+paired result identity  04cc12834b25365e3146dde64115162378b329117ba007dd368abb1affcb95dc
 ```
 
-target universeだけへIssue #169のexact integer R5 evaluatorを1回適用し、current parent actionがR5 bestから外れ、かつR5 bestがhonor-onlyの場合だけactionを変更する。R5 bestにparentが残る、honor/suitedがmixed、qualifying honor peerがない等ではexact parent actionを維持する。
+Project #67 therefore promotes the exact lineage to:
 
-これは implementation-level hypothesis であり、**strength improvement / promotion claimではない**。実装merge後のbounded Arena evaluationは別Issueで扱う。
+```text
+Heuristic Champion
+targeted-honor-release-terminal-progression
+TargetedHonorReleaseTerminalProgressionPolicy
+```
 
-Implementation hypothesis: [lisjong #174](https://github.com/lisbun/lisjong/issues/174)
+The family designation is bounded to the controlled evidence. It does not establish Overall Champion, hanchan superiority, RiichiLab superiority, production deployment, or universal Mahjong superiority.
 
-## `MechanismRiichiDefenseYakuhaiCallPolicy` — promotion evidence
+Evaluated strength revision: `f29d129c67e5232d06563c6e457754377734ed14`. Current-main semantic continuity is supported by #177 / PR #178's explicit behavior-preserving extraction and byte-identical deterministic before/after harness, including terminal-progression policies.
+
+Implementation hypothesis: [lisjong #174](https://github.com/lisbun/lisjong/issues/174)  
+Promotion evidence: [Arena #270](https://github.com/lisbun/lisjong-arena/issues/270)  
+Champion governance: [lisjong-project #67](https://github.com/lisbun/lisjong-project/issues/67)
+
+## `MechanismRiichiDefenseYakuhaiCallPolicy` — predecessor Champion evidence
 
 `MechanismRiichiDefenseYakuhaiCallPolicy` は predecessor baseline `yakuhai-call` を parent とする bounded riichi-defense heuristic である。
 
-Current status:
+Historical status:
 
 ```text
 implementation         COMPLETE / merged
 Gate 1                 INCONCLUSIVE / Gate 2 eligible (Arena #216)
 Gate 2                 CONFIRMED POSITIVE (Arena #217)
 protocol scope         ABBB / 4p-red-single
-Arena curated alias     mechanism-riichi-defense (Arena #219)
-promotion               YES — protocol-scoped heuristic strength baseline
+Arena curated alias    mechanism-riichi-defense (Arena #219)
+Champion role          predecessor Heuristic Champion after project #67
 ```
 
 Arena #217 (10,000 games, strict artifact readback / canonical re-aggregation / provenance validation済み) は次を確定した。
@@ -153,7 +173,7 @@ mean delta      +109.2
 95% interval    [+73.0, +145.5]
 ```
 
-この結果は `ABBB` / `4p-red-single` protocol に限定された評価であり、hanchan や他 protocol への一般化、production/runtime default 化、Champion 指定を含意しない。
+このhistorical resultは初代Heuristic Champion establishment (#66) の根拠となった。Arena #270 / project #67で後継が昇格した後も、`mechanism-riichi-defense` はpredecessor / historical comparatorとして保持する。
 
 Implementation / original hypothesis: [lisjong #163](https://github.com/lisbun/lisjong/issues/163)
 
@@ -212,7 +232,8 @@ Parent roadmap: [lisjong-project #45](https://github.com/lisbun/lisjong-project/
 | `yakuhai-call` predecessor / historical anchor | [lisjong #121 Gate 2 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5471486662) |
 | `combined` predecessor baseline | [lisjong #121 historical promotion evidence](https://github.com/lisbun/lisjong/issues/121#issuecomment-5462935934) |
 | `extended-combined` not promoted | [lisjong #121 bounded Gate 1 decision](https://github.com/lisbun/lisjong/issues/121#issuecomment-5466162346) |
-| `MechanismRiichiDefenseYakuhaiCallPolicy` current heuristic baseline (`ABBB` / `4p-red-single`) | [lisjong-arena #217](https://github.com/lisbun/lisjong-arena/issues/217) — Gate 2 CONFIRMED POSITIVE; [lisjong-arena #216](https://github.com/lisbun/lisjong-arena/issues/216) — prior evaluation step; [lisjong-arena #219](https://github.com/lisbun/lisjong-arena/issues/219) — curated `mechanism-riichi-defense` alias |
+| `TargetedHonorReleaseTerminalProgressionPolicy` current Heuristic Champion | [lisjong-arena #270](https://github.com/lisbun/lisjong-arena/issues/270) — independent confirmation CONFIRMED POSITIVE; [lisjong-project #67](https://github.com/lisbun/lisjong-project/issues/67) — family promotion governance |
+| `MechanismRiichiDefenseYakuhaiCallPolicy` predecessor Heuristic Champion | [lisjong-arena #217](https://github.com/lisbun/lisjong-arena/issues/217) — Gate 2 CONFIRMED POSITIVE; [lisjong-project #66](https://github.com/lisbun/lisjong-project/issues/66) — initial Heuristic Champion establishment; [lisjong-arena #219](https://github.com/lisbun/lisjong-arena/issues/219) — curated alias |
 | `OpenHandYakuAwareCallPolicy` | [Arena #196](https://github.com/lisbun/lisjong-arena/issues/196) — bounded strength inconclusive |
 | `CheapFarGuardOpenHandYakuAwareCallPolicy` | [lisjong #161](https://github.com/lisbun/lisjong/issues/161#issuecomment-5622890134) — `CHEAP-FAR GUARD INCONCLUSIVE` |
 | `TerminalShantenProgressionMechanismRiichiDefensePolicy` | [lisjong #169](https://github.com/lisbun/lisjong/issues/169) — experimental candidate; strength evaluation blocked on exact-safe performance work |
