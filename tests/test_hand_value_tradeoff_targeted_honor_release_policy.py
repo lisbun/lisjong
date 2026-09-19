@@ -4,8 +4,6 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from lisjong.policy import DecisionContext
-
 import lisjong.policies.hand_value_tradeoff_mechanism_riichi_defense as v2
 import lisjong.policies.hand_value_tradeoff_targeted_honor_release as combined
 import lisjong.policies.targeted_honor_release_terminal_progression as targeted
@@ -16,6 +14,7 @@ from lisjong.policies.targeted_honor_release_terminal_progression import (
     TargetedHonorReleaseTerminalProgressionPolicy,
 )
 from lisjong.policy_contract.action import DiscardAction, RiichiAction, RonAction
+from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.own_hand_state import OwnHandState
 from lisjong.policy_contract.player_state import PlayerPublicState
 from lisjong.policy_contract.policy_input import PolicyInput
