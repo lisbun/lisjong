@@ -29,7 +29,7 @@ Snapshot date: **2026-09-20**
 | Role | **current Heuristic Champion / heuristic strength baseline (protocol-scoped)** |
 | Evidence scope | paired passive-x3 / `4p-red-single` |
 
-`TargetedHonorReleaseTerminalProgressionPolicy` is the current Heuristic Champion following lisjong-project #67. The authoritative promotion evidence is Arena #270, which compared the exact challenger at lisjong revision `f29d129c67e5232d06563c6e457754377734ed14` with the exact incumbent `MechanismRiichiDefenseYakuhaiCallPolicy` on a fresh locked population of 2,200 paired seed blocks / 17,600 games.
+`TargetedHonorReleaseTerminalProgressionPolicy` は lisjong-project #67 により current Heuristic Champion へ昇格する。authoritative promotion evidence は Arena #270 であり、lisjong revision `f29d129c67e5232d06563c6e457754377734ed14` の exact challenger を exact incumbent `MechanismRiichiDefenseYakuhaiCallPolicy` と fresh locked 2,200 paired seed blocks / 17,600 games で比較した。
 
 ```text
 mean(H - C)             +49.54545454545455
@@ -38,11 +38,11 @@ classification          TARGETED HONOR-RELEASE CONFIRMED POSITIVE
 paired result identity  04cc12834b25365e3146dde64115162378b329117ba007dd368abb1affcb95dc
 ```
 
-The result was strict-read / provenance-verified and used no result-driven seed extension, replacement, threshold change, or pooling with #263.
+結果は strict-read / provenance verification を完了しており、result-driven な seed extension / replacement / threshold change、および #263 observation の pooling は行っていない。
 
-The evaluated revision remains the strength-evidence anchor. Subsequent #177 / PR #178 structural-efficiency extraction was explicitly behavior-preserving; its deterministic before/after harness included the terminal-progression lineage and produced byte-identical output. Same-name identity alone is not used as evidence of continuity.
+評価済み revision は strength evidence のanchorとして保持する。その後の #177 / PR #178 structural-efficiency extraction は明示的な behavior-preserving refactor であり、terminal-progression lineage を含む deterministic before/after harness は byte-identical output を確認した。same class name / module pathだけをcontinuityの根拠にはしない。
 
-`mechanism-riichi-defense` remains the predecessor Heuristic Champion / historical strength baseline and comparator. `yakuhai-call` remains an earlier predecessor / historical anchor and retains any explicitly locked research-source roles.
+`mechanism-riichi-defense` は predecessor Heuristic Champion / historical strength baseline / comparator として残す。`yakuhai-call` もさらに前の predecessor / historical anchor として、明示的にlockされたresearch-source roleを維持する。
 
 ```text
 Heuristic Champion promotion
@@ -52,7 +52,7 @@ Heuristic Champion promotion
 != production/runtime default
 ```
 
-Arena #211 `Arm Y` / `Arm R` and other historically locked research populations are not silently migrated by this designation. Runtime profile deployment remains a separate responsibility.
+Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、このdesignationによってsilent migrationしない。Runtime profile deploymentも引き続き別責務とする。
 
 ## Public Policy inventory
 
@@ -143,9 +143,9 @@ targeted-honor-release-terminal-progression
 TargetedHonorReleaseTerminalProgressionPolicy
 ```
 
-The family designation is bounded to the controlled evidence. It does not establish Overall Champion, hanchan superiority, RiichiLab superiority, production deployment, or universal Mahjong superiority.
+このfamily designationはcontrolled evidenceのscopeに限定する。Overall Champion、hanchan superiority、RiichiLab superiority、production deployment、universal Mahjong superiorityは確立しない。
 
-Evaluated strength revision: `f29d129c67e5232d06563c6e457754377734ed14`. Current-main semantic continuity is supported by #177 / PR #178's explicit behavior-preserving extraction and byte-identical deterministic before/after harness, including terminal-progression policies.
+Evaluated strength revision は `f29d129c67e5232d06563c6e457754377734ed14`。current-main semantic continuity は、#177 / PR #178 の明示的 behavior-preserving extraction と、terminal-progression Policyを含む byte-identical deterministic before/after harnessによって確認する。
 
 Implementation hypothesis: [lisjong #174](https://github.com/lisbun/lisjong/issues/174)  
 Promotion evidence: [Arena #270](https://github.com/lisbun/lisjong-arena/issues/270)  
