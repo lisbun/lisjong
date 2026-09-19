@@ -828,6 +828,7 @@ class CrossPolicyPrivateImportTest(unittest.TestCase):
             "genbutsu_defense_finite_horizon_value_aware.py",
             "genbutsu_defense_two_step_ukeire.py",
             "hand_value_aware_two_step_ukeire.py",
+            "hand_value_tradeoff_mechanism_riichi_defense.py",
             "mechanism_riichi_defense_offensive_efficiency_diagnostic.py",
             "mechanism_riichi_defense_yakuhai_call.py",
             "targeted_honor_release_terminal_progression.py",
