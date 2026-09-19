@@ -283,6 +283,29 @@ class BoundedTradeoffTest(unittest.TestCase):
         )
         self.assertIs(selected, self.fast)
 
+    def test_all_zero_current_ukeire_keeps_all_same_shanten_candidates(self) -> None:
+        selected = _fallback_case(
+            self.input,
+            (self.fast, self.value),
+            post_hands=self.post_hands,
+            shanten={self.fast: 1, self.value: 1},
+            ukeire={self.fast: 0, self.value: 0},
+            potential={self.fast: 0, self.value: 1},
+        )
+        self.assertIs(selected, self.value)
+
+    def test_existing_retained_real_value_participates_in_visible_value(self) -> None:
+        selected = _fallback_case(
+            self.input,
+            (self.fast, self.value),
+            post_hands=self.post_hands,
+            shanten={self.fast: 1, self.value: 1},
+            ukeire={self.fast: 10, self.value: 8},
+            retained={self.fast: 0, self.value: 1},
+            potential={self.fast: 0, self.value: 0},
+        )
+        self.assertIs(selected, self.value)
+
     def test_selection_is_independent_of_legal_action_order(self) -> None:
         selections = set()
         for actions in itertools.permutations((self.fast, self.value)):
@@ -329,9 +352,7 @@ class MotivatingPatternTest(unittest.TestCase):
             patch.object(v2, "_yaku_route_value", return_value=0),
             patch.object(v2, "second_step_ukeire_score", return_value=0),
         ):
-            selected = v2._hand_value_v2_fallback(
-                policy_input, (keep_white, keep_east)
-            )
+            selected = v2._hand_value_v2_fallback(policy_input, (keep_white, keep_east))
 
         self.assertIs(selected, keep_east)
         self.assertEqual(
@@ -372,23 +393,19 @@ class MotivatingPatternTest(unittest.TestCase):
             patch.object(
                 v2,
                 "ukeire_count",
-                side_effect=lambda hand, *_args: 8
-                if by_hand[tuple(hand)] is tanyao
-                else 10,
+                side_effect=lambda hand, *_args: (
+                    8 if by_hand[tuple(hand)] is tanyao else 10
+                ),
             ),
             patch.object(v2, "_retained_real_value", return_value=0),
             patch.object(v2, "_yaku_route_value", return_value=0),
             patch.object(v2, "second_step_ukeire_score", return_value=0),
         ):
-            selected = v2._hand_value_v2_fallback(
-                policy_input, (non_tanyao, tanyao)
-            )
+            selected = v2._hand_value_v2_fallback(policy_input, (non_tanyao, tanyao))
 
         self.assertIs(selected, tanyao)
         self.assertEqual(v2._tanyao_potential(post_hands[tanyao], policy_input), 1)
-        self.assertEqual(
-            v2._tanyao_potential(post_hands[non_tanyao], policy_input), 0
-        )
+        self.assertEqual(v2._tanyao_potential(post_hands[non_tanyao], policy_input), 0)
 
 
 class FiniteHorizonBoundaryTest(unittest.TestCase):
@@ -416,7 +433,9 @@ class FiniteHorizonBoundaryTest(unittest.TestCase):
             patch.object(
                 v2,
                 "_hand_value_v2_from_finite_horizon",
-                side_effect=AssertionError("unique positive winner must be exact parent"),
+                side_effect=AssertionError(
+                    "unique positive winner must be exact parent"
+                ),
             ),
         ):
             selected = v2._evaluate_finite_horizon_hand_value_v2(
@@ -457,9 +476,7 @@ class FiniteHorizonBoundaryTest(unittest.TestCase):
                 return_value=self.a,
             ) as fallback,
         ):
-            v2._evaluate_finite_horizon_hand_value_v2(
-                self.input, (self.a, self.b)
-            )
+            v2._evaluate_finite_horizon_hand_value_v2(self.input, (self.a, self.b))
 
         self.assertEqual(
             tuple(evaluation.action for evaluation in fallback.call_args.args[1]),
@@ -509,11 +526,20 @@ class ParentBoundaryTest(unittest.TestCase):
             "_evaluate_finite_horizon_hand_value_v2",
             side_effect=AssertionError("non-discard branch must skip v2"),
         ):
-            self.assertIs(policy.choose_action(_decision((MANZU_4,), (discard, ron))), ron)
+            self.assertIs(
+                policy.choose_action(_decision((MANZU_4,), (discard, ron))), ron
+            )
             self.assertIs(
                 policy.choose_action(_decision((MANZU_4,), (discard, riichi))),
                 riichi,
             )
+
+    def test_only_discard_extension_point_is_overridden(self) -> None:
+        policy_type = HandValueTradeoffMechanismRiichiDefensePolicy
+        self.assertIn("_decide_discard", vars(policy_type))
+        for method_name in ("_decide", "choose_action", "choose_action_with_analysis"):
+            with self.subTest(method_name=method_name):
+                self.assertNotIn(method_name, vars(policy_type))
 
     def test_policy_is_stateless_public_and_spawn_picklable(self) -> None:
         policy = HandValueTradeoffMechanismRiichiDefensePolicy()
