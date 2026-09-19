@@ -158,8 +158,7 @@ class CompositionSelectionTest(unittest.TestCase):
         self.assertIs(selected, A_EAST)
         self.assertIs(
             analysis.selection_source,
-            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.
-            CHAMPION_TARGETED_HONOR_RELEASE,
+            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.CHAMPION_TARGETED_HONOR_RELEASE,
         )
         self.assertIsNone(analysis.hand_value_v2_action)
         self.assertFalse(analysis.action_changed_vs_champion)
@@ -170,8 +169,7 @@ class CompositionSelectionTest(unittest.TestCase):
         actions = (A_M3, A_EAST)
         inactive = _targeted_analysis(
             stage=(
-                targeted.TargetedHonorReleaseActivationStage.
-                PARENT_SHANTEN_TOO_CLOSE
+                targeted.TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE
             ),
             parent_action=A_M3,
             selected_action=A_M3,
@@ -201,8 +199,7 @@ class CompositionSelectionTest(unittest.TestCase):
         self.assertIs(selected, A_EAST)
         self.assertIs(
             analysis.selection_source,
-            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.
-            HAND_VALUE_V2,
+            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.HAND_VALUE_V2,
         )
         self.assertTrue(analysis.action_changed_vs_champion)
         self.assertTrue(analysis.action_changed_vs_former_parent)
@@ -211,8 +208,7 @@ class CompositionSelectionTest(unittest.TestCase):
         actions = (A_M3, A_EAST)
         inactive = _targeted_analysis(
             stage=(
-                targeted.TargetedHonorReleaseActivationStage.
-                PARENT_SHANTEN_TOO_CLOSE
+                targeted.TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE
             ),
             parent_action=A_M3,
             selected_action=A_M3,
@@ -242,8 +238,7 @@ class CompositionSelectionTest(unittest.TestCase):
         self.assertIs(selected, A_M3)
         self.assertIs(
             analysis.selection_source,
-            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.
-            SHARED_ACTION,
+            combined.HandValueTradeoffTargetedHonorReleaseSelectionSource.SHARED_ACTION,
         )
         self.assertFalse(analysis.action_changed_vs_champion)
         self.assertFalse(analysis.action_changed_vs_former_parent)
@@ -352,8 +347,7 @@ class CompositionSelectionTest(unittest.TestCase):
             patches = self._base_patches(actions, {A_M3: 0, A_EAST: 0})
             inactive = _targeted_analysis(
                 stage=(
-                    targeted.TargetedHonorReleaseActivationStage.
-                    PARENT_SHANTEN_TOO_CLOSE
+                    targeted.TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE
                 ),
                 parent_action=A_M3,
                 selected_action=A_M3,
