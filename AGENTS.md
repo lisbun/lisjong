@@ -177,10 +177,23 @@ python -m ruff check .
 ### Repositoryの責務
 
 `lisjong`はPolicy、`DecisionContext`、`InternalAction`、AI-owned analysis semantics、牌効率・belief・
-value / risk等のAI decision coreを所有する。ecosystem全体のrepository責務は
-`lisjong-project`のarchitectureを正本とし、lisjong固有の詳細は`docs/architecture.md`を正本とする。
-external execution / observationは`lisjong-arena`、麻雀ルールとgame state transitionは
+value / risk等のAI decision coreに加え、feature / dataset / teacher / training / artifact /
+Learned Policy / learned estimatorからなるcanonical Learning capabilityを所有する。
+ecosystem全体のrepository責務は`lisjong-project`のarchitectureとADR 0008を正本とし、
+lisjong固有の詳細は`docs/architecture.md`を正本とする。
+external execution / observationとformal strength evaluationは`lisjong-arena`、麻雀ルールとgame state transitionは
 `lisjong-engine`の責務として扱い、lisjongへ逆流させない。
+
+### Learning / dependency boundary
+
+- `lisjong` coreはML framework非依存を維持し、training / learned inferenceはoptional extra + lazy importにする
+- ML framework未導入環境でcore importが成功するregressionを維持する
+- feature / dataset / teacher / label / training objective / artifact / inferenceのcanonical semanticsをArenaへ委譲しない
+- Arenaのhistorical Learning implementationはreferenceとして参照できるが、runtime dependencyを作らない
+- weights / checkpointはrepository外artifactとし、Gitへcommitしない
+- model artifactはimmutable snapshotとして扱い、factory / callable / arbitrary codeを復元しない
+- artifact identity / source provenanceの不整合はsilent fallbackせずfail closedする
+- reusable Arena source recordからmaterializeする場合、source schema version / population identityを記録する
 
 ### Policy / information boundary
 
@@ -188,7 +201,9 @@ external execution / observationは`lisjong-arena`、麻雀ルールとgame stat
 - Policyへ渡す情報を当該seatの観測可能範囲に限定し、hidden ground truthをonline decision pathへ混入させない
 - Policy-visible information、`DecisionContext` / `InternalAction` contract、AI-owned analysis semantics、
   hidden-information boundaryをsemantic reviewの重点とする
+- learned feature / dataset materializationでもprivileged truthをonline inference inputへ混入させない
 
 ### テスト重点
 
 - testは正常系だけでなく、情報境界、合法手、異常入力を優先して固定する
+- Learning pathではartifact identity / strict load、source schema mismatch、ML optional dependency境界を重点的に固定する
