@@ -173,5 +173,85 @@ class MLRuntimeRequirementTests(unittest.TestCase):
                 load_learned_policy_factory(self.root / "artifact")
 
 
+class NoArenaRuntimeDependencyTests(unittest.TestCase):
+    """`lisjong -> lisjong-arena`のruntime依存が存在しないことを固定する。
+
+    `lisjong.learning.source_record`はArenaが生成する`#342`/`#346`/`#347`
+    source-record artifactを読むだけであり、Arena allocation ledger
+    （`lisjong_arena.seed_registry`）を再実装・再所有・importしない。この
+    invariantはML runtime有無とは独立した別のdependency boundaryである。
+    """
+
+    def test_learning_package_never_imports_lisjong_arena(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, lisjong.learning; "
+                'assert not any(name == "lisjong_arena" or name.startswith('
+                '"lisjong_arena.") for name in sys.modules); '
+                'print("ok")',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_source_module_has_no_lisjong_arena_import_statement(self) -> None:
+        """importのない環境でも静的に固定できるよう、source上でも確認する。"""
+        import ast
+        import inspect
+
+        from lisjong.learning import source_record as module
+
+        tree = ast.parse(inspect.getsource(module))
+        imported_names = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+
+        self.assertFalse(
+            any(
+                name == "lisjong_arena" or name.startswith("lisjong_arena.")
+                for name in imported_names
+            )
+        )
+
+    def test_allocation_binding_validation_never_touches_the_network_or_disk_ledger(
+        self,
+    ) -> None:
+        """live registryへの再照会が一切ないことを、副作用の不在で確認する。
+
+        `validate_allocation_binding`はpure functionであり、ここでは
+        filesystem / networkをmockで完全に塞いだ状態でも成立することを示す。
+        """
+        import socket
+
+        from lisjong.learning.source_record import validate_allocation_binding
+
+        def _blocked(*_args, **_kwargs):
+            raise AssertionError("must not touch the network")
+
+        binding = fixtures.allocation_binding([1, 2, 3])
+        with (
+            patch.object(socket, "socket", side_effect=_blocked),
+            patch("builtins.open", side_effect=_blocked),
+        ):
+            validated = validate_allocation_binding(
+                binding, seeds=[1, 2, 3], context="binding"
+            )
+
+        self.assertEqual(validated, binding)
+
+
 if __name__ == "__main__":
     unittest.main()

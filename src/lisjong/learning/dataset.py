@@ -70,14 +70,18 @@ from lisjong.learning._publication import (
     write_new_text,
 )
 from lisjong.learning._typed_values import vocabulary_fingerprint
-from lisjong.learning.errors import DatasetError
+from lisjong.learning.errors import DatasetError, SourceRecordError
 from lisjong.learning.features import (
     FEATURE_DIMENSION,
     FEATURE_IDENTITY,
     build_player_safe_feature,
     feature_fingerprint,
 )
-from lisjong.learning.source_record import PlayerSafeSourceRecord
+from lisjong.learning.source_record import (
+    SOURCE_RECORD_SCHEMA_V2,
+    PlayerSafeSourceRecord,
+    validate_allocation_bindings,
+)
 from lisjong.policy_contract import DecisionContext, Seat
 
 DATASET_SCHEMA = "lisjong-offense-l0-bc-dataset-v1"
@@ -119,6 +123,7 @@ _MANIFEST_FIELDS = frozenset(
 )
 _SOURCE_FIELDS = frozenset(
     {
+        "allocation_bindings",
         "decision_count",
         "game_mode",
         "identity",
@@ -286,6 +291,7 @@ def validate_source_block(
     if not population:
         raise DatasetError(f"{context}.population must not be empty")
     seeds: set[int] = set()
+    seeds_by_split: dict[str, list[int]] = {}
     total = 0
     for ordinal, entry in enumerate(population):
         entry_context = f"{context}.population[{ordinal}]"
@@ -300,9 +306,24 @@ def validate_source_block(
         if item["seed"] in seeds:
             raise DatasetError(f"{context}.population reuses a seed")
         seeds.add(item["seed"])
+        seeds_by_split.setdefault(item["split"], []).append(item["seed"])
         total += item["decision_count"]
     if source["decision_count"] != total:
         raise DatasetError(f"{context} decision accounting mismatch")
+
+    # allocation_bindingsはArena-owned seed allocation ledger（lisjong-arena#346/
+    # #347）のper-split provenanceである。datasetとartifactに到達する時点では
+    # 常にschema v2由来（materialize_dataset()がv1を拒否する）なので、ここでは
+    # Noneを許さず、populationのsplitと矛盾しないbindingを要求する。liveな
+    # ledgerへは一切照会しない。
+    try:
+        validate_allocation_bindings(
+            source["allocation_bindings"],
+            populations=seeds_by_split,
+            context=f"{context}.allocation_bindings",
+        )
+    except SourceRecordError as error:
+        raise DatasetError(str(error)) from error
     return source
 
 
@@ -314,11 +335,23 @@ def materialize_dataset(
     rowの順序はsource populationの順序（game順、game内はdecision_ordinal順）
     をそのまま保持する。既存destinationは上書きしない。同じsource recordから
     再materializeすると、同じmanifest identityと同じpayload digestになる。
+
+    `source`はschema v2（Arena allocation binding provenance付き）でなければ
+    ならない。historical schema v1のsource recordはallocation provenanceを
+    持たないため、それを推測で補完してdatasetを作ることはしない。v1
+    readbackはこのIssueのcanonical first-slice datasetの入力にはならない。
     """
     if not isinstance(source, PlayerSafeSourceRecord):
         raise DatasetError("source must be a PlayerSafeSourceRecord")
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
+    if source.allocation_bindings is None:
+        raise DatasetError(
+            "dataset materialization requires a source record with Arena "
+            "allocation provenance (schema "
+            f"{SOURCE_RECORD_SCHEMA_V2!r}); got schema {source.schema!r} "
+            "without allocation_bindings"
+        )
 
     destination = Path(destination)
     with staged_publication(destination, DatasetError) as staging:

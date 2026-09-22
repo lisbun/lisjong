@@ -13,6 +13,7 @@ from lisjong.action_vocabulary import ACTION_VOCABULARY_SIZE, encode_action
 from lisjong.learning import (
     DATASET_SCHEMA,
     FEATURE_DIMENSION,
+    SOURCE_RECORD_SCHEMA_V1,
     TEACHER_LABEL_SEMANTICS,
     DatasetError,
     build_player_safe_feature,
@@ -60,6 +61,32 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(manifest["rows"]["count"], 5)
         self.assertEqual(manifest["rows"]["splits"], {"SELECT": 2, "TRAIN": 3})
         self.assertEqual(dataset.split_counts(), {"TRAIN": 3, "SELECT": 2})
+
+    def test_allocation_bindings_are_preserved_exactly_from_the_source(self) -> None:
+        """Arena allocation provenanceはlisjongが再生成せず、そのままbindする。"""
+        dataset = self.dataset()
+
+        self.assertEqual(
+            dataset.manifest["source"]["allocation_bindings"],
+            self.source.provenance()["allocation_bindings"],
+        )
+        self.assertEqual(
+            set(dataset.manifest["source"]["allocation_bindings"]),
+            {"TRAIN", "SELECT"},
+        )
+
+    def test_materialization_rejects_a_v1_source_without_allocation_bindings(
+        self,
+    ) -> None:
+        v1_source = read_source_record(
+            fixtures.write_source_record(
+                self.root / "v1-source", schema=SOURCE_RECORD_SCHEMA_V1
+            )
+        )
+        self.assertIsNone(v1_source.allocation_bindings)
+
+        with self.assertRaisesRegex(DatasetError, "allocation provenance"):
+            materialize_dataset(v1_source, self.root / "dataset-from-v1")
 
     def test_row_order_and_labels_follow_the_source(self) -> None:
         dataset = self.dataset()
@@ -197,6 +224,70 @@ class DatasetTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(DatasetError, "reuses a seed"):
+            read_dataset(root)
+
+    def test_tampered_allocation_identity_rejected(self) -> None:
+        self.dataset()
+        root = self.root / "dataset"
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["source"]["allocation_bindings"]["TRAIN"].update(
+                allocation_identity="not-a-valid-sha256-digest"
+            ),
+        )
+
+        with self.assertRaisesRegex(DatasetError, "SHA-256"):
+            read_dataset(root)
+
+    def test_tampered_seed_membership_identity_rejected(self) -> None:
+        """population(TRAIN=seed 100)と矛盾するbindingはfail closedする。"""
+        self.dataset()
+        root = self.root / "dataset"
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["source"]["allocation_bindings"]["TRAIN"].update(
+                fixtures.allocation_binding([777])
+            ),
+        )
+
+        with self.assertRaisesRegex(DatasetError, "contradicts the source population"):
+            read_dataset(root)
+
+    def test_allocation_binding_split_mismatch_rejected(self) -> None:
+        self.dataset()
+        root = self.root / "dataset"
+        fixtures.mutate_manifest(
+            root, lambda body: body["source"]["allocation_bindings"].pop("SELECT")
+        )
+
+        with self.assertRaisesRegex(
+            DatasetError, "do not match the source population splits"
+        ):
+            read_dataset(root)
+
+    def test_extra_allocation_binding_rejected(self) -> None:
+        self.dataset()
+        root = self.root / "dataset"
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["source"]["allocation_bindings"].__setitem__(
+                "OFFLINE-EVAL", fixtures.allocation_binding([999])
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            DatasetError, "do not match the source population splits"
+        ):
+            read_dataset(root)
+
+    def test_missing_allocation_bindings_field_rejected(self) -> None:
+        self.dataset()
+        root = self.root / "dataset"
+        fixtures.mutate_manifest(
+            root, lambda body: body["source"].pop("allocation_bindings")
+        )
+
+        with self.assertRaisesRegex(DatasetError, "unexpected fields"):
             read_dataset(root)
 
     def test_manifest_identity_tampering_rejected(self) -> None:

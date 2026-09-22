@@ -79,12 +79,17 @@ from lisjong.learning.policy import (
     load_learned_policy_factory,
 )
 from lisjong.learning.source_record import (
+    EXPECTED_ALLOCATION_OWNER_REPOSITORY,
     SOURCE_RECORD_SCHEMA_V1,
+    SOURCE_RECORD_SCHEMA_V2,
     SUPPORTED_SOURCE_RECORD_SCHEMAS,
     PlayerSafeSourceRecord,
     SourceDecision,
     SourceGame,
     read_source_record,
+    seed_membership_identity,
+    validate_allocation_binding,
+    validate_allocation_bindings,
 )
 from lisjong.learning.training import (
     BehaviorCloningConfig,
@@ -93,11 +98,13 @@ from lisjong.learning.training import (
 
 __all__ = [
     "DATASET_SCHEMA",
+    "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "FEATURE_DIMENSION",
     "FEATURE_IDENTITY",
     "MODEL_ARCHITECTURE",
     "MODEL_ARTIFACT_SCHEMA",
     "SOURCE_RECORD_SCHEMA_V1",
+    "SOURCE_RECORD_SCHEMA_V2",
     "SUPPORTED_SOURCE_RECORD_SCHEMAS",
     "TEACHER_LABEL_SEMANTICS",
     "BehaviorCloningConfig",
@@ -127,6 +134,9 @@ __all__ = [
     "materialize_dataset",
     "read_dataset",
     "read_source_record",
+    "seed_membership_identity",
     "train_behavior_cloning",
+    "validate_allocation_binding",
+    "validate_allocation_bindings",
     "write_model_artifact",
 ]

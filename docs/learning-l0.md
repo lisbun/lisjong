@@ -34,7 +34,8 @@ historical identityと混同しない。
 versioned player-safe source recordをstrict readする。
 
 ```text
-schema      arena-offense-o0-player-safe-source-record-v1
+schema      arena-offense-o0-player-safe-source-record-v2  (current)
+            arena-offense-o0-player-safe-source-record-v1  (historical, readback-only)
 ```
 
 - 未対応schemaは`UnsupportedSourceSchemaError`でfail closedする
@@ -45,6 +46,33 @@ schema      arena-offense-o0-player-safe-source-record-v1
   corpus）は読まない。読むのはtyped player-safe source recordだけである
 - 返り値の`provenance()`が、下流のdataset / artifactへbindするsource identity
   とordered populationを提供する
+
+### Arena allocation provenance（v2、lisjong-arena#346/#347）
+
+schema v2のmanifestは、split別のArena seed-allocation binding
+（`allocation_identity` / `ledger_revision` / `owner_repository` /
+`seed_domain` / `seed_membership_identity`）を`allocation_bindings`として持つ。
+`read_source_record()`は次をstrict validateし、`PlayerSafeSourceRecord.
+allocation_bindings`（v1なら`None`）へそのまま保持する。
+
+- binding集合が実際のsource populationのsplit集合と完全一致すること
+  （欠損・余剰はfail closed）
+- 各fieldのshape（SHA-256 hex、canonical owner repository、`seed_domain`の
+  形式）
+- `seed_membership_identity`が、そのsplitの実際のseed集合から
+  `lisjong.learning.seed_membership_identity()`（Arena
+  `seed_registry.seed_membership_identity()`とbyte-for-byte一致する
+  独立実装）で再計算した値と一致すること
+
+lisjongはArena allocation ledgerを再生成・再所有せず、live ledgerへの
+再照会も行わない（`lisjong_arena`への runtime import は存在しない）。
+`allocation_bindings`はdataset manifestの`source.allocation_bindings`、
+model artifact manifestの`source.allocation_bindings`へそのまま伝播する。
+
+`materialize_dataset()`はschema v2（`allocation_bindings`を持つsource
+record）だけを受け付ける。historical v1 source recordはallocation
+provenanceを持たないため、推測で補完せず`DatasetError`でfail closedする。
+v1は historical readback（`read_source_record()`単体の呼び出し）にのみ使う。
 
 ## Canonical player-safe feature representation
 
@@ -93,10 +121,11 @@ dataset = 1 immutable directoryとして次を書く。
 
 manifestは、source-record identity、feature identity/fingerprint、action
 vocabulary version/fingerprint、teacher/label semantics、ordered source
-population、split別row数をbindする。既存destinationは上書きせず、
+population、split別row数、Arena allocation binding（`source.
+allocation_bindings`、上記参照）をbindする。既存destinationは上書きせず、
 `lisjong.learning.read_dataset()`がbindされた全identityとpayload digestを
 照合してstrict readする。同じsource recordから再materializeすると同一identityに
-なる。
+なる。`materialize_dataset()`はschema v2のsource recordだけを受け付ける。
 
 ## Bounded BC trainer
 
@@ -121,11 +150,11 @@ schema   lisjong-offense-l0-bc-model-artifact-v1
 
 `lisjong.learning.write_model_artifact()` / `load_model_artifact()`は、1
 artifact = 1 immutable directory（`manifest.json` + `weights.f32`）として
-repository外に置く。manifestは、source/dataset identity、feature
-fingerprint、action vocabulary fingerprint、model architecture/config、
-optimizer/training config、RNG seed、選択epoch、weights digest、lisjong
-package versionと実際にimportされたlisjongソースのdigest（`source_digest`）を
-bindする。`source_digest`はprovenance記録であり、load時に現在の
+repository外に置く。manifestは、source/dataset identity（Arena allocation
+binding含む）、feature fingerprint、action vocabulary fingerprint、model
+architecture/config、optimizer/training config、RNG seed、選択epoch、
+weights digest、lisjong package versionと実際にimportされたlisjongソースの
+digest（`source_digest`）をbindする。`source_digest`はprovenance記録であり、load時に現在の
 installed lisjongと一致することは要求しない（load-relevantなidentityは
 feature / vocabulary fingerprintが別途厳密に照合する）。
 

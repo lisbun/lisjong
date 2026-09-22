@@ -9,6 +9,7 @@ import learning_fixtures as fixtures
 
 from lisjong.learning import (
     SOURCE_RECORD_SCHEMA_V1,
+    SOURCE_RECORD_SCHEMA_V2,
     SourceRecordError,
     UnsupportedSourceSchemaError,
     read_source_record,
@@ -32,7 +33,7 @@ class SourceRecordReadTests(unittest.TestCase):
     def test_supported_schema_round_trip_preserves_provenance(self) -> None:
         record = read_source_record(self.record())
 
-        self.assertEqual(record.schema, SOURCE_RECORD_SCHEMA_V1)
+        self.assertEqual(record.schema, SOURCE_RECORD_SCHEMA_V2)
         self.assertEqual(record.lock_identity, fixtures.LOCK_IDENTITY)
         self.assertEqual(record.scientific_corpus_identity, fixtures.CORPUS_IDENTITY)
         self.assertEqual(record.game_mode, fixtures.GAME_MODE)
@@ -72,7 +73,7 @@ class SourceRecordReadTests(unittest.TestCase):
         record = read_source_record(self.record())
         provenance = record.provenance()
 
-        self.assertEqual(provenance["schema"], SOURCE_RECORD_SCHEMA_V1)
+        self.assertEqual(provenance["schema"], SOURCE_RECORD_SCHEMA_V2)
         self.assertEqual(provenance["identity"], record.identity)
         self.assertEqual(provenance["decision_count"], 5)
         self.assertEqual(len(provenance["source_contract_digest"]), 64)
@@ -80,6 +81,144 @@ class SourceRecordReadTests(unittest.TestCase):
         # historical Arena identityをlisjong側へ持ち上げない。
         self.assertNotIn("source_contract", provenance)
         self.assertNotIn("teacher", json.dumps(provenance))
+        self.assertEqual(set(provenance["allocation_bindings"]), {"TRAIN", "SELECT"})
+
+    def test_v2_allocation_bindings_are_read_and_preserved_exactly(self) -> None:
+        root = self.record()
+        expected = fixtures.read_manifest_body(root)["allocation_bindings"]
+
+        record = read_source_record(root)
+
+        self.assertEqual(record.schema, SOURCE_RECORD_SCHEMA_V2)
+        self.assertIsNotNone(record.allocation_bindings)
+        self.assertEqual(dict(record.allocation_bindings), expected)
+        for split, binding in record.allocation_bindings.items():
+            self.assertEqual(
+                set(binding),
+                {
+                    "allocation_identity",
+                    "ledger_revision",
+                    "owner_repository",
+                    "seed_domain",
+                    "seed_membership_identity",
+                },
+            )
+            self.assertEqual(binding["owner_repository"], "lisbun/lisjong-arena")
+
+    def test_v1_historical_record_has_no_allocation_bindings(self) -> None:
+        root = self.record(schema=SOURCE_RECORD_SCHEMA_V1)
+
+        record = read_source_record(root)
+
+        self.assertEqual(record.schema, SOURCE_RECORD_SCHEMA_V1)
+        self.assertIsNone(record.allocation_bindings)
+        self.assertIsNone(record.provenance()["allocation_bindings"])
+
+    def test_v1_manifest_rejects_an_allocation_bindings_field(self) -> None:
+        """v1はallocation provenanceを持たない: v1へ推測でv2相当を足さない。"""
+        root = self.record(schema=SOURCE_RECORD_SCHEMA_V1)
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body.__setitem__(
+                "allocation_bindings",
+                {"TRAIN": fixtures.allocation_binding([100])},
+            ),
+        )
+
+        with self.assertRaisesRegex(SourceRecordError, "unexpected fields"):
+            read_source_record(root)
+
+    def test_v2_missing_split_binding_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root, lambda body: body["allocation_bindings"].pop("SELECT")
+        )
+
+        with self.assertRaisesRegex(
+            SourceRecordError, "do not match the source population splits"
+        ):
+            read_source_record(root)
+
+    def test_v2_extra_split_binding_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["allocation_bindings"].__setitem__(
+                "OFFLINE-EVAL", fixtures.allocation_binding([999])
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            SourceRecordError, "do not match the source population splits"
+        ):
+            read_source_record(root)
+
+    def test_v2_missing_allocation_bindings_field_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(root, lambda body: body.pop("allocation_bindings"))
+
+        with self.assertRaisesRegex(SourceRecordError, "unexpected fields"):
+            read_source_record(root)
+
+    def test_v2_malformed_binding_shape_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root, lambda body: body["allocation_bindings"]["TRAIN"].pop("seed_domain")
+        )
+
+        with self.assertRaisesRegex(SourceRecordError, "unexpected fields"):
+            read_source_record(root)
+
+    def test_v2_non_digest_allocation_identity_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["allocation_bindings"]["TRAIN"].__setitem__(
+                "allocation_identity", "not-a-digest"
+            ),
+        )
+
+        with self.assertRaisesRegex(SourceRecordError, "SHA-256"):
+            read_source_record(root)
+
+    def test_v2_wrong_owner_repository_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["allocation_bindings"]["TRAIN"].__setitem__(
+                "owner_repository", "someone-else/not-arena"
+            ),
+        )
+
+        with self.assertRaisesRegex(SourceRecordError, "canonical Arena owner"):
+            read_source_record(root)
+
+    def test_v2_invalid_seed_domain_rejected(self) -> None:
+        root = self.record()
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["allocation_bindings"]["TRAIN"].__setitem__(
+                "seed_domain", "Not A Valid Domain!"
+            ),
+        )
+
+        with self.assertRaisesRegex(SourceRecordError, "invalid format"):
+            read_source_record(root)
+
+    def test_v2_seed_membership_contradiction_rejected(self) -> None:
+        """binding.seed_membership_identityが実populationのseedと矛盾する場合。"""
+        root = self.record()
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["allocation_bindings"]["TRAIN"].update(
+                fixtures.allocation_binding([999, 1000])
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            SourceRecordError, "contradicts the source population"
+        ):
+            read_source_record(root)
 
     def test_unknown_schema_fails_closed(self) -> None:
         root = self.record()

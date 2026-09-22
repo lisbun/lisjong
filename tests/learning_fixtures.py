@@ -1,7 +1,8 @@
 """Learning L0 testで共有するsource record fixture builder。
 
-`lisjong-arena`が生成する`arena-offense-o0-player-safe-source-record-v1`
-artifactと同じwire形式・canonical JSON・sealing規則でfixtureを組み立てる。
+`lisjong-arena`が生成する`arena-offense-o0-player-safe-source-record-v2`
+artifactと同じwire形式・canonical JSON・sealing規則でfixtureを組み立てる
+（`schema=SOURCE_RECORD_SCHEMA_V1`を明示すればhistorical v1も書ける）。
 production側のconsumerは読み取りだけを所有するため、writerはtest側に置く。
 
 fail closed testのために、manifestやrow payloadを意図的に壊すhelperも提供する。
@@ -19,10 +20,12 @@ from lisjong.learning._canonical import (
 )
 from lisjong.learning._typed_values import action_to_value, policy_input_to_value
 from lisjong.learning.source_record import (
+    EXPECTED_ALLOCATION_OWNER_REPOSITORY,
     GAME_PAYLOAD_FILENAME,
     MANIFEST_FILENAME,
     SOURCE_RECORD_KIND,
-    SOURCE_RECORD_SCHEMA_V1,
+    SOURCE_RECORD_SCHEMA_V2,
+    seed_membership_identity,
 )
 from lisjong.policy_contract import (
     Discard,
@@ -44,6 +47,7 @@ GAME_MODE = "4p-red-half"
 LOCK_IDENTITY = "a" * 64
 CORPUS_IDENTITY = "b" * 64
 SOURCE_CONTRACT = {"arena_revision": "0" * 40, "teacher": "example-teacher"}
+ALLOCATION_SEED_DOMAIN = "riichienv-4p-red-half-hanchan-v1"
 
 MANZU = TileCategory.MANZU
 PINZU = TileCategory.PINZU
@@ -201,6 +205,29 @@ def decision_rows(*, game_ordinal, seed, split, count=3, seats=None):
     return rows
 
 
+def allocation_binding(
+    seeds,
+    *,
+    allocation_identity=None,
+    ledger_revision=None,
+    owner_repository=EXPECTED_ALLOCATION_OWNER_REPOSITORY,
+    seed_domain=ALLOCATION_SEED_DOMAIN,
+):
+    """1 splitぶんのArena allocation binding fixtureを組み立てる。
+
+    `seed_membership_identity`はlisjongの公開実装（Arena
+    `seed_registry.seed_membership_identity()`とbyte-for-byte一致）で
+    計算するため、実Arena artifactと同じ検証規則をそのまま通せる。
+    """
+    return {
+        "allocation_identity": allocation_identity or ("3" * 64),
+        "ledger_revision": ledger_revision or ("4" * 64),
+        "owner_repository": owner_repository,
+        "seed_domain": seed_domain,
+        "seed_membership_identity": seed_membership_identity(seeds),
+    }
+
+
 def _game_summary(*, game_ordinal, seed, split, rows, payload_path):
     steps = 0 if not rows else max(row["step_ordinal"] for row in rows) + 1
     return seal(
@@ -217,11 +244,16 @@ def _game_summary(*, game_ordinal, seed, split, rows, payload_path):
     )
 
 
-def write_source_record(root, games=None, **manifest_overrides):
+def write_source_record(
+    root, games=None, *, schema=SOURCE_RECORD_SCHEMA_V2, **manifest_overrides
+):
     """source record directoryを書き出し、そのpathを返す。
 
     `games`は`(split, seed, rows)`のsequenceである。省略時は2 hanchan分の
-    既定populationを使う。
+    既定populationを使う。既定`schema`は現行producerと同じv2であり、
+    実populationから決定的に導出したper-split allocation bindingを含める。
+    `schema=SOURCE_RECORD_SCHEMA_V1`を明示した場合はallocation_bindingsを
+    持たないhistorical記録を書く。
     """
     root = Path(root)
     root.mkdir(parents=True)
@@ -236,6 +268,7 @@ def write_source_record(root, games=None, **manifest_overrides):
         )
 
     summaries = []
+    seeds_by_split = {}
     for game_ordinal, (split, seed, rows) in enumerate(games):
         game_root = root / f"game-{game_ordinal:03d}"
         game_root.mkdir()
@@ -254,16 +287,21 @@ def write_source_record(root, games=None, **manifest_overrides):
                 payload_path=payload,
             )
         )
+        seeds_by_split.setdefault(split, []).append(seed)
 
     body = {
         "game_mode": GAME_MODE,
         "games": summaries,
         "kind": SOURCE_RECORD_KIND,
         "lock_identity": LOCK_IDENTITY,
-        "schema": SOURCE_RECORD_SCHEMA_V1,
+        "schema": schema,
         "scientific_corpus_identity": CORPUS_IDENTITY,
         "source_contract": dict(SOURCE_CONTRACT),
     }
+    if schema == SOURCE_RECORD_SCHEMA_V2:
+        body["allocation_bindings"] = {
+            split: allocation_binding(seeds) for split, seeds in seeds_by_split.items()
+        }
     body.update(manifest_overrides)
     (root / MANIFEST_FILENAME).write_text(
         canonical_json_text(seal(body)), encoding="utf-8", newline="\n"

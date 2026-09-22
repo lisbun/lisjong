@@ -217,6 +217,65 @@ class ModelArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelArtifactError, "source provenance is invalid"):
             load_model_artifact(root)
 
+    def test_allocation_bindings_are_preserved_exactly_from_the_dataset(self) -> None:
+        """Arena allocation provenanceはdataset -> artifactへそのまま伝播する。"""
+        artifact = self.write()
+
+        self.assertEqual(
+            artifact.manifest["source"]["allocation_bindings"],
+            self.dataset.manifest["source"]["allocation_bindings"],
+        )
+        self.assertEqual(
+            set(artifact.manifest["source"]["allocation_bindings"]),
+            {"TRAIN", "SELECT"},
+        )
+
+    def test_load_rejects_tampered_allocation_identity(self) -> None:
+        self.write()
+        root = self.root / "artifact"
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["source"]["allocation_bindings"]["TRAIN"].update(
+                allocation_identity="not-a-valid-sha256-digest"
+            ),
+        )
+
+        with self.assertRaisesRegex(ModelArtifactError, "source provenance is invalid"):
+            load_model_artifact(root)
+
+    def test_load_rejects_tampered_seed_membership_identity(self) -> None:
+        self.write()
+        root = self.root / "artifact"
+        fixtures.mutate_manifest(
+            root,
+            lambda body: body["source"]["allocation_bindings"]["TRAIN"].update(
+                fixtures.allocation_binding([777])
+            ),
+        )
+
+        with self.assertRaisesRegex(ModelArtifactError, "source provenance is invalid"):
+            load_model_artifact(root)
+
+    def test_load_rejects_allocation_binding_split_mismatch(self) -> None:
+        self.write()
+        root = self.root / "artifact"
+        fixtures.mutate_manifest(
+            root, lambda body: body["source"]["allocation_bindings"].pop("SELECT")
+        )
+
+        with self.assertRaisesRegex(ModelArtifactError, "source provenance is invalid"):
+            load_model_artifact(root)
+
+    def test_load_rejects_missing_allocation_bindings_field(self) -> None:
+        self.write()
+        root = self.root / "artifact"
+        fixtures.mutate_manifest(
+            root, lambda body: body["source"].pop("allocation_bindings")
+        )
+
+        with self.assertRaisesRegex(ModelArtifactError, "source provenance is invalid"):
+            load_model_artifact(root)
+
     def test_load_rejects_manifest_identity_tampering(self) -> None:
         self.write()
         root = self.root / "artifact"

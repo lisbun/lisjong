@@ -25,6 +25,12 @@ Arena-owned versioned source record
   identity、historical teacher / feature / vocabulary fingerprint等のArena-owned
   qualification binding）は意味を再解釈せず、digestとしてのみ保持する。
   historical Arena identityをlisjong側のcanonical identityへ持ち上げない
+- schema v2の`allocation_bindings`（Arena-owned seed allocation ledger、
+  lisbun/lisjong-arena#346/#347のper-split binding）はshapeをstrict validateし、
+  値をそのまま保持して下流へbindする。lisjongはArena allocation ledgerを
+  再生成・再所有せず、live registryへも再照会しない
+- schema v1（historical、allocation provenanceを持たない）は引き続き
+  historical readback用途として読める。v1をv2相当へ推測で補完しない
 
 読み取り時にfail closedする代表的条件。
 
@@ -38,9 +44,14 @@ Arena-owned versioned source record
 - actor seatとPolicyInput / legal actions / selected actionの不一致
 - legal actionsの重複、canonical順序違反、空
 - legal actionsに含まれないselected action
+- （v2のみ）allocation bindingのfield shape不正、owner_repository不一致、
+  splitの欠損 / 余剰、source population内のseed membershipとの矛盾
 """
 
-from collections.abc import Iterator
+import hashlib
+import json
+import re
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,16 +78,44 @@ from lisjong.learning.errors import SourceRecordError, UnsupportedSourceSchemaEr
 from lisjong.policy_contract import InternalAction, PolicyInput, Seat
 
 SOURCE_RECORD_SCHEMA_V1 = "arena-offense-o0-player-safe-source-record-v1"
-"""現在consumeできるsource record schema identity（Arena-owned contract）。"""
+"""Historical schema（Arena-owned contract）。allocation provenanceを持たない。"""
 
-SUPPORTED_SOURCE_RECORD_SCHEMAS = frozenset({SOURCE_RECORD_SCHEMA_V1})
+SOURCE_RECORD_SCHEMA_V2 = "arena-offense-o0-player-safe-source-record-v2"
+"""現在consumeするschema identity（Arena-owned contract、lisjong-arena#347）。
+
+v1へ`allocation_bindings`（Arena-owned seed allocation ledgerのper-split
+binding）を追加したものであり、v1 identityの意味は変更しない。
+"""
+
+SUPPORTED_SOURCE_RECORD_SCHEMAS = frozenset(
+    {SOURCE_RECORD_SCHEMA_V1, SOURCE_RECORD_SCHEMA_V2}
+)
 """対応schemaの集合。ここに無いschemaはfail closedとする。"""
 
 SOURCE_RECORD_KIND = "player-safe-source-record"
 MANIFEST_FILENAME = "manifest.json"
 GAME_PAYLOAD_FILENAME = "source-record.jsonl"
 
-_MANIFEST_FIELDS = frozenset(
+EXPECTED_ALLOCATION_OWNER_REPOSITORY = "lisbun/lisjong-arena"
+"""allocation bindingが指すcanonical Arena owner repository。
+
+lisjongはallocation ledgerを所有しないため、この値はlisjong側が新たに
+定義するidentityではなく、Arena-owned `seed_registry.OWNER_REPOSITORY`と
+一致するべき固定値として検証する。
+"""
+
+_ALLOCATION_BINDING_FIELDS = frozenset(
+    {
+        "allocation_identity",
+        "ledger_revision",
+        "owner_repository",
+        "seed_domain",
+        "seed_membership_identity",
+    }
+)
+_SEED_DOMAIN_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+_MANIFEST_FIELDS_V1 = frozenset(
     {
         "schema",
         "kind",
@@ -87,6 +126,7 @@ _MANIFEST_FIELDS = frozenset(
         "games",
     }
 )
+_MANIFEST_FIELDS_V2 = _MANIFEST_FIELDS_V1 | {"allocation_bindings"}
 _GAME_FIELDS = frozenset(
     {
         "game_ordinal",
@@ -113,6 +153,91 @@ _ROW_FIELDS = frozenset(
     }
 )
 _PAYLOAD_FIELDS = frozenset({"bytes", "sha256"})
+
+
+def _seed_membership_document(seeds: Sequence[int]) -> dict[str, object]:
+    """Arena `seed_registry.seed_membership_document()`と同じcanonical形。
+
+    lisjongはArena allocation ledgerを再実装・再所有しないが、この
+    小さく安定したwire-level encoding（連続range or explicit sorted list）
+    だけは、source populationの実際のseed集合とbindingの
+    `seed_membership_identity`が矛盾していないかを検証するために、
+    ここで独立に再現する。ledgerそのものへは一切アクセスしない。
+    """
+    ordered = tuple(sorted(seeds))
+    if not ordered:
+        raise SourceRecordError("allocation binding seed membership must not be empty")
+    if ordered == tuple(range(ordered[0], ordered[-1] + 1)):
+        return {"first": ordered[0], "kind": "range", "last": ordered[-1]}
+    return {"kind": "explicit", "seeds": list(ordered)}
+
+
+def seed_membership_identity(seeds: Sequence[int]) -> str:
+    """splitのseed集合から、Arena `seed_registry.seed_membership_identity()`と
+    byte-for-byte一致するidentityを計算する。
+
+    productionのvalidationとtest fixtureの両方が、同じ1つの実装からこの
+    identityを得るための公開関数である（Arena本体と同様の構成）。
+    """
+    text = json.dumps(
+        _seed_membership_document(seeds),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def validate_allocation_binding(
+    value: object, *, seeds: Sequence[int], context: str
+) -> dict[str, str]:
+    """1 splitぶんのArena allocation bindingをstrict validateする。
+
+    liveなseed ledgerへは一切照会しない。shape（field集合、SHA-256形式、
+    canonical owner、seed_domainの形式）と、このsplitの実際のsource
+    populationから独立に再計算した`seed_membership_identity`との一致だけを
+    検証する。
+    """
+    binding = expect_object(
+        value, _ALLOCATION_BINDING_FIELDS, SourceRecordError, context
+    )
+    for field in ("allocation_identity", "ledger_revision", "seed_membership_identity"):
+        expect_digest(binding[field], SourceRecordError, f"{context}.{field}")
+    owner = expect_str(
+        binding["owner_repository"], SourceRecordError, f"{context}.owner_repository"
+    )
+    if owner != EXPECTED_ALLOCATION_OWNER_REPOSITORY:
+        raise SourceRecordError(
+            f"{context}.owner_repository is not the canonical Arena owner"
+        )
+    domain = expect_str(
+        binding["seed_domain"], SourceRecordError, f"{context}.seed_domain"
+    )
+    if not _SEED_DOMAIN_PATTERN.fullmatch(domain):
+        raise SourceRecordError(f"{context}.seed_domain has an invalid format")
+    if binding["seed_membership_identity"] != seed_membership_identity(seeds):
+        raise SourceRecordError(
+            f"{context}.seed_membership_identity contradicts the source population"
+        )
+    return binding
+
+
+def validate_allocation_bindings(
+    value: object, *, populations: Mapping[str, Sequence[int]], context: str
+) -> dict[str, dict[str, str]]:
+    """splitごとのArena allocation bindingをまとめてstrict validateする。
+
+    `populations`のsplit集合と完全一致しないbinding集合（欠損・余剰）は
+    fail closedとする。
+    """
+    if type(value) is not dict or set(value) != set(populations):
+        raise SourceRecordError(f"{context} do not match the source population splits")
+    return {
+        split: validate_allocation_binding(
+            value[split], seeds=seeds, context=f"{context}[{split}]"
+        )
+        for split, seeds in populations.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +274,14 @@ class SourceGame:
 
 @dataclass(frozen=True, slots=True)
 class PlayerSafeSourceRecord:
-    """strict readした完全なsource recordと、そのArena-owned provenance。"""
+    """strict readした完全なsource recordと、そのArena-owned provenance。
+
+    `allocation_bindings`はschema v2だけが持つ、split別のArena
+    seed-allocation binding（`allocation_identity` / `ledger_revision` /
+    `owner_repository` / `seed_domain` / `seed_membership_identity`）である。
+    historical schema v1はこのprovenanceを持たないため`None`となり、
+    v2相当の値を推測で補わない。
+    """
 
     schema: str
     identity: str
@@ -157,6 +289,7 @@ class PlayerSafeSourceRecord:
     scientific_corpus_identity: str
     game_mode: str
     source_contract_digest: str
+    allocation_bindings: Mapping[str, Mapping[str, str]] | None
     games: tuple[SourceGame, ...]
 
     @property
@@ -181,8 +314,19 @@ class PlayerSafeSourceRecord:
         )
 
     def provenance(self) -> dict[str, object]:
-        """下流artifactへbindするsource identity / population記述を返す。"""
+        """下流artifactへbindするsource identity / population記述を返す。
+
+        `allocation_bindings`はv2なら`{split: binding}`のJSON化可能なdict、
+        v1なら`None`である。呼び出し側（`materialize_dataset()`）が
+        `None`をどう扱うかを決め、この関数自体は値を補完しない。
+        """
         return {
+            "allocation_bindings": None
+            if self.allocation_bindings is None
+            else {
+                split: dict(binding)
+                for split, binding in self.allocation_bindings.items()
+            },
             "decision_count": self.decision_count,
             "game_mode": self.game_mode,
             "identity": self.identity,
@@ -206,14 +350,20 @@ def _read_manifest(path: Path) -> dict[str, object]:
     body = unseal(manifest, SourceRecordError, "source record manifest")
     if text != canonical_json_text(manifest):
         raise SourceRecordError("source record manifest is not canonical JSON")
-    expect_object(body, _MANIFEST_FIELDS, SourceRecordError, "source record manifest")
 
-    schema = expect_str(body["schema"], SourceRecordError, "manifest.schema")
+    schema = body.get("schema")
     if schema not in SUPPORTED_SOURCE_RECORD_SCHEMAS:
         raise UnsupportedSourceSchemaError(
             f"unsupported source record schema: {schema!r}; "
             f"this implementation consumes {sorted(SUPPORTED_SOURCE_RECORD_SCHEMAS)}"
         )
+    expected_fields = (
+        _MANIFEST_FIELDS_V2
+        if schema == SOURCE_RECORD_SCHEMA_V2
+        else _MANIFEST_FIELDS_V1
+    )
+    expect_object(body, expected_fields, SourceRecordError, "source record manifest")
+
     if body["kind"] != SOURCE_RECORD_KIND:
         raise SourceRecordError("source record kind mismatch")
     if type(body["source_contract"]) is not dict:
@@ -429,6 +579,7 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
         raise SourceRecordError("missing/unexpected source record files")
 
     seeds: set[int] = set()
+    seeds_by_split: dict[str, list[int]] = {}
     games: list[SourceGame] = []
     for summary in summaries:
         if summary["seed"] in seeds:
@@ -436,7 +587,16 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
                 "source population must not reuse a seed across hanchan/splits"
             )
         seeds.add(summary["seed"])
+        seeds_by_split.setdefault(summary["split"], []).append(summary["seed"])
         games.append(_read_game(root / f"game-{summary['game_ordinal']:03d}", summary))
+
+    allocation_bindings: dict[str, dict[str, str]] | None = None
+    if manifest["schema"] == SOURCE_RECORD_SCHEMA_V2:
+        allocation_bindings = validate_allocation_bindings(
+            manifest["allocation_bindings"],
+            populations=seeds_by_split,
+            context="manifest.allocation_bindings",
+        )
 
     return PlayerSafeSourceRecord(
         schema=manifest["schema"],
@@ -445,18 +605,24 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
         scientific_corpus_identity=manifest["scientific_corpus_identity"],
         game_mode=manifest["game_mode"],
         source_contract_digest=value_digest(manifest["source_contract"]),
+        allocation_bindings=allocation_bindings,
         games=tuple(games),
     )
 
 
 __all__ = [
+    "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "GAME_PAYLOAD_FILENAME",
     "MANIFEST_FILENAME",
     "SOURCE_RECORD_KIND",
     "SOURCE_RECORD_SCHEMA_V1",
+    "SOURCE_RECORD_SCHEMA_V2",
     "SUPPORTED_SOURCE_RECORD_SCHEMAS",
     "PlayerSafeSourceRecord",
     "SourceDecision",
     "SourceGame",
     "read_source_record",
+    "seed_membership_identity",
+    "validate_allocation_binding",
+    "validate_allocation_bindings",
 ]
