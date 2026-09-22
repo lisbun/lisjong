@@ -15,6 +15,10 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["ruff==0.16.0"]
 reference = ["mahjong==2.0.0"]
+# lisjong.learningのtraining / learned inferenceだけが要求するoptional ML
+# runtime。CPU CIはlisjong-arenaと同じpinned versionをdownload.pytorch.org/whl/cpu
+# からinstallする。coreはこのextraなしでimport/testが成立する。
+ml = ["torch==2.13.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

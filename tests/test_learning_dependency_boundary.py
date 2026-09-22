@@ -1,0 +1,177 @@
+"""core / Learning間のoptional ML dependency境界のregression test。
+
+`lisjong` coreはML runtime非依存を維持する。`lisjong.learning`のimport、
+source record読み取り、feature materialization、dataset生成、model artifact
+読み取りもML runtimeなしで成立し、trainingとlearned inferenceだけがoptional
+extra（`lisjong[ml]`）をlazy importで要求する。
+
+ML extraがinstall済みの環境でも同じ結論を検証できるよう、ML runtimeなしの
+検証はtorchのimportを遮断した別interpreterまたは`sys.modules`遮断で行う。
+"""
+
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import learning_fixtures as fixtures
+
+from lisjong.learning import (
+    BehaviorCloningConfig,
+    MissingLearningDependencyError,
+    ModelConfig,
+    load_learned_policy_factory,
+    load_model_artifact,
+    materialize_dataset,
+    read_dataset,
+    read_source_record,
+    train_behavior_cloning,
+    write_model_artifact,
+)
+
+_BLOCKER = """
+import sys
+
+
+class _TorchBlocker:
+    def find_spec(self, name, path=None, target=None):
+        if name == "torch" or name.startswith("torch."):
+            raise ImportError("ML runtime is blocked in this regression")
+        return None
+
+
+sys.meta_path.insert(0, _TorchBlocker())
+"""
+
+_CORE_MODULES = (
+    "lisjong",
+    "lisjong.action_vocabulary",
+    "lisjong.belief",
+    "lisjong.hand_evaluation",
+    "lisjong.policies",
+    "lisjong.policy_contract",
+    "lisjong.structural_efficiency",
+)
+
+_LEARNING_MODULES = (
+    "lisjong.learning",
+    "lisjong.learning.artifact",
+    "lisjong.learning.dataset",
+    "lisjong.learning.errors",
+    "lisjong.learning.features",
+    "lisjong.learning.model",
+    "lisjong.learning.policy",
+    "lisjong.learning.source_record",
+    "lisjong.learning.training",
+    "lisjong.learning.__main__",
+)
+
+
+def _run_without_ml(body: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", _BLOCKER + body],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+class NoMLRuntimeImportTests(unittest.TestCase):
+    def test_core_modules_import_without_ml_runtime(self) -> None:
+        body = "".join(f"import {name}\n" for name in _CORE_MODULES)
+        body += 'assert "torch" not in sys.modules\nprint("ok")\n'
+        result = _run_without_ml(body)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_learning_modules_import_without_ml_runtime(self) -> None:
+        body = "".join(f"import {name}\n" for name in _LEARNING_MODULES)
+        body += 'assert "torch" not in sys.modules\nprint("ok")\n'
+        result = _run_without_ml(body)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_importing_learning_does_not_import_the_ml_runtime(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, lisjong.learning; "
+                'assert "torch" not in sys.modules; print("ok")',
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_core_test_modules_run_without_ml_runtime(self) -> None:
+        """ML extraなしでもcore testが成立することを別interpreterで確認する。"""
+        tests_directory = Path(__file__).resolve().parent
+        result = _run_without_ml(
+            "import unittest\n"
+            "loader = unittest.defaultTestLoader\n"
+            f"suite = loader.discover({str(tests_directory)!r}, "
+            'pattern="test_policy_input.py")\n'
+            "result = unittest.TextTestRunner(verbosity=0).run(suite)\n"
+            "assert result.wasSuccessful()\n"
+            "assert suite.countTestCases() > 0\n"
+            'assert "torch" not in sys.modules\n'
+            'print("ok")\n'
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stdout.strip().splitlines()[-1], "ok")
+
+
+class MLRuntimeRequirementTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        source = read_source_record(
+            fixtures.write_source_record(self.root / "source-record")
+        )
+        self.dataset = materialize_dataset(source, self.root / "dataset")
+        self.model = ModelConfig(hidden_width=2)
+        write_model_artifact(
+            self.root / "artifact",
+            dataset=self.dataset,
+            model_config=self.model,
+            training=fixtures.training_block(),
+            weights=fixtures.zero_weights(self.model),
+        )
+
+    def test_non_ml_path_runs_without_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            dataset = read_dataset(self.root / "dataset")
+            artifact = load_model_artifact(self.root / "artifact")
+
+        self.assertEqual(dataset.identity, self.dataset.identity)
+        self.assertEqual(artifact.dataset_identity, self.dataset.identity)
+
+    def test_training_requires_the_ml_runtime(self) -> None:
+        config = BehaviorCloningConfig(
+            train_splits=("TRAIN",), epochs=1, batch_size=2, model=self.model
+        )
+
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                train_behavior_cloning(self.dataset, config, self.root / "trained")
+
+        self.assertFalse((self.root / "trained").exists())
+
+    def test_learned_inference_requires_the_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                load_learned_policy_factory(self.root / "artifact")
+
+
+if __name__ == "__main__":
+    unittest.main()
