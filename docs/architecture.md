@@ -720,6 +720,7 @@ privileged ground truthをoffline label / validationへ利用する場合も、o
 - [内部Actionモデル](internal-action-model.md)
 - [Action identity](action-identity.md)
 - [Model-facing action vocabulary](action-vocabulary.md)
+- [Learning L0 — canonical player-safe dataset / BC artifact / LearnedPolicy](learning-l0.md)
 - [Policy current status](policy-status.md)
 - [RiichiEnv investigation — historical / validation reference](riichienv-investigation.md)
 - [RiichiLab client — historical migration pointer](riichilab-client.md)
