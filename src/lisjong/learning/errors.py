@@ -35,6 +35,15 @@ class FeatureError(LearningError):
     """player-safe featureをmaterializeできない場合。"""
 
 
+class CandidateFeatureError(LearningError):
+    """purpose-specific discard candidate featureをmaterializeできない場合。
+
+    Issue #187のcandidate feature viewは、legal discard candidateが存在しない
+    decisionや、現在のlegal discard candidateでないactionへのsecond-step
+    requestを推測で受け入れない。
+    """
+
+
 class DatasetError(LearningError):
     """Learning datasetを生成・strict readできない場合。"""
 

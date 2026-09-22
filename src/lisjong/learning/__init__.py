@@ -46,6 +46,13 @@ from lisjong.learning.artifact import (
     load_model_artifact,
     write_model_artifact,
 )
+from lisjong.learning.candidate_features import (
+    CANDIDATE_FEATURE_IDENTITY,
+    DiscardCandidateFeatures,
+    SecondStepStatus,
+    build_discard_candidate_features,
+    legal_discard_candidates,
+)
 from lisjong.learning.dataset import (
     DATASET_SCHEMA,
     TEACHER_LABEL_SEMANTICS,
@@ -55,6 +62,7 @@ from lisjong.learning.dataset import (
     read_dataset,
 )
 from lisjong.learning.errors import (
+    CandidateFeatureError,
     DatasetError,
     FeatureError,
     LearnedPolicyError,
@@ -97,6 +105,7 @@ from lisjong.learning.training import (
 )
 
 __all__ = [
+    "CANDIDATE_FEATURE_IDENTITY",
     "DATASET_SCHEMA",
     "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "FEATURE_DIMENSION",
@@ -108,8 +117,10 @@ __all__ = [
     "SUPPORTED_SOURCE_RECORD_SCHEMAS",
     "TEACHER_LABEL_SEMANTICS",
     "BehaviorCloningConfig",
+    "CandidateFeatureError",
     "DatasetError",
     "DatasetRow",
+    "DiscardCandidateFeatures",
     "FeatureError",
     "LearnedOffensePolicy",
     "LearnedPolicyError",
@@ -121,14 +132,17 @@ __all__ = [
     "ModelArtifactError",
     "ModelConfig",
     "PlayerSafeSourceRecord",
+    "SecondStepStatus",
     "SourceDecision",
     "SourceGame",
     "SourceRecordError",
     "TrainingError",
     "UnsupportedSourceSchemaError",
+    "build_discard_candidate_features",
     "build_player_safe_feature",
     "feature_fingerprint",
     "feature_specification",
+    "legal_discard_candidates",
     "load_learned_policy_factory",
     "load_model_artifact",
     "materialize_dataset",

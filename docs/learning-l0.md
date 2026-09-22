@@ -181,6 +181,159 @@ LearnedOffensePolicy.choose_action(decision: DecisionContext) -> InternalAction
 - Arenaは`LearnedPolicyRuntime`インスタンスをそのまま
   `PolicySpec(identity=..., factory=runtime)`のfactoryとして使える
 
+## Candidate feature contract（L0.1、#187）
+
+```text
+identity   lisjong-offense-l0.1-discard-candidate-feature-v1
+実装        src/lisjong/learning/candidate_features.py
+test        tests/test_learning_candidate_features.py
+```
+
+`lisjong.learning.build_discard_candidate_features(decision)`は、1 decisionの
+legal `DiscardAction`ごとにcandidate単位のmodel-facing projectionを返す。
+将来のlearned candidate scorer（L0.2）が、NNへshanten / ukeireを再発見させずに
+canonical牌効率semanticを使えるようにするためのseamである。
+
+```text
+DecisionContext
+    -> legal DiscardActionだけを抽出
+    -> canonical structural semantics
+    -> canonical順のDiscardCandidateFeatures tuple
+```
+
+### responsibility identity
+
+3つのcontractを混同しない。
+
+```text
+lisjong.structural_efficiency
+    = canonical reusable Mahjong calculation semantic
+      （shanten / ukeire / second-stepの正本）
+
+lisjong.learning.candidate_features
+    = purpose-specific model-facing candidate projection
+      （#187が追加するLearning-side contract）
+
+TwoStepUkeireCandidateEvaluation
+    = TwoStep固有のstaged trace semantic
+      != learned candidate feature contract
+```
+
+candidate viewは新しいshanten / ukeire algorithmを実装せず、
+[Architecture](architecture.md)「`structural_efficiency`」が所有する次の
+supported APIをsingle sourceとして呼ぶ。
+
+```text
+known_tile_counts             Policy-visibleな既知牌counting
+StructuralShantenEvaluator    decision-local shanten評価 / memoization
+evaluate_post_discard_hands   actual discard identity -> 打牌後純手牌 / shanten
+ukeire_count                  current受け入れ
+second_step_ukeire_score      2段階受け入れscore
+discard_action_sort_key       canonical deterministic ordering
+```
+
+Issue #87の`TwoStepUkeireCandidateEvaluation`はTwoStepUkeireが実際に辿った
+staged evaluation pathのtrace snapshotであり、generic ML schemaへ変更しない。
+TwoStepはminimum-shanten候補だけcurrent ukeireを評価するが、candidate viewは
+全candidateでmaterializeする。両者のstage semanticsは独立である。
+
+本contractは上記L0（`FEATURE_IDENTITY` / `DATASET_SCHEMA` /
+`MODEL_ARTIFACT_SCHEMA` / action vocabulary identity）とは別の
+purpose-specific contractとして**追加**される。#187を理由に既存identityを
+candidate-centricへ遡及変更しない。`LearnedOffensePolicy`のflat action
+vocabulary pathも現状のまま残す。
+
+### 各candidateが持つ値
+
+```text
+action                    元のlegal actionのcanonical DiscardAction object
+post_discard_shanten      全legal discard candidate
+current_ukeire_count      全legal discard candidate
+second_step_ukeire_score  EVALUATEDのときだけint、それ以外はNone
+second_step_status        SecondStepStatus
+```
+
+`action`は`DecisionContext.legal_actions`側のobjectそのものであり、赤5 /
+通常5、ツモ切り、actorのidentityを再構築しない。結果は
+`discard_action_sort_key()`によるcanonical deterministic orderで返し、
+legal action入力順へ依存しない。入力は`DecisionContext`だけで、wall truth、
+dead-wall truth、opponent concealed truth、future event、`GameTrace`
+privileged truth、RiichiEnv state、Arena固有dataへ依存しない。
+
+### Second-step materialization contract（v1: selective）
+
+```text
+shanten         all candidates
+current ukeire  all candidates
+second-step     explicit selective materialization
+```
+
+`second_step_actions`で明示requestされたcandidateだけ2段階受け入れを評価する。
+requestしていないcandidateを暗黙に評価せず、request対象が現在のlegal discard
+candidateでない場合は`CandidateFeatureError`でfail closedする。
+cross-decision cacheは持たず、`known_tile_counts()`と
+`StructuralShantenEvaluator`は1 build呼び出しにつき1つを全candidateで共有する。
+
+根拠は#187のperformance preflight実測である（`tools/benchmark_candidate_features.py`、
+CPython 3.14.6 / Windows、repeat=9のmedian、decisionあたりms）。
+
+| decision | candidates | shanten | all-candidate ukeire | all-candidate 2nd | selective 2nd |
+| --- | --- | --- | --- | --- | --- |
+| far wide hand | 14 | 0.34 | 11.9 | 1188.6 | 323.1 |
+| mid honor-pair hand | 12 | 0.37 | 13.3 | 243.4 | 118.0 |
+| two-step relevant hand | 10 | 0.35 | 12.1 | 247.1 | 82.3 |
+| wide suited hand | 13 | 0.48 | 15.2 | 224.2 | 54.0 |
+| tenpai-reachable hand | 12 | 0.39 | 12.9 | 0.4 | 12.9 |
+
+shantenとcurrent ukeireは全candidate materializeしてもdecisionあたり
+0.3〜15msに収まる。一方all-candidate second-stepは224〜1189msであり、同じ
+decisionの他stageより1〜2桁大きい。よってv1では全candidate mandatoryにせず、
+selective contractとする（`SECOND-STEP MATERIALIZATION READY — SELECTIVE`）。
+この計測はdevelopment-only utilityであり、CI wall-clock thresholdや
+correctness testの時間thresholdは追加しない。
+
+### Availability semantics
+
+`evaluated result == 0`と`not materialized` / `not applicable`を混同しない。
+`second_step_ukeire_score: int | None`だけで`None`に複数の意味を持たせず、
+`SecondStepStatus`で明示する。
+
+```text
+EVALUATED          評価済み。score 0も正当な評価結果である
+NOT_MATERIALIZED   applicableだがrequestされていない
+NOT_APPLICABLE     semantic上適用しない（打牌後聴牌以上）
+```
+
+`post_discard_shanten <= 0`では2段階受け入れを`NOT_APPLICABLE`とする。第1
+有効牌のツモが和了そのものであり、「仮想ツモ後に打牌して次の受け入れを測る」
+という`second_step_ukeire_score()`のsemanticが成立しないためである。これは
+Issue #87のstaged semantics（TwoStepUkeireも最小向聴が0なら2段目を評価せず
+tie-breakへ進む）と一致する。`NOT_APPLICABLE`なcandidateを明示requestしても
+fail closedせず`NOT_APPLICABLE`のまま返す。fail closedするのは、requestされた
+actionが現在のlegal discard candidateでない場合だけである。
+
+### Policy seamはL0.2へdeferする
+
+#187ではcandidate scorer modelを実装しないため、新しいgeneric Policy
+router / dispatcher frameworkを追加しない（`POLICY SEAM REFORMULATE`）。
+
+`TwoStepUkeirePolicy`は既に`winning action -> RiichiAction -> 通常打牌評価 ->
+pass -> fallback`というO0相当のdecompositionを`_decide()`が持ち、打牌選択は
+`_decide_discard()`というprivate extension pointへ分離されている。必要な
+decompositionは現行architectureが既に示しているが、実際のcandidate scorerが
+存在しない段階でgeneric routerを抽出するのはspeculative abstractionになる。
+
+```text
+existing architecture already demonstrates the required O0 decomposition,
+but extracting a generic router before a real candidate scorer exists would
+be speculative abstraction.
+
+The minimal reusable O0 orchestration seam should be extracted in L0.2
+together with the first real learned candidate scorer.
+```
+
+`TwoStepUkeirePolicy`をLearning base classとして再利用することもしない。
+
 ## Optional ML dependency boundary
 
 ```text
@@ -222,3 +375,5 @@ python -m lisjong.learning verify-artifact --artifact <artifact>
 - Champion promotion、#331/#332 locked scientific protocolの変更
 - `arena-policy-input-feature-v1`、#331 dataset/checkpoint identity、
   #331 teacher semantics/thresholds、#332 execution result/protocolの改名・再定義
+- candidate scorer model、generic Policy router / framework、universal
+  CandidateEvaluation（#187はcandidate feature contractまでを扱う）
