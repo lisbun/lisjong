@@ -553,6 +553,128 @@ encoding（cp932）でem dashを含むoutcome文字列をencodeできず失わ�
 出力記録のためだけに再実行した。retrain、threshold / feature / model変更は
 行っていない。
 
+## Semantic-envelope Learned Offense Policy（L0.2a、#191）
+
+```text
+selection policy     lisjong-offense-l0.2-semantic-envelope-v1
+runtime identity     value_digest({candidate_scorer_artifact, selection_policy})
+実装                  src/lisjong/learning/envelope_policy.py,
+                     envelope_diagnostics.py, tools/replay_semantic_envelope.py
+test                 tests/test_learning_semantic_envelope.py
+```
+
+Issue #189のfailure（conditional current-ukeire 0.9225）を再学習で救済せず、
+exactに計算できる牌効率hierarchyをserving policyのselection constraintにする
+engineering integrationである。#184 shared feature、#187 candidate feature、
+そして#189のencoding / request policy / dataset / model / artifact schema / frozen
+artifact・result、`LearnedCandidateOffensePolicy` / `CandidateScorerRuntime`の
+identityとbehaviorは変更しない。
+
+```text
+O0 guard（#189と同一）
+normal discard
+    -> build_scorer_candidates()（#189 two-pass request policy）
+    -> S1 minimum post-discard shanten
+    -> S2 maximum current ukeire
+    -> S3 maximum second-step score
+         minimum shanten == 0   S3なし、全survivorはNOT_APPLICABLE
+         elif survivor == 1件   S3なし、NOT_MATERIALIZED
+         else                   全survivorがEVALUATEDであることを要求
+    -> survivor 1件   そのlegal DiscardAction（scorerは実行しない）
+       survivor複数   full candidate tupleへ#189 scorerを適用し、argmaxだけを
+                      survivorへ限定（同点はcanonical順で最初）
+```
+
+期待statusと異なるsurvivorはfail closedし、未評価candidateをscore 0として扱わず、
+評価済みcandidateだけの部分比較もしない。scorerを省略した場合はscore生成も
+非有限検査も行わない（仕様）。
+
+S1 → S3は`TwoStepUkeirePolicy`の通常打牌規則と同じhierarchyである。したがって
+constant scorerではTwoStepと同じaction objectを返し（oracle testで固定）、
+learned scorerがTwoStepと異なる打牌を選べるのはS1 / S2 / S3がすべて同値な
+residual candidate間だけである。semantic regret 0はqualification evidenceでは
+なくconstruction invariantの確認である。
+
+runtime identityは#189 artifact identityを返さず、selection policy identityと
+artifact identityから決定的に合成する（#189 artifactでは
+`f412508d042aa890180dfa5a9a7c529dd07fc0ac3aa0db5b79c83e5afd532a72`）。
+
+### Bounded engineering replay
+
+Issue #189のOFFLINE-EVALは新しいholdoutとして再利用しない。#189 frozen artifact
+（`36d77f8c…`）と同じsource record（`8c1899c5…`、retained #332 scientific
+archiveから展開しidentityを照合）で、既観測のTRAIN / SELECTだけを使った。
+`tools/replay_semantic_envelope.py`はartifactのtraining / selection split以外を
+拒否し、referenceとして`TwoStepUkeirePolicy`を注入する。regretは
+`semantic_envelope_survivors()`を使わずcandidate semantic値から独立に再計算する。
+
+```text
+python tools/replay_semantic_envelope.py --artifact <candidate-artifact> \
+    --source-record <source-record> --split SELECT
+python tools/replay_semantic_envelope.py ... --split TRAIN --sample-every 5
+```
+
+| invariant | SELECT（全件） | TRAIN（1/5 stride） |
+| --- | --- | --- |
+| decisions / scorer decisions | 12,702 / 9,560 | 13,248 / 9,941 |
+| legality | 1.000 | 1.000 |
+| win / riichi / no-call guard | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| shanten / ukeire / second-step max regret | 0 / 0 / 0 | 0 / 0 / 0 |
+| second-step regret support | 4,621 | 4,836 |
+| constant-scorer oracle == TwoStep action object | 1.000 | 1.000 |
+| TwoStepとの不一致のうちsurvivor外 | 0 | 0 |
+
+Residual-choice diagnostics（gateではない）。
+
+| diagnostic | SELECT | TRAIN |
+| --- | --- | --- |
+| survivor 1件 | 0.537 | 0.542 |
+| survivor >= 2（= scorer invoked） | 0.463 | 0.458 |
+| survivor >= 2のうち単一tile type（赤5/通常5、ツモ切り/手出しのみ） | 0.046 | 0.058 |
+| scorerがcanonical先頭以外を選んだ割合（survivor >= 2） | 0.0864 | 0.0002 |
+| combined policyとTwoStepの一致 | 0.9698 | 0.9999 |
+
+survivor数分布（SELECT）: 1: 5,129 / 2: 2,254 / 3: 1,255 / 4: 600 / 5: 82 /
+6: 171 / 7: 4 / 8: 60 / 10: 5。代表sampleは`6m 9p 2z 6z`、`3z 7z`、
+`1s 5s 8s 7z`、`9s 6z*`のように異なるtile typeの完全同値candidateが大半である。
+
+読み方。
+
+- strict envelopeでも約46%のnormal discardで2件以上の完全同値candidateが
+  残り、その約95%は異なるtile typeである。learned residual choiceの自由度は
+  「赤5 / ツモ切りの区別」だけに縮退していない
+- ただし#189 scorerはteacher（canonical tie-break）を模倣したものであり、
+  TRAINではresidual choiceの99.98%でcanonical先頭を選ぶ。SELECTの8.6%は
+  tie-break再現の汎化誤差であり、outcome上の意味を持つ選択ではない。
+  residual choiceを改善するにはL0.3のoutcome-aware objectiveが必要である
+
+### L0.2a runtime
+
+SELECTの全scorer decision（9,560件）を単独processで測定した（CPython 3.14.6 /
+Windows / torch 2.13.0+cpu、decisionあたりms）。
+
+| stage | median | mean | p95 | max |
+| --- | --- | --- | --- | --- |
+| semantic envelope（S1〜S3 survivor決定） | 0.004 | 0.005 | 0.008 | 1.8 |
+| Semantic-envelope Policy `decide()` total | 15.5 | 58.1 | 251.8 | 898.4 |
+
+envelopeの追加costは無視できる。survivor 1件のdecision（54%）ではscorerを
+省略するため、#189の`decide()`（20.3 / 72.6 / 295.8 / 881.9）と同等かそれ以下で
+あり、costの中心は引き続きtwo-pass candidate buildである。replay実行中の
+discard max（114s / 144s）はreplayを並列実行中の一時的なPCスタンバイによる
+wall-clock外れ値であり、上記の単独測定では再現しない。CI timing thresholdは
+作らない。
+
+### L0.2a terminal result
+
+```text
+SEMANTIC OFFENSE ENVELOPE READY
+```
+
+READYは#189 learned scorer単体が後からqualifiedになったことを意味しない。
+deterministic exact semantics + frozen #189 residual scorerのcombined serving
+policyが、L0 offenseのsemantic safety boundaryを満たしたことを意味する。
+
 ## Optional ML dependency boundary
 
 ```text
