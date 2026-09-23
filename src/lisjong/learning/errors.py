@@ -31,6 +31,10 @@ class UnsupportedSourceSchemaError(SourceRecordError):
     """source recordのschema / versionをこの実装が提供しない場合。"""
 
 
+class OutcomeSourceError(SourceRecordError):
+    """L0.3 focal outcome source（Issue #193）をstrictに読み取れない場合。"""
+
+
 class FeatureError(LearningError):
     """player-safe featureをmaterializeできない場合。"""
 

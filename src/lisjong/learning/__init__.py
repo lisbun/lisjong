@@ -128,6 +128,7 @@ from lisjong.learning.errors import (
     LearningError,
     MissingLearningDependencyError,
     ModelArtifactError,
+    OutcomeSourceError,
     SourceRecordError,
     TrainingError,
     UnsupportedSourceSchemaError,
@@ -140,10 +141,33 @@ from lisjong.learning.features import (
     feature_specification,
 )
 from lisjong.learning.model import MODEL_ARCHITECTURE, ModelConfig
+from lisjong.learning.outcome_source import (
+    EXPLORATION_TOKEN_IDENTITY,
+    OUTCOME_OBJECTIVE_IDENTITY,
+    OUTCOME_SOURCE_SCHEMA,
+    OUTCOME_TARGET_IDENTITY,
+    FocalOutcomeSource,
+    OutcomeTargetRow,
+    OutcomeTargets,
+    build_outcome_targets,
+    read_outcome_source,
+    summarize_outcome_targets,
+)
 from lisjong.learning.policy import (
     LearnedOffensePolicy,
     LearnedPolicyRuntime,
     load_learned_policy_factory,
+)
+from lisjong.learning.residual_baseline import (
+    CONSTANT_RESIDUAL_RUNTIME_IDENTITY,
+    CONSTANT_RESIDUAL_SCORER_IDENTITY,
+    ConstantResidualRuntime,
+)
+from lisjong.learning.residual_exploration import (
+    RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
+    RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
+    ResidualExplorationDecision,
+    select_residual_exploration,
 )
 from lisjong.learning.source_record import (
     EXPECTED_ALLOCATION_OWNER_REPOSITORY,
@@ -164,6 +188,24 @@ from lisjong.learning.training import (
 )
 
 __all__ = [
+    "OutcomeSourceError",
+    "EXPLORATION_TOKEN_IDENTITY",
+    "OUTCOME_OBJECTIVE_IDENTITY",
+    "OUTCOME_SOURCE_SCHEMA",
+    "OUTCOME_TARGET_IDENTITY",
+    "FocalOutcomeSource",
+    "OutcomeTargetRow",
+    "OutcomeTargets",
+    "build_outcome_targets",
+    "read_outcome_source",
+    "summarize_outcome_targets",
+    "CONSTANT_RESIDUAL_RUNTIME_IDENTITY",
+    "CONSTANT_RESIDUAL_SCORER_IDENTITY",
+    "ConstantResidualRuntime",
+    "RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY",
+    "RESIDUAL_EXPLORATION_RUNTIME_IDENTITY",
+    "ResidualExplorationDecision",
+    "select_residual_exploration",
     "CANDIDATE_ARTIFACT_SCHEMA",
     "CANDIDATE_DATASET_SCHEMA",
     "CANDIDATE_ENCODING_DIMENSION",
