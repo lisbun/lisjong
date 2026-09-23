@@ -2,7 +2,8 @@
 
 Issue #184のLearning L0 vertical sliceと、Issue #189のL0.2 candidate-centric
 Learned Offense Policy（deterministic O0 guard + learned normal-discard candidate
-scorer）を提供する。
+scorer）、Issue #191のL0.2a semantic-envelope Policy（exact牌効率hierarchyを
+selection constraintとし、#189 scorerはresidual choiceだけを担当）を提供する。
 
 ```text
 versioned player-safe source record   (lisjong-arena producer)
@@ -104,6 +105,21 @@ from lisjong.learning.dataset import (
     materialize_dataset,
     read_dataset,
 )
+from lisjong.learning.envelope_diagnostics import (
+    ENVELOPE_INVALID,
+    ENVELOPE_READY,
+    classify_semantic_envelope_result,
+    evaluate_semantic_envelope_policy,
+)
+from lisjong.learning.envelope_policy import (
+    SEMANTIC_ENVELOPE_IDENTITY,
+    SemanticEnvelopeDecision,
+    SemanticEnvelopeOffensePolicy,
+    SemanticEnvelopeRuntime,
+    load_semantic_envelope_policy_factory,
+    semantic_envelope_runtime_identity,
+    semantic_envelope_survivors,
+)
 from lisjong.learning.errors import (
     CandidateFeatureError,
     DatasetError,
@@ -156,6 +172,8 @@ __all__ = [
     "CANDIDATE_LABEL_SEMANTICS",
     "CANDIDATE_SCORER_ARCHITECTURE",
     "DATASET_SCHEMA",
+    "ENVELOPE_INVALID",
+    "ENVELOPE_READY",
     "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "FEATURE_DIMENSION",
     "FEATURE_IDENTITY",
@@ -163,6 +181,7 @@ __all__ = [
     "MODEL_ARTIFACT_SCHEMA",
     "OFFLINE_GATE",
     "SECOND_STEP_REQUEST_POLICY",
+    "SEMANTIC_ENVELOPE_IDENTITY",
     "SOURCE_RECORD_SCHEMA_V1",
     "SOURCE_RECORD_SCHEMA_V2",
     "SUPPORTED_SOURCE_RECORD_SCHEMAS",
@@ -192,6 +211,9 @@ __all__ = [
     "ModelConfig",
     "PlayerSafeSourceRecord",
     "SecondStepStatus",
+    "SemanticEnvelopeDecision",
+    "SemanticEnvelopeOffensePolicy",
+    "SemanticEnvelopeRuntime",
     "SourceDecision",
     "SourceGame",
     "SourceRecordError",
@@ -202,8 +224,10 @@ __all__ = [
     "build_scorer_candidates",
     "candidate_encoding_fingerprint",
     "classify_offline_result",
+    "classify_semantic_envelope_result",
     "encode_candidates",
     "evaluate_candidate_policy",
+    "evaluate_semantic_envelope_policy",
     "feature_fingerprint",
     "feature_specification",
     "legal_discard_candidates",
@@ -211,12 +235,15 @@ __all__ = [
     "load_candidate_scorer_policy_factory",
     "load_learned_policy_factory",
     "load_model_artifact",
+    "load_semantic_envelope_policy_factory",
     "materialize_candidate_dataset",
     "materialize_dataset",
     "read_candidate_dataset",
     "read_dataset",
     "read_source_record",
     "seed_membership_identity",
+    "semantic_envelope_runtime_identity",
+    "semantic_envelope_survivors",
     "train_behavior_cloning",
     "train_candidate_scorer",
     "validate_allocation_binding",
