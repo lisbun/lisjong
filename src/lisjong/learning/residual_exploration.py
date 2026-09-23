@@ -34,7 +34,7 @@ serving `Policy`（`choose_action(decision)`）は実装しない。
 
 from dataclasses import dataclass
 
-from lisjong.learning._canonical import expect_digest, value_digest
+from lisjong.learning._canonical import expect_digest
 from lisjong.learning._o0 import (
     O0DecisionKind,
     classify_o0_decision,
@@ -42,32 +42,20 @@ from lisjong.learning._o0 import (
 )
 from lisjong.learning.candidate_encoding import build_scorer_candidates
 from lisjong.learning.candidate_features import DiscardCandidateFeatures
-from lisjong.learning.envelope_policy import (
-    SEMANTIC_ENVELOPE_IDENTITY,
-    semantic_envelope_survivors,
-)
+from lisjong.learning.envelope_policy import semantic_envelope_survivors
 from lisjong.learning.errors import LearnedPolicyError
 from lisjong.policy_contract import DecisionContext, InternalAction
 
 RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY = (
     "lisjong-offense-l0.3-focal-uniform-residual-exploration-v1"
 )
-"""focal-only uniform residual exploration behaviorのidentity。"""
+"""focal-only uniform residual exploration behaviorのidentity（#79 A3）。
 
-RESIDUAL_EXPLORATION_BUCKET_RULE = (
-    "survivors[int(exploration_token, 16) % len(survivors)]"
-)
-"""survivorが2件以上のときのhash-to-bucket rule。"""
-
-RESIDUAL_EXPLORATION_RUNTIME_IDENTITY = value_digest(
-    {
-        "bucket_rule": RESIDUAL_EXPLORATION_BUCKET_RULE,
-        "exploration_behavior": RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
-        "selection_policy": SEMANTIC_ENVELOPE_IDENTITY,
-    }
-)
-"""behavior identity・hash-to-bucket rule・#191 envelope identityをbindした
-identity。source manifestの`exploration_behavior_identity`。"""
+このplain identity自体が、hash-to-bucket rule
+（`survivors[int(exploration_token, 16) % len(survivors)]`）と#191
+`SEMANTIC_ENVELOPE_IDENTITY`のsemanticsを表す契約である。source manifestの
+`exploration_behavior_identity`にはこの文字列をそのまま記録する。
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,8 +126,6 @@ def select_residual_exploration(
 
 __all__ = [
     "RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY",
-    "RESIDUAL_EXPLORATION_BUCKET_RULE",
-    "RESIDUAL_EXPLORATION_RUNTIME_IDENTITY",
     "ResidualExplorationDecision",
     "select_residual_exploration",
     "validate_exploration_token",

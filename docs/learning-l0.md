@@ -711,9 +711,11 @@ DISCARD      build_scorer_candidates() -> semantic_envelope_survivors()
 PRNGは使わない。token導出はArena（`lisjong-arena-l0.3-focal-decision-token-sha256-v1`）
 が所有し、lisjongは再実装しない。返り値はO0 kind、`decision.legal_actions`側の
 action object、full candidate tuple、canonical順survivor、`selected_candidate_index`、
-`bucket`を持つ。behavior identityは
-`lisjong-offense-l0.3-focal-uniform-residual-exploration-v1`、hash-to-bucket rule、
-そして#191 envelope identityをbindしたdigest（`RESIDUAL_EXPLORATION_RUNTIME_IDENTITY`）である。
+`bucket`を持つ。behavior identityはplain stringの
+`lisjong-offense-l0.3-focal-uniform-residual-exploration-v1`
+（`RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY`）であり、この文字列自体がbucket rule
+と#191 envelope semanticsを表す契約である。source manifestの
+`exploration_behavior_identity`にもこの文字列をそのまま記録する。
 
 **Outcome source consumer + target（A1）**。`read_outcome_source()`はArena-owned
 `arena-offense-l0.3-focal-outcome-source-v1`をstrict readする。`lisjong_arena`は

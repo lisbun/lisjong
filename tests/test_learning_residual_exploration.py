@@ -12,7 +12,6 @@ from lisjong.learning import (
     CONSTANT_RESIDUAL_RUNTIME_IDENTITY,
     CONSTANT_RESIDUAL_SCORER_IDENTITY,
     RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
-    RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
     SEMANTIC_ENVELOPE_IDENTITY,
     ConstantResidualRuntime,
     LearnedPolicyError,
@@ -26,6 +25,7 @@ from lisjong.learning import residual_baseline as baseline_module
 from lisjong.learning import residual_exploration as exploration_module
 from lisjong.learning._canonical import value_digest
 from lisjong.learning._o0 import O0DecisionKind
+from lisjong.learning.outcome_source import EXPECTED_BEHAVIOR
 from lisjong.policies.two_step_ukeire import TwoStepUkeirePolicy
 from lisjong.policy_contract import TileCategory
 
@@ -93,7 +93,7 @@ class ConstantResidualRuntimeTests(unittest.TestCase):
                     semantic_envelope_runtime_identity(artifact_identity),
                 )
         self.assertNotEqual(
-            CONSTANT_RESIDUAL_RUNTIME_IDENTITY, RESIDUAL_EXPLORATION_RUNTIME_IDENTITY
+            CONSTANT_RESIDUAL_RUNTIME_IDENTITY, RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY
         )
 
     def test_scores_are_zero_for_the_full_candidate_tuple(self) -> None:
@@ -156,14 +156,8 @@ class ResidualExplorationSelectorTests(unittest.TestCase):
             "lisjong-offense-l0.3-focal-uniform-residual-exploration-v1",
         )
         self.assertEqual(
-            RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
-            value_digest(
-                {
-                    "bucket_rule": exploration_module.RESIDUAL_EXPLORATION_BUCKET_RULE,
-                    "exploration_behavior": RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
-                    "selection_policy": SEMANTIC_ENVELOPE_IDENTITY,
-                }
-            ),
+            EXPECTED_BEHAVIOR["exploration_behavior_identity"],
+            RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
         )
 
     def test_guard_decisions_match_the_baseline_policy(self) -> None:

@@ -165,7 +165,6 @@ from lisjong.learning.residual_baseline import (
 )
 from lisjong.learning.residual_exploration import (
     RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
-    RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
     ResidualExplorationDecision,
     select_residual_exploration,
 )
@@ -203,7 +202,6 @@ __all__ = [
     "CONSTANT_RESIDUAL_SCORER_IDENTITY",
     "ConstantResidualRuntime",
     "RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY",
-    "RESIDUAL_EXPLORATION_RUNTIME_IDENTITY",
     "ResidualExplorationDecision",
     "select_residual_exploration",
     "CANDIDATE_ARTIFACT_SCHEMA",

@@ -114,7 +114,7 @@ from lisjong.learning.errors import (
 )
 from lisjong.learning.residual_baseline import CONSTANT_RESIDUAL_RUNTIME_IDENTITY
 from lisjong.learning.residual_exploration import (
-    RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
+    RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
     ResidualExplorationDecision,
     select_residual_exploration,
 )
@@ -157,7 +157,7 @@ _ROLE_SPLITS = {
 
 EXPECTED_BEHAVIOR = {
     "baseline_runtime_identity": CONSTANT_RESIDUAL_RUNTIME_IDENTITY,
-    "exploration_behavior_identity": RESIDUAL_EXPLORATION_RUNTIME_IDENTITY,
+    "exploration_behavior_identity": RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY,
     "exploration_token_identity": EXPLORATION_TOKEN_IDENTITY,
     "focal_rotation_rule": FOCAL_ROTATION_RULE,
 }
