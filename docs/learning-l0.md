@@ -334,6 +334,225 @@ together with the first real learned candidate scorer.
 
 `TwoStepUkeirePolicy`をLearning base classとして再利用することもしない。
 
+## Candidate-centric Learned Offense Policy（L0.2、#189）
+
+```text
+O0 decomposition     lisjong-offense-l0.2-o0-decomposition-v1
+request policy       lisjong-offense-l0.2-two-pass-finalist-second-step-v1
+candidate encoding   lisjong-offense-l0.2-discard-candidate-encoding-v1
+dataset schema       lisjong-offense-l0.2-candidate-scorer-dataset-v1
+label semantics      lisjong-offense-l0.2-teacher-selected-discard-candidate-v1
+model architecture   lisjong-offense-l0.2-candidate-scorer-mlp-v1
+artifact schema      lisjong-offense-l0.2-candidate-scorer-artifact-v1
+offline gate         lisjong-offense-l0.2-offline-gate-v1
+実装                  src/lisjong/learning/_o0.py, candidate_encoding.py,
+                     candidate_dataset.py, candidate_model.py,
+                     candidate_training.py, candidate_artifact.py,
+                     candidate_policy.py, candidate_diagnostics.py
+test                 tests/test_learning_candidate_*.py
+```
+
+#331のflat 802-way single headにwin / no-call / 牌効率hierarchyを丸ごと学習
+させる設計から、**deterministic O0 guard + normal-discard candidate scorer**へ
+進む最初のslice。上記L0の`FEATURE_IDENTITY` / `DATASET_SCHEMA` /
+`MODEL_ARTIFACT_SCHEMA` / action vocabulary identity / `LearnedOffensePolicy`は
+historical / current L0としてそのまま残し、L0.2は別identityとして**追加**する。
+
+### Accepted source / teacher lineage
+
+teacher labelはsource recordに記録済みの`teacher_selected_action`だけであり、
+現在の`TwoStepUkeirePolicy`を再実行してrelabelしない。L0.2のaccepted lineageは
+次のretained evidenceで確認した（Issue #189コメントに記録）。
+
+```text
+source record schema      arena-offense-o0-player-safe-source-record-v2
+source record identity    8c1899c528f3fd551b57d7d8e4a7d44f42cfbf03426f611bd6794823ced3fcc7
+lock identity             89100db2833e4e8274f602eeb1c1853c21d1ba4d34772915f62e9aac39a6148b
+scientific corpus         bc8563112797f7c6e9a6607354e1663414e5a1b9f2bb4dd08e2b0ad9b98a8155
+teacher (Arena binding)   lisjong.policies.TwoStepUkeirePolicy @ lisjong 15799e5, 4 seats
+population                TRAIN 100 / SELECT 20 / OFFLINE-EVAL 20 hanchan, 90,579 decisions
+```
+
+同じidentityを#331 retention manifest、#331 preflight、#332 phase-B
+scientific lockがbindしている。この確認はoperatorがretained evidenceを読んで
+行ったものであり、production dataset codeはArena-owned `source_contract`を
+parseせず`source_contract_digest`だけを保持する。
+
+### O0 decomposition
+
+```text
+winning action (Ron / Tsumo) exists  -> deterministic win（canonical tie-break）
+elif RiichiAction exists             -> canonical RiichiAction
+elif no legal DiscardAction          -> canonical PassAction（無ければfail closed）
+else                                 -> learned candidate scorer over legal DiscardAction
+```
+
+`lisjong.learning._o0`がservingとdataset row eligibilityの両方で使う唯一の
+precedenceである。Ankan / Kakan / KyuushuKyuuhai等のown-turn voluntary actionは
+O0では選ばない。win / immediate riichiのsemanticsは`TwoStepUkeirePolicy`と
+一致することをtestで固定し、`TwoStepUkeirePolicy`を継承せず、concrete Policy
+moduleのprivate helperへも依存しない。generic router / dispatcherは作らない。
+
+scorer branchは`legal_discard_candidates()`由来のcandidateだけにscoreを付け、
+選んだcandidateが持つ`decision.legal_actions`側の`DiscardAction` objectを
+そのまま返す。同点は`discard_action_sort_key()`順で最初のcandidate、非有限
+score・score数不一致はfail closedであり、silent heuristic fallbackはない。
+riichi宣言牌decision、riichi中のforced tsumogiriも同じpathで扱う。
+
+### Shared context / candidate encoding
+
+shared decision contextは#184の`build_player_safe_feature()`をそのまま再利用
+する（`FEATURE_IDENTITY` / fingerprint / layoutは不変）。per-candidateは#187の
+`DiscardCandidateFeatures`を次のfixed-width vectorへ写す。
+
+```text
+discard_tile_type 34 / discard_red 1 / tsumogiri 1 /
+post_discard_shanten 9 (0..8 one-hot) / shanten_gap 1 /
+current_ukeire 1 / ukeire_gap_within_shanten 1 /
+second_step_status 3 (EVALUATED / NOT_MATERIALIZED / NOT_APPLICABLE) /
+second_step_score 1 / second_step_gap 1
+```
+
+gap blockは同じdecisionのcandidate tupleだけから決まる。status one-hotにより
+評価済みscore 0とNOT_MATERIALIZED / NOT_APPLICABLEは別vectorになる。現在の
+dimension / fingerprintは`CANDIDATE_ENCODING_DIMENSION` /
+`candidate_encoding_fingerprint()`から取得する。encodingはsecond-step
+availabilityがrequest policyの結果と一致することを要求し、一致しない
+materializationはfail closedする。
+
+### Second-step request policy（two-pass finalists）
+
+```text
+pass 1   second-step requestなしでbuild（全candidateのshanten / current ukeire）
+pass 2   minimum shanten > 0 かつ（最小shanten内で最大ukeireの）finalist数 >= 2
+         のときだけ、finalistsだけをrequestして再build
+```
+
+#187の`build_discard_candidate_features()`を最大2回呼ぶだけで、generic lazy
+feature framework / cacheは持たない。finalist集合は#87 TwoStepが2段目を評価する
+candidate集合と一致する（testで固定）。
+
+### Dataset / model / training / artifact
+
+- dataset: O0 DISCARD decisionだけを1 row = 1 decisionでmaterializeし、
+  WIN / RIICHI / RESPONSE rowはsplit別の除外countとして残す。candidateは
+  paddingなしのragged / flattened rowで、`decisions.jsonl`がtyped candidate
+  semantic・offset・teacher candidate indexを持つ。strict readはtyped semantic
+  から再encodeした値とpayloadの一致まで照合する。teacher actionがlegal
+  `DiscardAction` candidateへ一意に解決できなければfail closedする
+- model: `hidden = ReLU(context_layer(shared) + candidate_layer(candidate))`、
+  `score = output_layer(hidden)`（concat入力のLinear -> ReLU -> Linearと同値）
+- training: 1 decisionのlegal discard candidateだけで正規化するsoftmax cross
+  entropy。TRAINでoptimize、SELECTのcross entropy最小epochを採用。OFFLINE-EVALは
+  trainingにもselectionにも使わない
+- artifact: source / dataset / shared feature / candidate feature / encoding /
+  request policy / label / model / training / seed / selected epoch / weights
+  digestをbindし、mismatchはload時にfail closedする。
+  `load_candidate_scorer_policy_factory(path)`がtop-level importableな
+  `CandidateScorerRuntime`を返し、Arenaは`PolicySpec(identity=..., factory=runtime)`
+  としてそのまま使える
+
+### TRAIN / SELECT / OFFLINE-EVAL roles と frozen offline gate
+
+```text
+TRAIN         optimization
+SELECT        epoch / artifact candidate selection
+freeze        model / encoding / second-step request policy / thresholds
+OFFLINE-EVAL  qualificationのためにexactly once
+```
+
+thresholdはOFFLINE-EVALを見る前に`OFFLINE_GATE`として固定し、Issue #189へ
+記録した（fingerprint `ebde74b5…15258f9`）。
+
+| metric | required |
+| --- | --- |
+| legality | 1.000 |
+| deterministic win guard | 1.000 |
+| deterministic immediate-riichi guard | 1.000 |
+| O0 no-call guard | 1.000 |
+| post-discard shanten-stage agreement | >= 0.99 |
+| conditional current-ukeire agreement | >= 0.95 |
+| conditional second-step agreement | >= 0.90 |
+| candidate top-1 agreement vs teacher | diagnostic only |
+
+minimum support（win 30 / riichi 60 / response 100 / scorer decisions 1000 /
+conditional ukeire 500 / conditional second-step 250）を下回るgateは推測で
+PASSにせず`STOP / INVALID`とする。semantic agreementはlearner選択candidateと
+teacher選択candidateの#187 semantic値を比較するguardrailであり、upstream stageの
+不一致をlater stageの成功として数えない。
+
+### Runtime preflight
+
+actual L0.2 serving pathを`tools/benchmark_candidate_scorer.py`で測定した
+（accepted source recordのscorer decisionを100件ごとにsample、675 decision、
+CPython 3.14.6 / Windows / torch 2.13.0+cpu、decisionあたりms）。
+
+| stage | median | mean | p95 | max |
+| --- | --- | --- | --- | --- |
+| pass-1 candidate build | 15.1 | 13.8 | 18.8 | 36.6 |
+| two-pass finalist candidate build | 18.8 | 71.9 | 305.0 | 885.4 |
+| candidate numeric encoding | 0.05 | 0.06 | 0.09 | 0.57 |
+| shared context（#184） | 0.10 | 0.11 | 0.16 | 0.90 |
+| torch forward | 0.39 | 0.44 | 0.79 | 1.38 |
+| Learned Policy `decide()` total | 20.3 | 72.6 | 295.8 | 881.9 |
+
+finalist second-stepが必要なdecisionは約48%で、costのほぼ全てがtwo-pass
+candidate buildにある。all-candidate second-step（#187: 224〜1189ms）より
+十分小さく、two-pass policyは不合理ではない（REFORMULATE不要）。
+
+dataset materializationの実測は90,579 source decision / 67,996 scorer decision
+を4,918秒（約82分、13.8 scorer decision/秒、single process）でmaterializeし、
+sampleからのprojection（4,899秒）と一致した。CI wall-clock thresholdは作らない。
+
+### Terminal result
+
+```text
+SEMANTIC OFFENSE SCORER NOT QUALIFIED — OFFLINE
+```
+
+frozen artifactとdataset。
+
+```text
+candidate dataset   12092740c4d22b37bf3c3fbe6bb0ad771033bf823b78b80e30867b0553df985a
+artifact            36d77f8cc1ba28df2859be491be538a1ed5b6a62126b3b52992ecee39dd1d4e0
+selected epoch      13 / 20（SELECT cross entropy最小）
+```
+
+| split | source decisions | scorer decisions | candidates | excluded win / riichi / response |
+| --- | --- | --- | --- | --- |
+| TRAIN | 66,239 | 49,721 | 514,959 | 934 / 1,764 / 13,820 |
+| SELECT | 12,702 | 9,560 | 98,878 | 180 / 345 / 2,617 |
+| OFFLINE-EVAL | 11,638 | 8,715 | 89,699 | 178 / 350 / 2,395 |
+
+OFFLINE-EVAL（frozen gate `ebde74b5…`、全support minimum充足）。
+
+| metric | observed | required | support |
+| --- | --- | --- | --- |
+| legality | 1.000 | 1.000 | 11,638 |
+| deterministic win guard | 1.000 | 1.000 | 178 |
+| deterministic immediate-riichi guard | 1.000 | 1.000 | 350 |
+| O0 no-call guard | 1.000 | 1.000 | 2,395 |
+| shanten-stage agreement | 0.9991 | >= 0.99 | 8,715 |
+| conditional current-ukeire agreement | **0.9225** | >= 0.95 | 8,707 |
+| conditional second-step agreement | 0.9579 | >= 0.90 | 4,136 |
+| candidate top-1 agreement（diagnostic） | 0.8538 | — | 8,715 |
+
+参考: SELECTでは shanten 0.9976 / ukeire 0.9263 / second-step 0.9751 /
+top-1 0.8731、final-epoch train cross entropy 0.019に対しSELECT cross entropy
+0.380であり、同じ不足がSELECTでも見えていた。#331（flat 802-way）の同じ
+OFFLINE-EVALではwin recall 0.607、shanten 0.793、ukeire 0.759、no-call 0.970
+だったため、deterministic guardとcandidate semantic encodingでwin / riichi /
+no-call / shantenは解消したが、同shanten内のcurrent-ukeire選択が0.95に届かない。
+
+Issue #189の規則に従い、同じIssue内でretrain / threshold / feature / modelの
+変更によるrescueは行わない。次の仮説は別Issueとする。
+
+記録上の注意: OFFLINE-EVALの最初の実行は、結果のstdout出力がWindows console
+encoding（cp932）でem dashを含むoutcome文字列をencodeできず失われた（metricsは
+未観測）。CLIをUTF-8出力へ修正し、同じfrozen artifactに対する同じ決定的評価を
+出力記録のためだけに再実行した。retrain、threshold / feature / model変更は
+行っていない。
+
 ## Optional ML dependency boundary
 
 ```text
@@ -363,9 +582,25 @@ python -m lisjong.learning train \
     --train-split TRAIN --validation-split SELECT
 
 python -m lisjong.learning verify-artifact --artifact <artifact>
+
+python -m lisjong.learning materialize-candidate-dataset \
+    --source-record <source-record> --output <candidate-dataset>
+
+python -m lisjong.learning train-candidate-scorer \
+    --dataset <candidate-dataset> --output <candidate-artifact> \
+    --train-split TRAIN --select-split SELECT
+
+python -m lisjong.learning verify-candidate-artifact --artifact <candidate-artifact>
+
+python -m lisjong.learning evaluate-candidate-scorer \
+    --artifact <candidate-artifact> --source-record <source-record> \
+    --split OFFLINE-EVAL
 ```
 
-`train`だけがoptional ML runtimeを必要とする。
+`train` / `train-candidate-scorer` / `evaluate-candidate-scorer`だけがoptional
+ML runtimeを必要とする。`evaluate-candidate-scorer`はartifactのtraining /
+selection splitを評価splitに指定するとfail closedし、source record identityが
+artifactと一致することを要求する。
 
 ## Non-goals（このsliceでは扱わない）
 
@@ -375,5 +610,8 @@ python -m lisjong.learning verify-artifact --artifact <artifact>
 - Champion promotion、#331/#332 locked scientific protocolの変更
 - `arena-policy-input-feature-v1`、#331 dataset/checkpoint identity、
   #331 teacher semantics/thresholds、#332 execution result/protocolの改名・再定義
-- candidate scorer model、generic Policy router / framework、universal
-  CandidateEvaluation（#187はcandidate feature contractまでを扱う）
+- generic Policy router / framework、universal CandidateEvaluation、generic
+  Dataset / Artifact / Trainer framework
+- L0.2の範囲外: formal Arena strength / paired evaluation、outcome-aware / RL /
+  Q learning（L0.3）、riichi vs dama、learned calls、defense / push-fold、
+  structured tile-axis encoder、current `TwoStepUkeirePolicy`によるrelabel
