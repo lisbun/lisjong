@@ -675,6 +675,70 @@ READYは#189 learned scorer単体が後からqualifiedになったことを意�
 deterministic exact semantics + frozen #189 residual scorerのcombined serving
 policyが、L0 offenseのsemantic safety boundaryを満たしたことを意味する。
 
+## L0.3 step B — exploration selector / baseline runtime / outcome consumer（#193）
+
+lisjong-project#79 A-freeze（A1〜A4）のlisjong所有分を、source生成に必要な最小の
+seamとして実装する。producerはlisjong-arena#359である。dataset publication、
+trainer / MSE objective、Q artifact / Q runtimeは#79 step Dで扱う。
+
+```text
+実装    src/lisjong/learning/residual_baseline.py
+        src/lisjong/learning/residual_exploration.py
+        src/lisjong/learning/outcome_source.py
+test    tests/test_learning_residual_exploration.py
+        tests/test_learning_outcome_source.py
+```
+
+**Constant-zero baseline runtime（A2）**。`ConstantResidualRuntime`はfull candidate
+tupleの各entryへ`0.0`を返すscorerで、`create_policy()`は既存の
+`SemanticEnvelopeOffensePolicy(self)`を返す（新しいPolicy classは作らない）。
+artifactもML runtimeも不要。identityは
+`value_digest({"residual_scorer": "lisjong-offense-l0.3-constant-zero-residual-scorer-v1", "selection_policy": SEMANTIC_ENVELOPE_IDENTITY})`
+（`CONSTANT_RESIDUAL_RUNTIME_IDENTITY`）であり、#189 / #191のartifact-backed
+runtime identityとは衝突しない。constant scorerなのでactionはTwoStepと同じobjectになる。
+
+**Focal residual exploration selector（A3）**。`select_residual_exploration(decision,
+exploration_token)`はgeneration専用のpure functionで、Policy Protocolは実装しない。
+
+```text
+token        lowercase 64-hex以外はfail closed
+O0 guard     deterministic_guard_action()（tokenは使わない）
+DISCARD      build_scorer_candidates() -> semantic_envelope_survivors()
+             survivor 1件   そのsurvivor
+             survivor k>=2  survivors[int(token, 16) % k]
+```
+
+PRNGは使わない。token導出はArena（`lisjong-arena-l0.3-focal-decision-token-sha256-v1`）
+が所有し、lisjongは再実装しない。返り値はO0 kind、`decision.legal_actions`側の
+action object、full candidate tuple、canonical順survivor、`selected_candidate_index`、
+`bucket`を持つ。behavior identityはplain stringの
+`lisjong-offense-l0.3-focal-uniform-residual-exploration-v1`
+（`RESIDUAL_EXPLORATION_BEHAVIOR_IDENTITY`）であり、この文字列自体がbucket rule
+と#191 envelope semanticsを表す契約である。source manifestの
+`exploration_behavior_identity`にもこの文字列をそのまま記録する。
+
+**Outcome source consumer + target（A1）**。`read_outcome_source()`はArena-owned
+`arena-offense-l0.3-focal-outcome-source-v1`をstrict readする。`lisjong_arena`は
+importしない。wire layout（`manifest.json` + `game-NNN/kyokus.jsonl` /
+`focal-decisions.jsonl`）とfail-closed条件の一覧はmodule docstringを正本とする。
+focal decisionごとにselectorを再計算し、guard action、producerが記録したsurvivor
+action列、bucket選択がすべて一致しなければfail closedする。
+
+```text
+OUTCOME_TARGET_IDENTITY  lisjong-offense-l0.3-focal-kyoku-point-delta-1000-v1
+target_q = (points_after_kyoku[focal] - points_before_kyoku[focal]) / 1000.0
+```
+
+`points_after_kyoku`はArenaが記録した**hanchan最終調整前**の事実値をそのまま使う。
+lisjongは精算を再実装せず、backendの最終調整を逆算もしない。
+`hanchan_final_scores`はaudit factとしてshapeだけを検証し、targetには使わない。
+
+`build_outcome_targets()`はeligible row（DISCARD かつ survivor >= 2）だけへ、
+選択したcandidateの`target_q`を付ける。選ばれなかったsurvivorにはtargetを付けない。
+除外件数（win / riichi / response / single_survivor）も返す。
+`summarize_outcome_targets()`はC0 pilot用の最小deterministic summaryを返し、
+統計的なqualificationは行わない。
+
 ## Optional ML dependency boundary
 
 ```text
