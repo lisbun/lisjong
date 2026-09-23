@@ -16,20 +16,30 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import candidate_fixtures
 import learning_fixtures as fixtures
 
 from lisjong.learning import (
     BehaviorCloningConfig,
+    CandidateScorerConfig,
+    CandidateScorerTrainingConfig,
     MissingLearningDependencyError,
     ModelConfig,
+    load_candidate_artifact,
+    load_candidate_scorer_policy_factory,
     load_learned_policy_factory,
     load_model_artifact,
+    materialize_candidate_dataset,
     materialize_dataset,
+    read_candidate_dataset,
     read_dataset,
     read_source_record,
     train_behavior_cloning,
+    train_candidate_scorer,
+    write_candidate_artifact,
     write_model_artifact,
 )
+from lisjong.learning.candidate_dataset import CANDIDATE_TRAINING_OBJECTIVE
 
 _BLOCKER = """
 import sys
@@ -58,6 +68,13 @@ _CORE_MODULES = (
 _LEARNING_MODULES = (
     "lisjong.learning",
     "lisjong.learning.artifact",
+    "lisjong.learning.candidate_artifact",
+    "lisjong.learning.candidate_dataset",
+    "lisjong.learning.candidate_diagnostics",
+    "lisjong.learning.candidate_encoding",
+    "lisjong.learning.candidate_model",
+    "lisjong.learning.candidate_policy",
+    "lisjong.learning.candidate_training",
     "lisjong.learning.dataset",
     "lisjong.learning.errors",
     "lisjong.learning.features",
@@ -171,6 +188,53 @@ class MLRuntimeRequirementTests(unittest.TestCase):
         with patch.dict(sys.modules, {"torch": None}):
             with self.assertRaises(MissingLearningDependencyError):
                 load_learned_policy_factory(self.root / "artifact")
+
+
+class CandidateScorerMLRuntimeRequirementTests(unittest.TestCase):
+    """Issue #189 candidate scorer pathのoptional ML dependency境界。"""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.model = CandidateScorerConfig(hidden_width=2)
+        source_path = candidate_fixtures.write_candidate_source_record(
+            self.root / "source-record"
+        )
+        with patch.dict(sys.modules, {"torch": None}):
+            source = read_source_record(source_path)
+            self.dataset = materialize_candidate_dataset(source, self.root / "dataset")
+            write_candidate_artifact(
+                self.root / "artifact",
+                dataset=self.dataset,
+                model_config=self.model,
+                training=fixtures.training_block(
+                    objective=CANDIDATE_TRAINING_OBJECTIVE
+                ),
+                weights=fixtures.zero_weights(self.model),
+            )
+
+    def test_non_ml_path_runs_without_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            dataset = read_candidate_dataset(self.root / "dataset")
+            artifact = load_candidate_artifact(self.root / "artifact")
+
+        self.assertEqual(dataset.identity, self.dataset.identity)
+        self.assertEqual(artifact.dataset_identity, self.dataset.identity)
+
+    def test_candidate_training_requires_the_ml_runtime(self) -> None:
+        config = CandidateScorerTrainingConfig(
+            train_splits=("TRAIN",), select_splits=("SELECT",), model=self.model
+        )
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                train_candidate_scorer(self.dataset, config, self.root / "trained")
+        self.assertFalse((self.root / "trained").exists())
+
+    def test_candidate_inference_requires_the_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                load_candidate_scorer_policy_factory(self.root / "artifact")
 
 
 class NoArenaRuntimeDependencyTests(unittest.TestCase):

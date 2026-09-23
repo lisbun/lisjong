@@ -1,6 +1,8 @@
 """lisjong所有のcanonical Learning capability。
 
-Issue #184のLearning L0 vertical sliceを提供する。
+Issue #184のLearning L0 vertical sliceと、Issue #189のL0.2 candidate-centric
+Learned Offense Policy（deterministic O0 guard + learned normal-discard candidate
+scorer）を提供する。
 
 ```text
 versioned player-safe source record   (lisjong-arena producer)
@@ -46,12 +48,53 @@ from lisjong.learning.artifact import (
     load_model_artifact,
     write_model_artifact,
 )
+from lisjong.learning.candidate_artifact import (
+    CANDIDATE_ARTIFACT_SCHEMA,
+    LoadedCandidateScorerArtifact,
+    load_candidate_artifact,
+    write_candidate_artifact,
+)
+from lisjong.learning.candidate_dataset import (
+    CANDIDATE_DATASET_SCHEMA,
+    CANDIDATE_LABEL_SEMANTICS,
+    CandidateDataset,
+    CandidateDecisionRow,
+    materialize_candidate_dataset,
+    read_candidate_dataset,
+)
+from lisjong.learning.candidate_diagnostics import (
+    OFFLINE_GATE,
+    classify_offline_result,
+    evaluate_candidate_policy,
+)
+from lisjong.learning.candidate_encoding import (
+    CANDIDATE_ENCODING_DIMENSION,
+    CANDIDATE_ENCODING_IDENTITY,
+    SECOND_STEP_REQUEST_POLICY,
+    build_scorer_candidates,
+    candidate_encoding_fingerprint,
+    encode_candidates,
+)
 from lisjong.learning.candidate_features import (
     CANDIDATE_FEATURE_IDENTITY,
     DiscardCandidateFeatures,
     SecondStepStatus,
     build_discard_candidate_features,
     legal_discard_candidates,
+)
+from lisjong.learning.candidate_model import (
+    CANDIDATE_SCORER_ARCHITECTURE,
+    CandidateScorerConfig,
+)
+from lisjong.learning.candidate_policy import (
+    CandidateScorerDecision,
+    CandidateScorerRuntime,
+    LearnedCandidateOffensePolicy,
+    load_candidate_scorer_policy_factory,
+)
+from lisjong.learning.candidate_training import (
+    CandidateScorerTrainingConfig,
+    train_candidate_scorer,
 )
 from lisjong.learning.dataset import (
     DATASET_SCHEMA,
@@ -105,28 +148,44 @@ from lisjong.learning.training import (
 )
 
 __all__ = [
+    "CANDIDATE_ARTIFACT_SCHEMA",
+    "CANDIDATE_DATASET_SCHEMA",
+    "CANDIDATE_ENCODING_DIMENSION",
+    "CANDIDATE_ENCODING_IDENTITY",
     "CANDIDATE_FEATURE_IDENTITY",
+    "CANDIDATE_LABEL_SEMANTICS",
+    "CANDIDATE_SCORER_ARCHITECTURE",
     "DATASET_SCHEMA",
     "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "FEATURE_DIMENSION",
     "FEATURE_IDENTITY",
     "MODEL_ARCHITECTURE",
     "MODEL_ARTIFACT_SCHEMA",
+    "OFFLINE_GATE",
+    "SECOND_STEP_REQUEST_POLICY",
     "SOURCE_RECORD_SCHEMA_V1",
     "SOURCE_RECORD_SCHEMA_V2",
     "SUPPORTED_SOURCE_RECORD_SCHEMAS",
     "TEACHER_LABEL_SEMANTICS",
     "BehaviorCloningConfig",
+    "CandidateDataset",
+    "CandidateDecisionRow",
     "CandidateFeatureError",
+    "CandidateScorerConfig",
+    "CandidateScorerDecision",
+    "CandidateScorerRuntime",
+    "CandidateScorerTrainingConfig",
     "DatasetError",
     "DatasetRow",
     "DiscardCandidateFeatures",
     "FeatureError",
+    "LearnedCandidateOffensePolicy",
     "LearnedOffensePolicy",
     "LearnedPolicyError",
     "LearnedPolicyRuntime",
     "LearningDataset",
     "LearningError",
+    "LoadedCandidateScorerArtifact",
     "LoadedModelArtifact",
     "MissingLearningDependencyError",
     "ModelArtifactError",
@@ -140,17 +199,28 @@ __all__ = [
     "UnsupportedSourceSchemaError",
     "build_discard_candidate_features",
     "build_player_safe_feature",
+    "build_scorer_candidates",
+    "candidate_encoding_fingerprint",
+    "classify_offline_result",
+    "encode_candidates",
+    "evaluate_candidate_policy",
     "feature_fingerprint",
     "feature_specification",
     "legal_discard_candidates",
+    "load_candidate_artifact",
+    "load_candidate_scorer_policy_factory",
     "load_learned_policy_factory",
     "load_model_artifact",
+    "materialize_candidate_dataset",
     "materialize_dataset",
+    "read_candidate_dataset",
     "read_dataset",
     "read_source_record",
     "seed_membership_identity",
     "train_behavior_cloning",
+    "train_candidate_scorer",
     "validate_allocation_binding",
     "validate_allocation_bindings",
+    "write_candidate_artifact",
     "write_model_artifact",
 ]
