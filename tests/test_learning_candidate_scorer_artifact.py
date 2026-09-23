@@ -307,6 +307,31 @@ class EvaluateEntryPointTests(_DatasetCase):
         self.assertEqual(report["classification"]["outcome"], "STOP / INVALID")
 
 
+class EntryPointEncodingTests(unittest.TestCase):
+    def test_non_ascii_summary_is_written_as_utf8_on_a_legacy_console(self) -> None:
+        """NOT QUALIFIEDのem dash等をcp932 consoleでも失わずに出力する。"""
+        import os
+        import subprocess
+        import sys
+
+        program = (
+            "from lisjong.learning.__main__ import _emit\n"
+            "_emit({'outcome': 'SEMANTIC OFFENSE SCORER NOT QUALIFIED — OFFLINE'})\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            check=False,
+            env={**os.environ, "PYTHONIOENCODING": "cp932"},
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout.decode("utf-8"))["outcome"],
+            "SEMANTIC OFFENSE SCORER NOT QUALIFIED — OFFLINE",
+        )
+
+
 @requires_ml_runtime
 class PerDecisionLossTests(unittest.TestCase):
     """lossが同じdecisionのlegal candidateだけで正規化されることを固定する。"""

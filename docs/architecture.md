@@ -426,7 +426,7 @@ TwoStepUkeireCandidateEvaluation
 
 依存方向はconcrete Policy / diagnostic → structural-efficiency componentの一方向とし、逆依存を作らない。新しい牌効率系Policyは、他のconcrete Policy moduleのprivate helperへ依存せずこのcomponentをreuseする。
 
-Learning側のconsumerも同じ一方向依存に従う。`lisjong.learning.candidate_features`（Issue #187）は、このcomponentのsupported semanticをsingle sourceとして呼ぶpurpose-specificなmodel-facing candidate projectionであり、別のshanten / ukeire algorithmを持たない。`TwoStepUkeireCandidateEvaluation`とも別contractである。詳細は[Learning L0](learning-l0.md)「Candidate feature contract」を正本とする。
+Learning側のconsumerも同じ一方向依存に従う。`lisjong.learning.candidate_features`（Issue #187）は、このcomponentのsupported semanticをsingle sourceとして呼ぶpurpose-specificなmodel-facing candidate projectionであり、別のshanten / ukeire algorithmを持たない。`TwoStepUkeireCandidateEvaluation`とも別contractである。詳細は[Learning L0](learning-l0.md)「Candidate feature contract」を正本とする。L0.2（Issue #189）のlearned candidate scorerは、このcandidate projectionをtwo-pass finalist requestで呼ぶだけであり、shanten / ukeire / second-stepを再実装せず、concrete Policy moduleのprivate helperにも依存しない。詳細は同文書「Candidate-centric Learned Offense Policy」を正本とする。
 
 このcomponentは`PolicyInput`-visible informationだけを使用し、山・王牌・他家concealed truth・future event・`GameTrace` privileged truth・RiichiEnv / Arena固有情報へ依存しない。
 

@@ -247,6 +247,22 @@ def _evaluate_candidates(arguments) -> dict[str, object]:
     }
 
 
+def _emit(summary: dict[str, object]) -> None:
+    """summaryをUTF-8のcanonical JSONとしてstdoutへ書く。
+
+    terminal classification等は非ASCII（例: em dash）を含むため、console
+    encoding（Windowsのcp932等）に依存せずUTF-8で出力する。
+    """
+    text = canonical_json_text(summary)
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(text)
+        return
+    sys.stdout.flush()
+    buffer.write(text.encode("utf-8"))
+    buffer.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = _build_parser().parse_args(argv)
     handlers = {
@@ -263,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     except (LearningError, TypeError, ValueError) as error:
         print(f"{type(error).__name__}: {error}", file=sys.stderr)
         return 1
-    print(canonical_json_text(summary), end="")
+    _emit(summary)
     return 0
 
 
