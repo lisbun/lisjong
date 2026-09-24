@@ -142,6 +142,7 @@ from lisjong.learning.features import (
 )
 from lisjong.learning.model import MODEL_ARCHITECTURE, ModelConfig
 from lisjong.learning.outcome_source import (
+    ENGINE_OUTCOME_SOURCE_SCHEMA,
     EXPLORATION_TOKEN_IDENTITY,
     OUTCOME_OBJECTIVE_IDENTITY,
     OUTCOME_SOURCE_SCHEMA,
@@ -188,6 +189,7 @@ from lisjong.learning.training import (
 
 __all__ = [
     "OutcomeSourceError",
+    "ENGINE_OUTCOME_SOURCE_SCHEMA",
     "EXPLORATION_TOKEN_IDENTITY",
     "OUTCOME_OBJECTIVE_IDENTITY",
     "OUTCOME_SOURCE_SCHEMA",

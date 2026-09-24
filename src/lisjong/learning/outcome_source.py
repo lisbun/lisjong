@@ -74,6 +74,37 @@ focal_decision_ordinalの欠番、focal decision間で`step_ordinal`が狭義増
 action列 / bucket選択の不一致、存在しないkyokuの参照、PolicyInputとkyokuの
 round_wind / hand_number / honba不一致、点数snapshotのshape違反、kyoku間の
 `points_before` / 供託本数の不連続。
+
+## lisjong-engine lineage（Issue #195）
+
+`arena-offense-l0.3-lisjong-engine-focal-outcome-source-v1`
+（lisbun/lisjong-arena#370）は上記RiichiEnv schemaとは別のsource lineageであり、
+schema文字列で明示的に分岐する。RiichiEnv schemaのfield要件と検証は変えない。
+wire layout、seal、`behavior`、token、selection再計算は共通である。差分は次のとおり。
+
+```text
+population_role  DIAGNOSTIC | CALIBRATION | SCIENTIFIC
+                 DIAGNOSTICはsplit DIAGNOSTICだけ、allocation_bindingsは空objectに限る。
+                 CALIBRATION / SCIENTIFICのbindingは`seed_domain`が
+                 LISJONG_ENGINE_SEED_DOMAINに限る
+game summary     hanchan_final_raw_scores[4], final_riichi_stick_awards
+                 [{recipient_seat, amount}], match_end_reason（audit factのみ）
+kyoku row        point_deltas[4]を追加
+decision row     step_ordinalなし
+```
+
+engine sourceでは次も検証する。
+
+- `points_before_kyoku + point_deltas == points_after_kyoku`（4 seat）と
+  `sum(point_deltas) + 1000 * (riichi_sticks_after - riichi_sticks_before) == 0`
+- game内でkyokuのround identity（round_wind / hand_number / honba）が一意
+- `sum(awards) == 1000 * 最終kyoku.riichi_sticks_after`、かつ
+  `hanchan_final_raw_scores == 最終kyoku.points_after_kyoku + awards`
+
+engineには`step_ordinal`に対応するauthoritativeなfactがないため、lisjongは
+値を合成・推定しない（`OutcomeDecision.step_ordinal`は`None`）。decision順序は
+連続した`focal_decision_ordinal`と非減少の`kyoku_ordinal`で検証する。
+targetはlineageによらず`points_before_kyoku` / `points_after_kyoku`だけから求める。
 """
 
 import statistics
@@ -127,7 +158,17 @@ from lisjong.policy_contract import (
 )
 
 OUTCOME_SOURCE_SCHEMA = "arena-offense-l0.3-focal-outcome-source-v1"
-"""consumeするArena-owned source schema（lisbun/lisjong-arena#359）。"""
+"""consumeするArena-owned RiichiEnv source schema（lisbun/lisjong-arena#359）。"""
+
+ENGINE_OUTCOME_SOURCE_SCHEMA = (
+    "arena-offense-l0.3-lisjong-engine-focal-outcome-source-v1"
+)
+"""consumeするArena-owned lisjong-engine source schema（lisbun/lisjong-arena#370）。"""
+
+LISJONG_ENGINE_SEED_DOMAIN = "lisjong-engine-project-standard-v1-hanchan-v1"
+"""engine sourceのallocation bindingが持つべきArena-owned `seed_domain`。"""
+
+RIICHI_DEPOSIT = 1000
 
 OUTCOME_SOURCE_KIND = "focal-outcome-source-record"
 
@@ -148,12 +189,18 @@ MANIFEST_FILENAME = "manifest.json"
 KYOKU_PAYLOAD_FILENAME = "kyokus.jsonl"
 DECISION_PAYLOAD_FILENAME = "focal-decisions.jsonl"
 
+DIAGNOSTIC_ROLE = "DIAGNOSTIC"
 CALIBRATION_ROLE = "CALIBRATION"
 SCIENTIFIC_ROLE = "SCIENTIFIC"
 _ROLE_SPLITS = {
     CALIBRATION_ROLE: frozenset({"CALIBRATION"}),
     SCIENTIFIC_ROLE: frozenset({"TRAIN", "SELECT"}),
 }
+_ENGINE_ROLE_SPLITS = {
+    DIAGNOSTIC_ROLE: frozenset({"DIAGNOSTIC"}),
+    **_ROLE_SPLITS,
+}
+"""DIAGNOSTICはengine lineageだけが持ち、allocationを持たずscientific evidenceにならない。"""
 
 EXPECTED_BEHAVIOR = {
     "baseline_runtime_identity": CONSTANT_RESIDUAL_RUNTIME_IDENTITY,
@@ -223,6 +270,15 @@ _DECISION_FIELDS = frozenset(
         "producer_survivor_actions",
     }
 )
+_ENGINE_GAME_FIELDS = (
+    _GAME_FIELDS - {"hanchan_final_scores", "hanchan_final_riichi_sticks"}
+) | {"hanchan_final_raw_scores", "final_riichi_stick_awards", "match_end_reason"}
+_ENGINE_AWARD_FIELDS = frozenset({"recipient_seat", "amount"})
+_ENGINE_KYOKU_FIELDS = _KYOKU_FIELDS | {"point_deltas"}
+_ENGINE_DECISION_FIELDS = _DECISION_FIELDS - {"step_ordinal"}
+_ENGINE_MATCH_END_REASONS = frozenset(
+    {"bankruptcy", "dealer_tenpai", "dealer_win", "final_round", "target_reached"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,15 +296,21 @@ class OutcomeKyoku:
     points_after_kyoku: tuple[int, int, int, int]
     end: dict[str, object]
     is_final_kyoku: bool
+    point_deltas: tuple[int, int, int, int] | None = None
+    """engine lineageのauthoritative settlement delta。RiichiEnv lineageでは`None`。"""
 
 
 @dataclass(frozen=True, slots=True)
 class OutcomeDecision:
-    """1 focal decisionと、lisjongが再計算して照合したselection結果。"""
+    """1 focal decisionと、lisjongが再計算して照合したselection結果。
+
+    `step_ordinal`はRiichiEnv lineageだけが持つexecution factであり、engine
+    lineageでは合成せず`None`とする。
+    """
 
     kyoku_ordinal: int
     focal_decision_ordinal: int
-    step_ordinal: int
+    step_ordinal: int | None
     decision: DecisionContext
     selected_action: InternalAction
     exploration_token: str
@@ -257,22 +319,39 @@ class OutcomeDecision:
 
 @dataclass(frozen=True, slots=True)
 class OutcomeGame:
-    """1 hanchanのprovenance、kyoku列、focal decision列。"""
+    """1 hanchanのprovenance、kyoku列、focal decision列。
+
+    hanchan最終調整のaudit factはlineageごとに異なり、他lineageのfieldは`None`
+    とする。いずれもtargetには使わない。
+
+    - RiichiEnv: `hanchan_final_scores` / `hanchan_final_riichi_sticks`
+    - engine: `hanchan_final_raw_scores` / `final_riichi_stick_awards`
+      （`(recipient_seat, amount)`列） / `match_end_reason`
+    """
 
     game_ordinal: int
     seed: int
     split: str
     focal_seat: Seat
-    hanchan_final_scores: tuple[int, int, int, int]
-    hanchan_final_riichi_sticks: int
+    hanchan_final_scores: tuple[int, int, int, int] | None
+    hanchan_final_riichi_sticks: int | None
     kyokus: tuple[OutcomeKyoku, ...]
     decisions: tuple[OutcomeDecision, ...]
+    hanchan_final_raw_scores: tuple[int, int, int, int] | None = None
+    final_riichi_stick_awards: tuple[tuple[Seat, int], ...] | None = None
+    match_end_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class FocalOutcomeSource:
-    """strict readした完全なfocal outcome sourceとそのArena-owned provenance。"""
+    """strict readした完全なfocal outcome sourceとそのArena-owned provenance。
 
+    `population_role`が`DIAGNOSTIC`のsource（engine lineageのみ）はallocationを
+    持たず、全gameのsplitが`DIAGNOSTIC`であるため、TRAIN / SELECT / CALIBRATION
+    のrowを生まない。
+    """
+
+    schema: str
     identity: str
     population_role: str
     behavior: dict[str, str]
@@ -304,7 +383,7 @@ class FocalOutcomeSource:
                 for game in self.games
             ],
             "population_role": self.population_role,
-            "schema": OUTCOME_SOURCE_SCHEMA,
+            "schema": self.schema,
             "source_contract_digest": self.source_contract_digest,
         }
 
@@ -322,7 +401,7 @@ class OutcomeTargetRow:
     seed: int
     kyoku_ordinal: int
     focal_decision_ordinal: int
-    step_ordinal: int
+    step_ordinal: int | None
     decision: DecisionContext
     candidates: tuple[DiscardCandidateFeatures, ...]
     survivors: tuple[int, ...]
@@ -353,6 +432,17 @@ class OutcomeTargets:
 # ---------------------------------------------------------------------------
 
 
+_SUPPORTED_SCHEMAS = frozenset({OUTCOME_SOURCE_SCHEMA, ENGINE_OUTCOME_SOURCE_SCHEMA})
+
+
+def _is_engine(schema: str) -> bool:
+    return schema == ENGINE_OUTCOME_SOURCE_SCHEMA
+
+
+def _role_splits(schema: str) -> dict[str, frozenset[str]]:
+    return _ENGINE_ROLE_SPLITS if _is_engine(schema) else _ROLE_SPLITS
+
+
 def _read_manifest(root: Path) -> dict[str, object]:
     path = root / MANIFEST_FILENAME
     try:
@@ -365,15 +455,17 @@ def _read_manifest(root: Path) -> dict[str, object]:
     body = unseal(manifest, OutcomeSourceError, "outcome source manifest")
     if text != canonical_json_text(manifest):
         raise OutcomeSourceError("outcome source manifest is not canonical JSON")
-    if body.get("schema") != OUTCOME_SOURCE_SCHEMA:
+    schema = body.get("schema")
+    if type(schema) is not str or schema not in _SUPPORTED_SCHEMAS:
         raise UnsupportedSourceSchemaError(
             f"unsupported outcome source schema: {body.get('schema')!r}; "
-            f"this implementation consumes {OUTCOME_SOURCE_SCHEMA!r}"
+            f"this implementation consumes {sorted(_SUPPORTED_SCHEMAS)!r}"
         )
     expect_object(body, _MANIFEST_FIELDS, OutcomeSourceError, "outcome manifest")
     if body["kind"] != OUTCOME_SOURCE_KIND:
         raise OutcomeSourceError("outcome source kind mismatch")
-    if body["population_role"] not in _ROLE_SPLITS:
+    role = body["population_role"]
+    if type(role) is not str or role not in _role_splits(body["schema"]):
         raise OutcomeSourceError("manifest.population_role is not supported")
     behavior = expect_object(
         body["behavior"],
@@ -409,12 +501,47 @@ def _expect_seat(value: object, context: str) -> Seat:
     return Seat(raw)
 
 
+def _read_engine_final_audit(body: dict[str, object], context: str) -> None:
+    """engine game summaryのhanchan最終調整audit factのshapeを検証する。
+
+    最終kyokuとの整合は`_read_game()`がkyoku読込後に検証する。
+    """
+    _expect_scores(
+        body["hanchan_final_raw_scores"], f"{context}.hanchan_final_raw_scores"
+    )
+    awards = expect_list(
+        body["final_riichi_stick_awards"],
+        OutcomeSourceError,
+        f"{context}.final_riichi_stick_awards",
+    )
+    for index, award in enumerate(awards):
+        award_context = f"{context}.final_riichi_stick_awards[{index}]"
+        expect_object(award, _ENGINE_AWARD_FIELDS, OutcomeSourceError, award_context)
+        _expect_seat(award["recipient_seat"], f"{award_context}.recipient_seat")
+        amount = expect_int(
+            award["amount"], OutcomeSourceError, f"{award_context}.amount"
+        )
+        if amount <= 0:
+            raise OutcomeSourceError(f"{award_context}.amount must be positive")
+    match_end_reason = expect_str(
+        body["match_end_reason"], OutcomeSourceError, f"{context}.match_end_reason"
+    )
+    if match_end_reason not in _ENGINE_MATCH_END_REASONS:
+        raise OutcomeSourceError(f"{context}.match_end_reason is not supported")
+
+
 def _read_game_summary(
-    value: object, *, game_ordinal: int, population_role: str
+    value: object, *, game_ordinal: int, schema: str, population_role: str
 ) -> dict[str, object]:
     context = f"manifest.games[{game_ordinal}]"
+    engine = _is_engine(schema)
     body = unseal(value, OutcomeSourceError, context)
-    expect_object(body, _GAME_FIELDS, OutcomeSourceError, context)
+    expect_object(
+        body,
+        _ENGINE_GAME_FIELDS if engine else _GAME_FIELDS,
+        OutcomeSourceError,
+        context,
+    )
     for field in ("game_ordinal", "seed", "kyoku_count", "decision_count"):
         expect_non_negative_int(body[field], OutcomeSourceError, f"{context}.{field}")
     if body["game_ordinal"] != game_ordinal:
@@ -422,7 +549,7 @@ def _read_game_summary(
             f"{context} game_ordinal is not the contiguous global ordinal"
         )
     split = expect_str(body["split"], OutcomeSourceError, f"{context}.split")
-    if split not in _ROLE_SPLITS[population_role]:
+    if split not in _role_splits(schema)[population_role]:
         raise OutcomeSourceError(
             f"{context}.split {split!r} is not allowed for population "
             f"role {population_role!r}"
@@ -433,12 +560,15 @@ def _read_game_summary(
         raise OutcomeSourceError(f"{context}.focal_seat != game_ordinal % 4")
     if body["kyoku_count"] == 0:
         raise OutcomeSourceError(f"{context} must contain at least one kyoku")
-    _expect_scores(body["hanchan_final_scores"], f"{context}.hanchan_final_scores")
-    expect_non_negative_int(
-        body["hanchan_final_riichi_sticks"],
-        OutcomeSourceError,
-        f"{context}.hanchan_final_riichi_sticks",
-    )
+    if engine:
+        _read_engine_final_audit(body, context)
+    else:
+        _expect_scores(body["hanchan_final_scores"], f"{context}.hanchan_final_scores")
+        expect_non_negative_int(
+            body["hanchan_final_riichi_sticks"],
+            OutcomeSourceError,
+            f"{context}.hanchan_final_riichi_sticks",
+        )
     files = expect_object(
         body["files"], _PAYLOAD_FILES, OutcomeSourceError, f"{context}.files"
     )
@@ -487,8 +617,40 @@ def _read_end(value: object, context: str) -> dict[str, object]:
     return value
 
 
-def _read_kyoku(line: str, *, game_ordinal: int, index: int, context: str):
-    row = _read_line(line, _KYOKU_FIELDS, context)
+def _read_engine_point_deltas(
+    row: dict[str, object], context: str
+) -> tuple[int, int, int, int]:
+    """engine settlementの`point_deltas`を読み、境界点数と保存則を検証する。
+
+    精算は再計算しない。記録されたauthoritative deltaが、同じrowの
+    `points_before_kyoku` / `points_after_kyoku`と供託本数の変化で説明できる
+    ことだけを照合する。
+    """
+    deltas = _expect_scores(row["point_deltas"], f"{context}.point_deltas")
+    before = _expect_scores(
+        row["points_before_kyoku"], f"{context}.points_before_kyoku"
+    )
+    after = _expect_scores(row["points_after_kyoku"], f"{context}.points_after_kyoku")
+    if any(b + d != a for b, d, a in zip(before, deltas, after, strict=True)):
+        raise OutcomeSourceError(
+            f"{context} points_before_kyoku + point_deltas != points_after_kyoku"
+        )
+    sticks = [
+        expect_non_negative_int(row[field], OutcomeSourceError, f"{context}.{field}")
+        for field in ("riichi_sticks_before", "riichi_sticks_after")
+    ]
+    if sum(deltas) + RIICHI_DEPOSIT * (sticks[1] - sticks[0]) != 0:
+        raise OutcomeSourceError(
+            f"{context} score / riichi-stick conservation is violated"
+        )
+    return deltas
+
+
+def _read_kyoku(
+    line: str, *, game_ordinal: int, index: int, engine: bool, context: str
+):
+    row = _read_line(line, _ENGINE_KYOKU_FIELDS if engine else _KYOKU_FIELDS, context)
+    point_deltas = _read_engine_point_deltas(row, context) if engine else None
     if row["game_ordinal"] != game_ordinal:
         raise OutcomeSourceError(f"{context}.game_ordinal does not match the game")
     if row["kyoku_ordinal"] != index:
@@ -528,6 +690,7 @@ def _read_kyoku(line: str, *, game_ordinal: int, index: int, context: str):
         is_final_kyoku=expect_bool(
             row["is_final_kyoku"], OutcomeSourceError, f"{context}.is_final_kyoku"
         ),
+        point_deltas=point_deltas,
     )
 
 
@@ -553,15 +716,23 @@ def _read_decision(
     focal_seat: Seat,
     index: int,
     kyokus: tuple[OutcomeKyoku, ...],
+    engine: bool,
     context: str,
 ) -> OutcomeDecision:
-    row = _read_line(line, _DECISION_FIELDS, context)
+    row = _read_line(
+        line, _ENGINE_DECISION_FIELDS if engine else _DECISION_FIELDS, context
+    )
     if row["game_ordinal"] != game_ordinal:
         raise OutcomeSourceError(f"{context}.game_ordinal does not match the game")
     if row["focal_decision_ordinal"] != index:
         raise OutcomeSourceError(f"{context}.focal_decision_ordinal is not contiguous")
-    step_ordinal = expect_non_negative_int(
-        row["step_ordinal"], OutcomeSourceError, f"{context}.step_ordinal"
+    # engine lineageにはstep_ordinalに対応するfactがなく、値を合成しない。
+    step_ordinal = (
+        None
+        if engine
+        else expect_non_negative_int(
+            row["step_ordinal"], OutcomeSourceError, f"{context}.step_ordinal"
+        )
     )
     kyoku_ordinal = expect_non_negative_int(
         row["kyoku_ordinal"], OutcomeSourceError, f"{context}.kyoku_ordinal"
@@ -661,7 +832,38 @@ def _read_decision(
     )
 
 
-def _read_game(path: Path, summary: dict[str, object]) -> OutcomeGame:
+def _check_engine_final_adjustment(
+    summary: dict[str, object], final: OutcomeKyoku, context: str
+) -> tuple[tuple[Seat, int], ...]:
+    """hanchan最終scoreと最終kyoku境界の差を、残存供託の最終配分だけで説明する。
+
+    audit factの整合検証であり、targetの境界（`points_after_kyoku`）は置き換えない。
+    """
+    awards = tuple(
+        (Seat(award["recipient_seat"]), award["amount"])
+        for award in summary["final_riichi_stick_awards"]
+    )
+    awarded = [0, 0, 0, 0]
+    for seat, amount in awards:
+        awarded[int(seat)] += amount
+    if sum(awarded) != RIICHI_DEPOSIT * final.riichi_sticks_after:
+        raise OutcomeSourceError(
+            f"{context} final riichi stick awards do not distribute exactly the "
+            "remaining sticks"
+        )
+    if summary["hanchan_final_raw_scores"] != [
+        after + award
+        for after, award in zip(final.points_after_kyoku, awarded, strict=True)
+    ]:
+        raise OutcomeSourceError(
+            f"{context} hanchan_final_raw_scores differ from the final kyoku "
+            "boundary by more than the final riichi stick awards"
+        )
+    return awards
+
+
+def _read_game(path: Path, summary: dict[str, object], *, schema: str) -> OutcomeGame:
+    engine = _is_engine(schema)
     game_ordinal = summary["game_ordinal"]
     focal_seat = Seat(summary["focal_seat"])
     context = f"game-{game_ordinal:03d}"
@@ -680,6 +882,7 @@ def _read_game(path: Path, summary: dict[str, object]) -> OutcomeGame:
                 line,
                 game_ordinal=game_ordinal,
                 index=index,
+                engine=engine,
                 context=f"{context}.kyokus[{index}]",
             )
             if kyokus and (
@@ -697,6 +900,14 @@ def _read_game(path: Path, summary: dict[str, object]) -> OutcomeGame:
         True
     ]:
         raise OutcomeSourceError(f"{context} is_final_kyoku must mark only the last")
+    awards = None
+    if engine:
+        identities = [
+            (kyoku.round_wind, kyoku.hand_number, kyoku.honba) for kyoku in kyokus
+        ]
+        if len(set(identities)) != len(identities):
+            raise OutcomeSourceError(f"{context} kyoku round identity repeats")
+        awards = _check_engine_final_adjustment(summary, kyokus[-1], context)
 
     decisions: list[OutcomeDecision] = []
     with (path / DECISION_PAYLOAD_FILENAME).open(
@@ -709,11 +920,12 @@ def _read_game(path: Path, summary: dict[str, object]) -> OutcomeGame:
                 focal_seat=focal_seat,
                 index=index,
                 kyokus=tuple(kyokus),
+                engine=engine,
                 context=f"{context}.decisions[{index}]",
             )
             if decisions and (
-                decision.step_ordinal <= decisions[-1].step_ordinal
-                or decision.kyoku_ordinal < decisions[-1].kyoku_ordinal
+                decision.kyoku_ordinal < decisions[-1].kyoku_ordinal
+                or (not engine and decision.step_ordinal <= decisions[-1].step_ordinal)
             ):
                 raise OutcomeSourceError(
                     f"{context}.decisions[{index}] execution ordering mismatch"
@@ -727,11 +939,54 @@ def _read_game(path: Path, summary: dict[str, object]) -> OutcomeGame:
         seed=summary["seed"],
         split=summary["split"],
         focal_seat=focal_seat,
-        hanchan_final_scores=tuple(summary["hanchan_final_scores"]),
-        hanchan_final_riichi_sticks=summary["hanchan_final_riichi_sticks"],
+        hanchan_final_scores=None if engine else tuple(summary["hanchan_final_scores"]),
+        hanchan_final_riichi_sticks=None
+        if engine
+        else summary["hanchan_final_riichi_sticks"],
         kyokus=tuple(kyokus),
         decisions=tuple(decisions),
+        hanchan_final_raw_scores=tuple(summary["hanchan_final_raw_scores"])
+        if engine
+        else None,
+        final_riichi_stick_awards=awards,
+        match_end_reason=summary["match_end_reason"] if engine else None,
     )
+
+
+def _read_allocation_bindings(
+    value: object,
+    *,
+    schema: str,
+    population_role: str,
+    seeds_by_split: dict[str, list[int]],
+) -> dict[str, dict[str, str]]:
+    """population roleとlineageに応じてallocation bindingをstrict validateする。
+
+    engine lineageのDIAGNOSTICはallocationを持たない（空objectに限る）。
+    engine lineageのCALIBRATION / SCIENTIFICはengine seed domainに限る。
+    RiichiEnv lineageの検証は変えない。
+    """
+    context = "manifest.allocation_bindings"
+    if population_role == DIAGNOSTIC_ROLE:
+        if value != {}:
+            raise OutcomeSourceError(
+                f"a DIAGNOSTIC outcome source must not carry {context}"
+            )
+        return {}
+    try:
+        bindings = validate_allocation_bindings(
+            value, populations=seeds_by_split, context=context
+        )
+    except SourceRecordError as exc:
+        raise OutcomeSourceError(str(exc)) from exc
+    if _is_engine(schema):
+        for split, binding in bindings.items():
+            if binding["seed_domain"] != LISJONG_ENGINE_SEED_DOMAIN:
+                raise OutcomeSourceError(
+                    f"{context}[{split}].seed_domain is not the lisjong-engine "
+                    "seed domain"
+                )
+    return bindings
 
 
 def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
@@ -744,9 +999,15 @@ def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
     if not root.is_dir():
         raise OutcomeSourceError(f"outcome source directory does not exist: {root}")
     manifest = _read_manifest(root)
+    schema = manifest["schema"]
     population_role = manifest["population_role"]
     summaries = [
-        _read_game_summary(value, game_ordinal=ordinal, population_role=population_role)
+        _read_game_summary(
+            value,
+            game_ordinal=ordinal,
+            schema=schema,
+            population_role=population_role,
+        )
         for ordinal, value in enumerate(manifest["games"])
     ]
     expected_names = {MANIFEST_FILENAME} | {
@@ -764,20 +1025,19 @@ def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
             )
         seeds.add(summary["seed"])
         seeds_by_split.setdefault(summary["split"], []).append(summary["seed"])
-    try:
-        allocation_bindings = validate_allocation_bindings(
-            manifest["allocation_bindings"],
-            populations=seeds_by_split,
-            context="manifest.allocation_bindings",
-        )
-    except SourceRecordError as exc:
-        raise OutcomeSourceError(str(exc)) from exc
+    allocation_bindings = _read_allocation_bindings(
+        manifest["allocation_bindings"],
+        schema=schema,
+        population_role=population_role,
+        seeds_by_split=seeds_by_split,
+    )
 
     games = tuple(
-        _read_game(root / f"game-{summary['game_ordinal']:03d}", summary)
+        _read_game(root / f"game-{summary['game_ordinal']:03d}", summary, schema=schema)
         for summary in summaries
     )
     return FocalOutcomeSource(
+        schema=schema,
         identity=manifest["identity"],
         population_role=population_role,
         behavior=dict(manifest["behavior"]),
@@ -888,10 +1148,13 @@ def summarize_outcome_targets(targets: OutcomeTargets) -> dict[str, object]:
 __all__ = [
     "CALIBRATION_ROLE",
     "DECISION_PAYLOAD_FILENAME",
+    "DIAGNOSTIC_ROLE",
+    "ENGINE_OUTCOME_SOURCE_SCHEMA",
     "EXPECTED_BEHAVIOR",
     "EXPLORATION_TOKEN_IDENTITY",
     "FOCAL_ROTATION_RULE",
     "KYOKU_PAYLOAD_FILENAME",
+    "LISJONG_ENGINE_SEED_DOMAIN",
     "MANIFEST_FILENAME",
     "OUTCOME_OBJECTIVE_IDENTITY",
     "OUTCOME_SOURCE_KIND",
