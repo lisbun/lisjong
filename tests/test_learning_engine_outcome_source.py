@@ -230,6 +230,7 @@ class EngineFailClosedTests(_EngineTestCase):
             lambda summary: summary.pop("match_end_reason"),
             lambda summary: summary.update(hanchan_final_riichi_sticks=0),
             lambda summary: summary.update(match_end_reason=1),
+            lambda summary: summary.update(match_end_reason="unknown_reason"),
             lambda summary: summary.update(hanchan_final_raw_scores=[1, 2, 3]),
             lambda summary: summary.update(final_riichi_stick_awards={}),
             lambda summary: summary["final_riichi_stick_awards"][0].update(extra=1),
