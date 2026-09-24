@@ -687,6 +687,7 @@ trainer / MSE objective、Q artifact / Q runtimeは#79 step Dで扱う。
         src/lisjong/learning/outcome_source.py
 test    tests/test_learning_residual_exploration.py
         tests/test_learning_outcome_source.py
+        tests/test_learning_engine_outcome_source.py（#195）
 ```
 
 **Constant-zero baseline runtime（A2）**。`ConstantResidualRuntime`はfull candidate
@@ -738,6 +739,22 @@ lisjongは精算を再実装せず、backendの最終調整を逆算もしない
 除外件数（win / riichi / response / single_survivor）も返す。
 `summarize_outcome_targets()`はC0 pilot用の最小deterministic summaryを返し、
 統計的なqualificationは行わない。
+
+**lisjong-engine source lineage（#195）**。`read_outcome_source()`はArena-owned
+`arena-offense-l0.3-lisjong-engine-focal-outcome-source-v1`（lisjong-arena#370）も
+schema文字列で明示的に分岐してstrict readする。受け付けるのはこの2 schemaだけで、
+RiichiEnv schemaのfield要件と検証は変えない。engine lineageの差分と追加検証
+（`point_deltas`による境界点数・保存則、round identityの一意性、hanchan最終調整
+audit factと最終kyokuの整合、DIAGNOSTIC role、engine `seed_domain`）はmodule
+docstringを正本とする。
+
+- engineには`step_ordinal`に対応するfactがないため合成しない。
+  `OutcomeDecision.step_ordinal` / `OutcomeTargetRow.step_ordinal`は`None`になり、
+  decision順序は連続した`focal_decision_ordinal`と非減少の`kyoku_ordinal`で検証する
+- `hanchan_final_raw_scores` / `final_riichi_stick_awards` / `match_end_reason`は
+  audit factであり、targetはlineageによらず上記の式・identityのまま
+- DIAGNOSTIC source（engineのみ）はallocationを持たず全splitが`DIAGNOSTIC`なので、
+  TRAIN / SELECT / CALIBRATION rowを生まない。RiichiEnv schemaはDIAGNOSTICを受け付けない
 
 ## Optional ML dependency boundary
 

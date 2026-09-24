@@ -4,6 +4,9 @@
 のselected action / producer survivor action列は、Arenaのgeneration-only
 adapterと同じく`select_residual_exploration()`の1回の結果から記録する。
 tokenはtest専用の任意の64-hex値であり、Arenaのtoken導出は再現しない。
+
+`schema=ENGINE_OUTCOME_SOURCE_SCHEMA`ではlisjong-engine lineage
+（lisbun/lisjong-arena#370、Issue #195）のfield差分で同じpopulationを書く。
 """
 
 import atexit
@@ -27,8 +30,10 @@ from lisjong.learning._typed_values import action_to_value, policy_input_to_valu
 from lisjong.learning.errors import SourceRecordError
 from lisjong.learning.outcome_source import (
     DECISION_PAYLOAD_FILENAME,
+    ENGINE_OUTCOME_SOURCE_SCHEMA,
     EXPECTED_BEHAVIOR,
     KYOKU_PAYLOAD_FILENAME,
+    LISJONG_ENGINE_SEED_DOMAIN,
     MANIFEST_FILENAME,
     OUTCOME_SOURCE_KIND,
     OUTCOME_SOURCE_SCHEMA,
@@ -38,6 +43,15 @@ from lisjong.policy_contract import DecisionContext, Seat, Wind
 
 SCIENTIFIC_GAMES = (("TRAIN", 1001), ("TRAIN", 1002), ("SELECT", 2001))
 CALIBRATION_GAMES = (("CALIBRATION", 3001), ("CALIBRATION", 3002))
+DIAGNOSTIC_GAMES = (("DIAGNOSTIC", 910000), ("DIAGNOSTIC", 910001))
+
+ENGINE_SOURCE_CONTRACT = {
+    "arena_revision": "f" * 40,
+    "backend": "lisjong-engine",
+    "dependencies": {"lisjong": "a" * 40, "lisjong-engine": "b" * 40},
+    "python": "3.14.0",
+    "rules": {"constructor": "RuleSet.default", "name": "project-standard-v1"},
+}
 
 KYOKU_IDENTITIES = ((Wind.EAST, 1, 0), (Wind.EAST, 2, 0), (Wind.EAST, 2, 1))
 """3 kyoku。最後はhonba付きの連荘kyoku（hanchan最終kyoku）。"""
@@ -178,7 +192,34 @@ def _write_lines(path, rows):
     )
 
 
-def _game_summary(root, game_ordinal, seed, split, *, final_scores, kyokus, decisions):
+def engine_kyoku_row(row):
+    """RiichiEnv形のkyoku rowへengine settlementの`point_deltas`を加える。"""
+    deltas = [
+        after - before
+        for before, after in zip(
+            row["points_before_kyoku"], row["points_after_kyoku"], strict=True
+        )
+    ]
+    return {**row, "point_deltas": deltas}
+
+
+def engine_final_audit(final_kyoku, final_scores):
+    """最終kyoku境界との差を残存供託の最終配分として表すengine audit fact。"""
+    awards = [
+        {"amount": score - after, "recipient_seat": seat}
+        for seat, (after, score) in enumerate(
+            zip(final_kyoku["points_after_kyoku"], final_scores, strict=True)
+        )
+        if score != after
+    ]
+    return {
+        "final_riichi_stick_awards": awards,
+        "hanchan_final_raw_scores": final_scores,
+        "match_end_reason": "final_round",
+    }
+
+
+def _game_summary(root, game_ordinal, seed, split, *, final_audit, kyokus, decisions):
     directory = root / f"game-{game_ordinal:03d}"
     return seal(
         {
@@ -189,11 +230,10 @@ def _game_summary(root, game_ordinal, seed, split, *, final_scores, kyokus, deci
             },
             "focal_seat": game_ordinal % 4,
             "game_ordinal": game_ordinal,
-            "hanchan_final_riichi_sticks": 0,
-            "hanchan_final_scores": final_scores,
             "kyoku_count": kyokus,
             "seed": seed,
             "split": split,
+            **final_audit,
         }
     )
 
@@ -203,23 +243,35 @@ _TEMPLATE_ROOT = Path(tempfile.mkdtemp(prefix="lisjong-outcome-fixtures-"))
 atexit.register(shutil.rmtree, _TEMPLATE_ROOT, ignore_errors=True)
 
 
-def write_outcome_source(root, games=SCIENTIFIC_GAMES, *, role="SCIENTIFIC"):
+def write_outcome_source(
+    root, games=SCIENTIFIC_GAMES, *, role="SCIENTIFIC", schema=OUTCOME_SOURCE_SCHEMA
+):
     """`games`（`(split, seed)`列）のfocal outcome sourceを書いてpathを返す。
 
-    selection計算を伴う生成は`(games, role)`ごとに1回だけ行い、以降は
+    selection計算を伴う生成は`(games, role, schema)`ごとに1回だけ行い、以降は
     生成済みdirectoryをcopyする。
     """
-    key = (tuple(games), role)
+    key = (tuple(games), role, schema)
     if key not in _TEMPLATES:
         _TEMPLATES[key] = _write_outcome_source(
-            _TEMPLATE_ROOT / f"template-{len(_TEMPLATES)}", games, role=role
+            _TEMPLATE_ROOT / f"template-{len(_TEMPLATES)}",
+            games,
+            role=role,
+            schema=schema,
         )
     root = Path(root)
     shutil.copytree(_TEMPLATES[key], root)
     return root
 
 
-def _write_outcome_source(root, games, *, role):
+def write_engine_outcome_source(root, games=SCIENTIFIC_GAMES, *, role="SCIENTIFIC"):
+    return write_outcome_source(
+        root, games, role=role, schema=ENGINE_OUTCOME_SOURCE_SCHEMA
+    )
+
+
+def _write_outcome_source(root, games, *, role, schema):
+    engine = schema == ENGINE_OUTCOME_SOURCE_SCHEMA
     root = Path(root)
     root.mkdir(parents=True)
     summaries = []
@@ -233,6 +285,16 @@ def _write_outcome_source(root, games, *, role):
             decision_row(game_ordinal, index, kyoku, decision)
             for index, (kyoku, decision) in enumerate(focal_decisions(seat))
         ]
+        if engine:
+            kyokus = [engine_kyoku_row(row) for row in kyokus]
+            for row in decisions:
+                del row["step_ordinal"]
+            final_audit = engine_final_audit(kyokus[-1], final_scores)
+        else:
+            final_audit = {
+                "hanchan_final_riichi_sticks": 0,
+                "hanchan_final_scores": final_scores,
+            }
         _write_lines(directory / KYOKU_PAYLOAD_FILENAME, kyokus)
         _write_lines(directory / DECISION_PAYLOAD_FILENAME, decisions)
         summaries.append(
@@ -241,23 +303,28 @@ def _write_outcome_source(root, games, *, role):
                 game_ordinal,
                 seed,
                 split,
-                final_scores=final_scores,
+                final_audit=final_audit,
                 kyokus=len(kyokus),
                 decisions=len(decisions),
             )
         )
         seeds_by_split.setdefault(split, []).append(seed)
+    domain = {"seed_domain": LISJONG_ENGINE_SEED_DOMAIN} if engine else {}
     body = {
-        "allocation_bindings": {
-            split: fixtures.allocation_binding(seeds)
+        "allocation_bindings": {}
+        if role == "DIAGNOSTIC"
+        else {
+            split: fixtures.allocation_binding(seeds, **domain)
             for split, seeds in seeds_by_split.items()
         },
         "behavior": dict(EXPECTED_BEHAVIOR),
         "games": summaries,
         "kind": OUTCOME_SOURCE_KIND,
         "population_role": role,
-        "schema": OUTCOME_SOURCE_SCHEMA,
-        "source_contract": {"arena_revision": "test", "game_mode": "4p-hanchan"},
+        "schema": schema,
+        "source_contract": dict(ENGINE_SOURCE_CONTRACT)
+        if engine
+        else {"arena_revision": "test", "game_mode": "4p-hanchan"},
     }
     write_manifest(root, body)
     return root
