@@ -276,6 +276,9 @@ _ENGINE_GAME_FIELDS = (
 _ENGINE_AWARD_FIELDS = frozenset({"recipient_seat", "amount"})
 _ENGINE_KYOKU_FIELDS = _KYOKU_FIELDS | {"point_deltas"}
 _ENGINE_DECISION_FIELDS = _DECISION_FIELDS - {"step_ordinal"}
+_ENGINE_MATCH_END_REASONS = frozenset(
+    {"bankruptcy", "dealer_tenpai", "dealer_win", "final_round", "target_reached"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,9 +523,11 @@ def _read_engine_final_audit(body: dict[str, object], context: str) -> None:
         )
         if amount <= 0:
             raise OutcomeSourceError(f"{award_context}.amount must be positive")
-    expect_str(
+    match_end_reason = expect_str(
         body["match_end_reason"], OutcomeSourceError, f"{context}.match_end_reason"
     )
+    if match_end_reason not in _ENGINE_MATCH_END_REASONS:
+        raise OutcomeSourceError(f"{context}.match_end_reason is not supported")
 
 
 def _read_game_summary(
