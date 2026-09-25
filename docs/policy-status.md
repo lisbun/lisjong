@@ -77,6 +77,7 @@ Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、
 | `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |
 | `TargetedHonorReleaseTerminalProgressionPolicy` | `targeted-honor-release-terminal-progression` | **current Heuristic Champion / current heuristic strength baseline** | far closed PUSH / all-zeroのtargeted honor-release conflictだけをexact R5で再判定。Arena #270でexact incumbentにCONFIRMED POSITIVE、project #67で昇格 |
 | `HandValueTradeoffTargetedHonorReleasePolicy` | — | **experimental candidate; evaluation pending** | current Heuristic Championのconfirmed `R5_HONOR_ONLY_SWITCH`を保持し、それ以外のordinary discardへ#175 HandValue v2を合成 |
+| `PlacementAwareSpeedCallPolicy` | — | **experimental candidate; formal evaluation pending** | current Heuristic Championをexact parentとし、Tanyao / Honitsu route確定型のスピード鳴き、役のない副露手のroute保持打牌、オーラス点数状況mode（トップ目SPEED / 大差ラス目VALUE）を追加（[#199](https://github.com/lisbun/lisjong/issues/199)） |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
 
 `current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。

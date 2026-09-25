@@ -34,14 +34,14 @@ predicateもこのmoduleが所有し、special-hand計算は同じhelperを共�
 34牌種countはprivateな内部表現であり、一般公開APIにはしない。
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Container, Iterable, Sequence
 
 from lisjong.hand_evaluation import (
     _lookup_shanten,
     _python_shanten,
     _structural_predicates,
 )
-from lisjong.policy_contract.tile import Tile, TileCategory
+from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 _CATEGORY_OFFSETS = {
     TileCategory.MANZU: 0,
@@ -147,6 +147,35 @@ def calculate_shanten_from_canonical_counts(counts: Sequence[int]) -> int:
     `use_validation=False`のようなruntime flagは持たせない。
     """
     return _shanten_from_valid_counts(counts, sum(counts))
+
+
+def calculate_restricted_standard_shanten(
+    tiles: Iterable[Tile], usable_tile_types: Container[TileType]
+) -> int:
+    """`usable_tile_types`以外の牌を面子・塔子・雀頭に使えない牌として扱う通常形向聴数。
+
+    lisjong内部のpackage-internal contractであり、package rootの`__all__`へは
+    追加しない。副露後に特定の役route（タンヤオ・混一色等）だけで和了形を
+    目指す場合の距離を表す。使えない牌は手牌枠を占めるだけの浮き牌として扱い、
+    確定面子数は`calculate_shanten()`と同じく純手牌枚数全体から判断する。
+    七対子・国士無双は評価しない。
+
+    全牌種がusableの場合は`calculate_shanten()`の通常形向聴数と一致する。
+    入力validationは`calculate_shanten()`と同じである。
+    """
+    snapshot = _snapshot_tiles(tiles)
+    if len(snapshot) not in _VALID_CONCEALED_TILE_COUNTS:
+        raise ValueError(
+            "tiles must contain a concealed hand size of "
+            f"{sorted(_VALID_CONCEALED_TILE_COUNTS)}, got {len(snapshot)}"
+        )
+    _count_tile_kinds(snapshot)
+    usable_counts = _count_tile_kinds(
+        tuple(tile for tile in snapshot if tile.tile_type in usable_tile_types)
+    )
+    return _lookup_shanten.calculate_standard_shanten(
+        usable_counts, _fixed_meld_count(len(snapshot))
+    )
 
 
 def is_structurally_complete_from_canonical_counts(counts: Sequence[int]) -> bool:
