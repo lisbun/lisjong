@@ -141,6 +141,26 @@ from lisjong.learning.features import (
     feature_specification,
 )
 from lisjong.learning.model import MODEL_ARCHITECTURE, ModelConfig
+from lisjong.learning.outcome_q_artifact import (
+    OUTCOME_Q_ARTIFACT_SCHEMA,
+    OUTCOME_Q_CHECKPOINT_RULE,
+    LoadedOutcomeQArtifact,
+    load_outcome_q_artifact,
+)
+from lisjong.learning.outcome_q_dataset import (
+    OutcomeQRows,
+    materialize_outcome_q_rows,
+    outcome_q_preflight,
+)
+from lisjong.learning.outcome_q_policy import (
+    OutcomeQRuntime,
+    load_outcome_q_policy_factory,
+    outcome_q_runtime_identity,
+)
+from lisjong.learning.outcome_q_training import (
+    OutcomeQTrainingConfig,
+    train_outcome_q,
+)
 from lisjong.learning.outcome_source import (
     ENGINE_OUTCOME_SOURCE_SCHEMA,
     EXPLORATION_TOKEN_IDENTITY,
@@ -188,6 +208,18 @@ from lisjong.learning.training import (
 )
 
 __all__ = [
+    "OUTCOME_Q_ARTIFACT_SCHEMA",
+    "OUTCOME_Q_CHECKPOINT_RULE",
+    "LoadedOutcomeQArtifact",
+    "OutcomeQRows",
+    "OutcomeQRuntime",
+    "OutcomeQTrainingConfig",
+    "load_outcome_q_artifact",
+    "load_outcome_q_policy_factory",
+    "materialize_outcome_q_rows",
+    "outcome_q_preflight",
+    "outcome_q_runtime_identity",
+    "train_outcome_q",
     "OutcomeSourceError",
     "ENGINE_OUTCOME_SOURCE_SCHEMA",
     "EXPLORATION_TOKEN_IDENTITY",
