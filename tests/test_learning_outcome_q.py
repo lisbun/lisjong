@@ -9,6 +9,7 @@ runtime接続を固定する。
 import dataclasses
 import importlib.util
 import json
+import pickle
 import sys
 import tempfile
 import unittest
@@ -30,11 +31,13 @@ from lisjong.learning import (
     DatasetError,
     MissingLearningDependencyError,
     ModelArtifactError,
+    OutcomeQPolicyLoader,
     OutcomeQTrainingConfig,
     SemanticEnvelopeOffensePolicy,
     TrainingError,
     classify_semantic_envelope_result,
     evaluate_semantic_envelope_policy,
+    evaluate_semantic_envelope_policy_by_game,
     load_outcome_q_artifact,
     load_outcome_q_policy_factory,
     materialize_outcome_q_rows,
@@ -637,6 +640,53 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(evaluation["reference"]["disagreement_outside_survivors"], 0)
         self.assertEqual(classification["failures"], [])
+
+    def test_policy_loader_is_picklable_and_strictly_loads_the_artifact(self) -> None:
+        from lisjong.learning import LearnedPolicyError
+
+        loader = OutcomeQPolicyLoader(self.root / "artifact", self.artifact.identity)
+        restored = pickle.loads(pickle.dumps(loader))
+        self.assertEqual(restored, loader)
+        policy = restored()
+        self.assertIs(type(policy), SemanticEnvelopeOffensePolicy)
+        for decision in self.decisions:
+            self.assertEqual(
+                policy.decide(decision).action, self.runtime().decide(decision).action
+            )
+        with self.assertRaises(LearnedPolicyError):
+            OutcomeQPolicyLoader(self.root / "artifact", "0" * 64)()
+
+    def test_by_game_replay_with_the_q_loader_matches_the_sequential_replay(
+        self,
+    ) -> None:
+        record = read_source_record(
+            cf.write_candidate_source_record(self.root / "record-by-game")
+        )
+        expected = evaluate_semantic_envelope_policy(
+            self.runtime.create_policy(),
+            record,
+            ["TRAIN", "SELECT"],
+            reference=TwoStepUkeirePolicy(),
+        )
+        loader = OutcomeQPolicyLoader(self.root / "artifact", self.artifact.identity)
+        for workers in (1, 2):
+            with self.subTest(workers=workers):
+                evaluation = evaluate_semantic_envelope_policy_by_game(
+                    loader,
+                    [game.decisions for game in record.games],
+                    ["TRAIN", "SELECT"],
+                    workers=workers,
+                    reference_factory=TwoStepUkeirePolicy,
+                )
+                evaluation.pop("runtime_by_branch")
+                self.assertEqual(
+                    evaluation,
+                    {
+                        key: value
+                        for key, value in expected.items()
+                        if key != "runtime_by_branch"
+                    },
+                )
 
     def test_decision_context_is_the_only_input(self) -> None:
         decision = self.decisions[0]

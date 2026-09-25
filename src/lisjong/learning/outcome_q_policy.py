@@ -128,8 +128,30 @@ def load_outcome_q_policy_factory(path: str | Path) -> OutcomeQRuntime:
     return OutcomeQRuntime(artifact=artifact, module=module)
 
 
+@dataclass(frozen=True, slots=True)
+class OutcomeQPolicyLoader:
+    """process worker内でoutcome-Q Policyを生成するpicklableなfactory（Issue #209）。
+
+    artifact pathと期待するartifact identityだけを持ち、torch moduleやPolicy
+    instanceをprocess間で渡さない。呼び出すたびにartifactをstrict loadし、
+    identityが一致しなければfail closedする。
+    """
+
+    artifact_path: str | Path
+    artifact_identity: str
+
+    def __call__(self) -> SemanticEnvelopeOffensePolicy:
+        runtime = load_outcome_q_policy_factory(self.artifact_path)
+        if runtime.artifact_identity != self.artifact_identity:
+            raise LearnedPolicyError(
+                "outcome-Q artifact identity does not match the policy loader"
+            )
+        return runtime.create_policy()
+
+
 __all__ = [
     "INFERENCE_DEVICE",
+    "OutcomeQPolicyLoader",
     "OutcomeQRuntime",
     "load_outcome_q_policy_factory",
     "outcome_q_runtime_identity",
