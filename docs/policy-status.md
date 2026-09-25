@@ -104,7 +104,7 @@ Representative reference: [lisjong #161 final result](https://github.com/lisbun/
 
 ## `TerminalShantenProgressionMechanismRiichiDefensePolicy` — evaluated broad progression candidate
 
-current promoted baseline `MechanismRiichiDefenseYakuhaiCallPolicy` を exact parent とし、FiniteHorizon completion mass が全 root discard candidate で 0 の通常打牌 branch を horizon=3 の exact adaptive expected-terminal-shanten progression へ置換した broad hypothesis である。
+then-current promoted baseline `MechanismRiichiDefenseYakuhaiCallPolicy` を exact parent とし、FiniteHorizon completion mass が全 root discard candidate で 0 の通常打牌 branch を horizon=3 の exact adaptive expected-terminal-shanten progression へ置換した broad hypothesis である。
 
 Arena #252 では exact #170 semantics を変更せず、100 paired seed blocks / 400 games per arm の passive-x3 development evaluationを実施した。
 
