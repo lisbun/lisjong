@@ -831,6 +831,7 @@ class CrossPolicyPrivateImportTest(unittest.TestCase):
             "hand_value_tradeoff_mechanism_riichi_defense.py",
             "mechanism_riichi_defense_offensive_efficiency_diagnostic.py",
             "mechanism_riichi_defense_yakuhai_call.py",
+            "placement_aware_speed_call.py",
             "targeted_honor_release_terminal_progression.py",
             "terminal_shanten_progression_mechanism_riichi_defense.py",
             "two_step_ukeire.py",
