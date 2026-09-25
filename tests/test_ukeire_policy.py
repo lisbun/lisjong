@@ -1037,6 +1037,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",
                 "OpenHandYakuAwareCallPolicy",
+                "PlacementAwareSpeedCallPolicy",
                 "ShantenPolicy",
                 "TargetedHonorReleaseTerminalProgressionPolicy",
                 "TerminalShantenProgressionMechanismRiichiDefensePolicy",
