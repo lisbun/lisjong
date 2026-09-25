@@ -756,6 +756,43 @@ docstringを正本とする。
 - DIAGNOSTIC source（engineのみ）はallocationを持たず全splitが`DIAGNOSTIC`なので、
   TRAIN / SELECT / CALIBRATION rowを生まない。RiichiEnv schemaはDIAGNOSTICを受け付けない
 
+## L0.3 step D / E prep — outcome-Q trainer / artifact / runtime（#200）
+
+lisjong-project#79 Step D / Eのlisjong側codeを、scientific data（lisjong-arena#374）を使わずに先行して
+用意したもの。**real-data trainingは、#374が`ENGINE SCIENTIFIC SOURCE READBACK PASS`となり、
+かつ#200のDP-1（hyperparameter値）/ DP-2（checkpoint rule）が#79でfreezeされるまでblockする。**
+real sourceを読むCLI entry pointは持たない。
+
+```text
+実装    src/lisjong/learning/outcome_q_dataset.py    rows / preflight
+        src/lisjong/learning/outcome_q_training.py   one-shot MSE trainer
+        src/lisjong/learning/outcome_q_artifact.py   immutable artifact
+        src/lisjong/learning/outcome_q_policy.py     residual runtime
+test    tests/test_learning_outcome_q.py
+```
+
+```text
+read_outcome_source()（SCIENTIFICのみ） -> build_outcome_targets()（#193 contract）
+    -> materialize_outcome_q_rows()   #184 context + #189 full candidate encoding
+    -> outcome_q_preflight()          #79 §8 record / hard stop
+                                      （SELECTはcountだけ。targetは読まない）
+    -> train_outcome_q()              Q(context, selected candidate)へのMSE
+                                      #189 MLP（hidden 64）、Adam、明示config
+                                      SELECT MSE最小のepoch（同値は最初）
+    -> lisjong-offense-l0.3-outcome-q-artifact-v1
+    -> load_outcome_q_policy_factory() -> SemanticEnvelopeOffensePolicy（変更しない）
+```
+
+- lossはrowごとのbehavior-selected candidate 1件だけにかかる。選ばれなかったsurvivorは
+  入力にもlossにも現れない
+- `OutcomeQTrainingConfig`はscientific defaultを持たない。modelは`OUTCOME_Q_MODEL`で固定である
+- runtime identityは#79 A2のdigest
+  `{"outcome_q_artifact": <artifact identity>, "selection_policy": SEMANTIC_ENVELOPE_IDENTITY}`
+- artifactのdiagnostics（SELECT MSE、survivor間Q spread、Q argmaxがcanonical-firstと異なる割合、
+  prediction / target平均・分散）はgateではない
+- Step Eのsafety replayは既存の`evaluate_semantic_envelope_policy()`がQ runtimeで
+  そのまま動く。使用するdevelopment dataとterminal labelは未凍結（#200 DP-4）
+
 ## Optional ML dependency boundary
 
 ```text
