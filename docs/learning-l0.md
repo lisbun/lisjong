@@ -793,6 +793,25 @@ read_outcome_source()（SCIENTIFICのみ） -> build_outcome_targets()（#193 co
 - Step Eのsafety replayは既存の`evaluate_semantic_envelope_policy()`がQ runtimeで
   そのまま動く。使用するdevelopment dataとterminal labelは未凍結（#200 DP-4）
 
+### strict source readのprocess並列化（#209）
+
+`read_outcome_source(path, *, workers=1)`は、game単位の検証（`_read_game()`）を
+`workers`個のprocessで並列に実行できる。defaultの`workers=1`は従来どおり親processで
+逐次に読み、worker poolを起動しない。
+
+- manifest、game summary、directory集合、seed一意性、allocation bindingなどcross-gameの
+  検証は常に親processで、game検証より前に行う
+- 結果はgame_ordinal順に並べ直す。検証済みsource（identity、decision順、
+  `selected_action`と`legal_actions`の`is`関係）は`workers`によらず同一である
+- 複数gameが不正な場合も、報告するerrorは`workers`によらず最小game_ordinalの失敗
+  gameのもの（同じtype / message）である。部分sourceは返さない。失敗時は未開始taskを
+  cancelし、workerの終了を待ってから送出する
+- 支配的なcostはexploration selectionの再検証（pure Python）なので、threadではなく
+  processを使う
+- `workers > 1`を使うoperator scriptは`if __name__ == "__main__":` guardの下で呼ぶ
+  （CPython 3.14のLinux defaultは`forkserver`）。guardがない場合はworker起動が失敗し、
+  `BrokenProcessPool`でfail closedする
+
 ## Optional ML dependency boundary
 
 ```text

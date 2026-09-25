@@ -110,6 +110,7 @@ targetはlineageによらず`points_before_kyoku` / `points_after_kyoku`だけ�
 import statistics
 from collections import Counter
 from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -989,12 +990,55 @@ def _read_allocation_bindings(
     return bindings
 
 
-def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
+def _read_game_task(root: Path, summary: dict[str, object], schema: str) -> OutcomeGame:
+    """process worker用のtop-level entry（picklableであることだけが目的）。"""
+    return _read_game(
+        root / f"game-{summary['game_ordinal']:03d}", summary, schema=schema
+    )
+
+
+def _read_games(
+    root: Path, summaries: list[dict[str, object]], *, schema: str, workers: int
+) -> tuple[OutcomeGame, ...]:
+    """game単位の検証をgame_ordinal順に行い、game_ordinal順のtupleを返す。
+
+    `workers == 1`は従来どおり親processで逐次に読む。`workers > 1`では
+    `_read_game()`だけをprocess workerで実行する。`Executor.map()`は入力順で
+    結果を返し、失敗したgameの例外はその順に再送出されるため、報告される
+    errorは`workers`によらず最小game_ordinalの失敗gameのものになる。
+    失敗・中断時は未開始taskをcancelし、workerの終了を待ってから送出する。
+    """
+    if workers == 1:
+        return tuple(_read_game_task(root, summary, schema) for summary in summaries)
+    executor = ProcessPoolExecutor(max_workers=min(workers, len(summaries)))
+    try:
+        return tuple(
+            executor.map(
+                _read_game_task,
+                [root] * len(summaries),
+                summaries,
+                [schema] * len(summaries),
+            )
+        )
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def read_outcome_source(path: str | Path, *, workers: int = 1) -> FocalOutcomeSource:
     """focal outcome source directoryをstrict readし、検証済みsourceを返す。
 
     validationは全体としてfail closedである。1 rowでも不整合があれば、
     成功分だけを返さず例外を送出する。
+
+    `workers`はgame単位検証（`_read_game()`）のprocess数である（Issue #209）。
+    manifest、game summary、directory集合、seed一意性、allocation bindingの
+    cross-game検証は常に親processでgame検証より先に行う。結果とerrorは
+    `workers`によらない。`workers > 1`はprocess workerを起動するため、
+    呼び出し側scriptは`if __name__ == "__main__":` guardの下で呼ぶ必要がある
+    （3.14のforkserver / spawn）。
     """
+    if type(workers) is not int or workers < 1:
+        raise ValueError("workers must be an int >= 1")
     root = Path(path)
     if not root.is_dir():
         raise OutcomeSourceError(f"outcome source directory does not exist: {root}")
@@ -1032,10 +1076,7 @@ def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
         seeds_by_split=seeds_by_split,
     )
 
-    games = tuple(
-        _read_game(root / f"game-{summary['game_ordinal']:03d}", summary, schema=schema)
-        for summary in summaries
-    )
+    games = _read_games(root, summaries, schema=schema, workers=workers)
     return FocalOutcomeSource(
         schema=schema,
         identity=manifest["identity"],
