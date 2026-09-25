@@ -27,9 +27,23 @@ python -m lisjong.learning verify-candidate-artifact --artifact <artifact>
 python -m lisjong.learning evaluate-candidate-scorer     --artifact <artifact> --source-record <source-record> --split OFFLINE-EVAL
 ```
 
-`train` / `train-candidate-scorer` / `evaluate-candidate-scorer`だけがoptional
-ML runtimeを必要とする。dataset materializationとartifact検証はML runtimeなしで
-実行できる。
+L0.3 outcome-Q path（lisjong-project#79 step D）は次のsubcommandで扱う。
+
+```text
+python -m lisjong.learning outcome-q-preflight --source <outcome-source>
+
+python -m lisjong.learning train-outcome-q     --source <outcome-source> --output <artifact>     --expected-source-identity <#374 readback source identity>
+
+python -m lisjong.learning verify-outcome-q-artifact --artifact <artifact>
+```
+
+`train-outcome-q`はfrozen config（`FROZEN_OUTCOME_Q_TRAINING_CONFIG`）だけを使い、
+hyperparameter flagを持たない。scientific sourceでの実行は
+lisbun/lisjong-arena#374の`ENGINE SCIENTIFIC SOURCE READBACK PASS`後に限る。
+
+`train` / `train-candidate-scorer` / `evaluate-candidate-scorer` /
+`train-outcome-q`だけがoptional ML runtimeを必要とする。dataset
+materialization、preflight、artifact検証はML runtimeなしで実行できる。
 """
 
 import argparse
@@ -55,6 +69,13 @@ from lisjong.learning.candidate_training import (
 from lisjong.learning.dataset import materialize_dataset, read_dataset
 from lisjong.learning.errors import LearningError
 from lisjong.learning.model import ModelConfig
+from lisjong.learning.outcome_q_artifact import load_outcome_q_artifact
+from lisjong.learning.outcome_q_dataset import outcome_q_preflight
+from lisjong.learning.outcome_q_training import (
+    FROZEN_OUTCOME_Q_TRAINING_CONFIG,
+    train_outcome_q,
+)
+from lisjong.learning.outcome_source import read_outcome_source
 from lisjong.learning.source_record import read_source_record
 from lisjong.learning.training import BehaviorCloningConfig, train_behavior_cloning
 
@@ -129,6 +150,26 @@ def _build_parser() -> argparse.ArgumentParser:
     candidate_evaluate.add_argument("--artifact", required=True)
     candidate_evaluate.add_argument("--source-record", required=True)
     candidate_evaluate.add_argument("--split", required=True, action="append")
+
+    q_preflight = commands.add_parser(
+        "outcome-q-preflight",
+        help="strict-read an L0.3 outcome source and report the #79 training preflight",
+    )
+    q_preflight.add_argument("--source", required=True)
+
+    q_train = commands.add_parser(
+        "train-outcome-q",
+        help="run the one frozen L0.3 outcome-Q training and write an artifact",
+    )
+    q_train.add_argument("--source", required=True)
+    q_train.add_argument("--output", required=True)
+    q_train.add_argument("--expected-source-identity", required=True)
+
+    q_verify = commands.add_parser(
+        "verify-outcome-q-artifact",
+        help="strict-load an L0.3 outcome-Q artifact without an ML runtime",
+    )
+    q_verify.add_argument("--artifact", required=True)
 
     return parser
 
@@ -247,6 +288,41 @@ def _evaluate_candidates(arguments) -> dict[str, object]:
     }
 
 
+def _outcome_q_preflight(arguments) -> dict[str, object]:
+    return outcome_q_preflight(read_outcome_source(arguments.source))
+
+
+def _train_outcome_q(arguments) -> dict[str, object]:
+    source = read_outcome_source(arguments.source)
+    artifact = train_outcome_q(
+        source,
+        FROZEN_OUTCOME_Q_TRAINING_CONFIG,
+        arguments.output,
+        expected_source_identity=arguments.expected_source_identity,
+    )
+    return {
+        "artifact_identity": artifact.identity,
+        "output": str(arguments.output),
+        "selected_epoch": artifact.manifest["training"]["selected_epoch"],
+        "source_identity": artifact.source_identity,
+        "training_diagnostics": artifact.manifest["training"]["diagnostics"],
+        "training_set": artifact.manifest["training_set"],
+    }
+
+
+def _verify_outcome_q(arguments) -> dict[str, object]:
+    artifact = load_outcome_q_artifact(arguments.artifact)
+    return {
+        "artifact_identity": artifact.identity,
+        "encoding": artifact.manifest["encoding"],
+        "feature": artifact.manifest["feature"],
+        "label": artifact.manifest["label"],
+        "model": artifact.manifest["model"],
+        "source_identity": artifact.source_identity,
+        "training_set": artifact.manifest["training_set"],
+    }
+
+
 def _emit(summary: dict[str, object]) -> None:
     """summaryをUTF-8のcanonical JSONとしてstdoutへ書く。
 
@@ -273,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
         "train-candidate-scorer": _train_candidates,
         "verify-candidate-artifact": _verify_candidates,
         "evaluate-candidate-scorer": _evaluate_candidates,
+        "outcome-q-preflight": _outcome_q_preflight,
+        "train-outcome-q": _train_outcome_q,
+        "verify-outcome-q-artifact": _verify_outcome_q,
     }
     try:
         summary = handlers[arguments.command](arguments)

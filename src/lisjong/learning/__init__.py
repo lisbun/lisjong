@@ -3,7 +3,9 @@
 Issue #184のLearning L0 vertical sliceと、Issue #189のL0.2 candidate-centric
 Learned Offense Policy（deterministic O0 guard + learned normal-discard candidate
 scorer）、Issue #191のL0.2a semantic-envelope Policy（exact牌効率hierarchyを
-selection constraintとし、#189 scorerはresidual choiceだけを担当）を提供する。
+selection constraintとし、#189 scorerはresidual choiceだけを担当）、
+lisjong-project#79 L0.3のoutcome source consumer / selected-action MC Q trainer /
+outcome-Q artifact / Q residual runtimeを提供する。
 
 ```text
 versioned player-safe source record   (lisjong-arena producer)
@@ -141,6 +143,32 @@ from lisjong.learning.features import (
     feature_specification,
 )
 from lisjong.learning.model import MODEL_ARCHITECTURE, ModelConfig
+from lisjong.learning.outcome_q_artifact import (
+    OUTCOME_Q_ARTIFACT_SCHEMA,
+    LoadedOutcomeQArtifact,
+    load_outcome_q_artifact,
+)
+from lisjong.learning.outcome_q_dataset import (
+    OutcomeQTrainingSet,
+    build_outcome_q_training_set,
+    outcome_q_preflight,
+)
+from lisjong.learning.outcome_q_diagnostics import (
+    OUTCOME_Q_SERVING_INVALID,
+    OUTCOME_Q_SERVING_QUALIFIED,
+    classify_outcome_q_serving_result,
+    evaluate_outcome_q_policy,
+)
+from lisjong.learning.outcome_q_policy import (
+    OutcomeQRuntime,
+    load_outcome_q_policy_factory,
+    outcome_q_runtime_identity,
+)
+from lisjong.learning.outcome_q_training import (
+    FROZEN_OUTCOME_Q_TRAINING_CONFIG,
+    OutcomeQTrainingConfig,
+    train_outcome_q,
+)
 from lisjong.learning.outcome_source import (
     ENGINE_OUTCOME_SOURCE_SCHEMA,
     EXPLORATION_TOKEN_IDENTITY,
@@ -188,6 +216,22 @@ from lisjong.learning.training import (
 )
 
 __all__ = [
+    "FROZEN_OUTCOME_Q_TRAINING_CONFIG",
+    "OUTCOME_Q_ARTIFACT_SCHEMA",
+    "OUTCOME_Q_SERVING_INVALID",
+    "OUTCOME_Q_SERVING_QUALIFIED",
+    "LoadedOutcomeQArtifact",
+    "OutcomeQRuntime",
+    "OutcomeQTrainingConfig",
+    "OutcomeQTrainingSet",
+    "build_outcome_q_training_set",
+    "classify_outcome_q_serving_result",
+    "evaluate_outcome_q_policy",
+    "load_outcome_q_artifact",
+    "load_outcome_q_policy_factory",
+    "outcome_q_preflight",
+    "outcome_q_runtime_identity",
+    "train_outcome_q",
     "OutcomeSourceError",
     "ENGINE_OUTCOME_SOURCE_SCHEMA",
     "EXPLORATION_TOKEN_IDENTITY",

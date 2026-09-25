@@ -1047,6 +1047,95 @@ def read_outcome_source(path: str | Path) -> FocalOutcomeSource:
     )
 
 
+_PROVENANCE_FIELDS = frozenset(
+    {
+        "allocation_bindings",
+        "behavior",
+        "identity",
+        "population",
+        "population_role",
+        "schema",
+        "source_contract_digest",
+    }
+)
+_PROVENANCE_POPULATION_FIELDS = frozenset(
+    {"focal_seat", "game_ordinal", "seed", "split"}
+)
+
+
+def validate_outcome_source_provenance(
+    value: object, *, context: str = "source"
+) -> dict[str, object]:
+    """`FocalOutcomeSource.provenance()`が生成するblockをstrictに検証する。
+
+    source directoryを再読込せず、artifact等へbindされたprovenanceが、
+    strict readを通ったsourceと同じ構造的制約（schema、behavior、focal rotation、
+    seed一意性、split / allocation binding）を満たすことを確認する。
+    """
+    block = expect_object(value, _PROVENANCE_FIELDS, OutcomeSourceError, context)
+    schema = block["schema"]
+    if schema not in _SUPPORTED_SCHEMAS:
+        raise UnsupportedSourceSchemaError(
+            f"unsupported focal outcome source schema: {schema!r}"
+        )
+    role = expect_str(
+        block["population_role"], OutcomeSourceError, f"{context}.population_role"
+    )
+    role_splits = _role_splits(schema)
+    if role not in role_splits:
+        raise OutcomeSourceError(
+            f"{context}.population_role is not supported: {role!r}"
+        )
+    if block["behavior"] != EXPECTED_BEHAVIOR:
+        raise OutcomeSourceError(f"{context}.behavior identity mismatch")
+    expect_digest(block["identity"], OutcomeSourceError, f"{context}.identity")
+    expect_digest(
+        block["source_contract_digest"],
+        OutcomeSourceError,
+        f"{context}.source_contract_digest",
+    )
+    population = expect_list(
+        block["population"], OutcomeSourceError, f"{context}.population"
+    )
+    if not population:
+        raise OutcomeSourceError(f"{context}.population must not be empty")
+    seeds: set[int] = set()
+    seeds_by_split: dict[str, list[int]] = {}
+    for ordinal, entry in enumerate(population):
+        entry_context = f"{context}.population[{ordinal}]"
+        item = expect_object(
+            entry, _PROVENANCE_POPULATION_FIELDS, OutcomeSourceError, entry_context
+        )
+        game_ordinal = expect_non_negative_int(
+            item["game_ordinal"], OutcomeSourceError, f"{entry_context}.game_ordinal"
+        )
+        if game_ordinal != ordinal:
+            raise OutcomeSourceError(f"{entry_context} game ordinal is not contiguous")
+        focal_seat = expect_non_negative_int(
+            item["focal_seat"], OutcomeSourceError, f"{entry_context}.focal_seat"
+        )
+        if focal_seat != ordinal % 4:
+            raise OutcomeSourceError(f"{entry_context} violates the focal rotation")
+        seed = expect_non_negative_int(
+            item["seed"], OutcomeSourceError, f"{entry_context}.seed"
+        )
+        if item["split"] not in role_splits[role]:
+            raise OutcomeSourceError(
+                f"{entry_context}.split is not a {role} split: {item['split']!r}"
+            )
+        if seed in seeds:
+            raise OutcomeSourceError(f"{context}.population reuses a seed")
+        seeds.add(seed)
+        seeds_by_split.setdefault(item["split"], []).append(seed)
+    _read_allocation_bindings(
+        block["allocation_bindings"],
+        schema=schema,
+        population_role=role,
+        seeds_by_split=seeds_by_split,
+    )
+    return block
+
+
 # ---------------------------------------------------------------------------
 # target
 # ---------------------------------------------------------------------------
@@ -1171,4 +1260,5 @@ __all__ = [
     "outcome_target_q",
     "read_outcome_source",
     "summarize_outcome_targets",
+    "validate_outcome_source_provenance",
 ]

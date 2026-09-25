@@ -53,7 +53,11 @@ from lisjong.learning.candidate_encoding import (
     encode_candidates,
 )
 from lisjong.learning.candidate_features import DiscardCandidateFeatures
-from lisjong.learning.candidate_model import build_scorer_module, score_candidates
+from lisjong.learning.candidate_model import (
+    CandidateScorerConfig,
+    build_scorer_module,
+    score_candidates,
+)
 from lisjong.learning.errors import LearnedPolicyError
 from lisjong.learning.features import FEATURE_DIMENSION, build_player_safe_feature
 from lisjong.learning.model import require_torch
@@ -139,6 +143,53 @@ class LearnedCandidateOffensePolicy:
         return self.decide(decision).action
 
 
+def build_inference_module(config: CandidateScorerConfig, weights):
+    """strict load済みweightsからCPU / eval mode / 勾配なしのscorer moduleを作る。
+
+    #189 runtimeとL0.3 outcome-Q runtimeが同じ推論前提を共有する。
+    """
+    torch = require_torch()
+    module = build_scorer_module(config, weights)
+    if module.training:
+        raise LearnedPolicyError("inference module must be in eval mode")
+    for name, parameter in module.named_parameters():
+        parameter.requires_grad_(False)
+        if parameter.device.type != INFERENCE_DEVICE:
+            raise LearnedPolicyError(f"inference parameter {name} is not on the CPU")
+    with torch.inference_mode():
+        for name, parameter in module.named_parameters():
+            if not bool(torch.isfinite(parameter).all()):
+                raise LearnedPolicyError(
+                    f"inference parameter {name} contains a non-finite value"
+                )
+    return module
+
+
+def score_with_module(
+    module,
+    context: tuple[float, ...],
+    candidates: tuple[tuple[float, ...], ...],
+) -> tuple[float, ...]:
+    """1 decisionのshared contextとcandidate vector列からscore列を返す。"""
+    if len(context) != FEATURE_DIMENSION:
+        raise LearnedPolicyError("shared context has an unexpected dimension")
+    if not candidates:
+        raise LearnedPolicyError("normal discard decision has no candidate")
+    if any(len(vector) != CANDIDATE_ENCODING_DIMENSION for vector in candidates):
+        raise LearnedPolicyError("candidate vector has an unexpected dimension")
+    torch = require_torch()
+    with torch.inference_mode():
+        output = score_candidates(
+            module,
+            torch.tensor([list(context)], dtype=torch.float32),
+            torch.tensor([list(vector) for vector in candidates], dtype=torch.float32),
+            torch.zeros(len(candidates), dtype=torch.long),
+        )
+    if tuple(output.shape) != (len(candidates),):
+        raise LearnedPolicyError("scorer produced an unexpected output shape")
+    return tuple(output.tolist())
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateScorerRuntime:
     """1回だけloadしたscorerと、そこからPolicyを生成するfactory。"""
@@ -157,25 +208,7 @@ class CandidateScorerRuntime:
         candidates: tuple[tuple[float, ...], ...],
     ) -> tuple[float, ...]:
         """1 decisionのshared contextとcandidate vector列からscore列を返す。"""
-        if len(context) != FEATURE_DIMENSION:
-            raise LearnedPolicyError("shared context has an unexpected dimension")
-        if not candidates:
-            raise LearnedPolicyError("normal discard decision has no candidate")
-        if any(len(vector) != CANDIDATE_ENCODING_DIMENSION for vector in candidates):
-            raise LearnedPolicyError("candidate vector has an unexpected dimension")
-        torch = require_torch()
-        with torch.inference_mode():
-            output = score_candidates(
-                self.module,
-                torch.tensor([list(context)], dtype=torch.float32),
-                torch.tensor(
-                    [list(vector) for vector in candidates], dtype=torch.float32
-                ),
-                torch.zeros(len(candidates), dtype=torch.long),
-            )
-        if tuple(output.shape) != (len(candidates),):
-            raise LearnedPolicyError("scorer produced an unexpected output shape")
-        return tuple(output.tolist())
+        return score_with_module(self.module, context, candidates)
 
     def create_policy(self) -> LearnedCandidateOffensePolicy:
         """game / seatごとのfresh Policy instanceを返す。"""
@@ -187,21 +220,9 @@ class CandidateScorerRuntime:
 
 def load_candidate_scorer_policy_factory(path: str | Path) -> CandidateScorerRuntime:
     """artifactをstrict loadし、Policy factoryとして使えるruntimeを返す。"""
-    torch = require_torch()
+    require_torch()
     artifact = load_candidate_artifact(path)
-    module = build_scorer_module(artifact.model_config, artifact.weights)
-    if module.training:
-        raise LearnedPolicyError("inference module must be in eval mode")
-    for name, parameter in module.named_parameters():
-        parameter.requires_grad_(False)
-        if parameter.device.type != INFERENCE_DEVICE:
-            raise LearnedPolicyError(f"inference parameter {name} is not on the CPU")
-    with torch.inference_mode():
-        for name, parameter in module.named_parameters():
-            if not bool(torch.isfinite(parameter).all()):
-                raise LearnedPolicyError(
-                    f"inference parameter {name} contains a non-finite value"
-                )
+    module = build_inference_module(artifact.model_config, artifact.weights)
     return CandidateScorerRuntime(artifact=artifact, module=module)
 
 
@@ -210,5 +231,7 @@ __all__ = [
     "CandidateScorerDecision",
     "CandidateScorerRuntime",
     "LearnedCandidateOffensePolicy",
+    "build_inference_module",
     "load_candidate_scorer_policy_factory",
+    "score_with_module",
 ]

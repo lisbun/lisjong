@@ -756,6 +756,92 @@ docstringを正本とする。
 - DIAGNOSTIC source（engineのみ）はallocationを持たず全splitが`DIAGNOSTIC`なので、
   TRAIN / SELECT / CALIBRATION rowを生まない。RiichiEnv schemaはDIAGNOSTICを受け付けない
 
+## L0.3 step D — outcome-Q trainer / artifact / Q residual runtime（#79 D / E plumbing）
+
+lisjong-project#79 §4〜§10のlisjong所有分（Q trainer、MSE objective、immutable
+outcome-Q artifact、Q residual runtime、training preflight、cheap serving
+qualification）を、synthetic fixtureだけで検証したplumbingとして実装する。
+
+```text
+実装    src/lisjong/learning/outcome_q_dataset.py      preflight / training set
+        src/lisjong/learning/outcome_q_training.py     frozen config / trainer
+        src/lisjong/learning/outcome_q_artifact.py     immutable artifact
+        src/lisjong/learning/outcome_q_policy.py       Q residual runtime
+        src/lisjong/learning/outcome_q_diagnostics.py  cheap serving qualification
+        tools/qualify_outcome_q.py                     TwoStep reference付きE実行
+test    tests/test_learning_outcome_q.py
+```
+
+**Training boundary**。実際のscientific trainingは、lisbun/lisjong-arena#374が
+`ENGINE SCIENTIFIC SOURCE READBACK PASS`を記録するまで行わない。
+`train_outcome_q()` / `train-outcome-q`は`expected_source_identity`（#374 readback
+が記録したsource identity）を必須とし、読んだsourceと一致しなければ何も書かずに
+fail closedする。preflightがhard stopを1件でも返した場合も書かない。
+
+**Preflight（#79 §8）**。`outcome_q_preflight(source)`はsplit別に
+`summarize_outcome_targets()`の値（eligible row、unique eligible kyoku、survivor数
+分布、canonical-first / non-canonical-first support、target分布）と、survivor内
+選択位置分布・選択tile typeの偏りを返す。hard stopは次だけである。
+
+```text
+population_role != SCIENTIFIC / split != {TRAIN, SELECT}
+TRAIN / SELECT seed overlap
+splitにeligible rowがない / 非有限target / selectedがsurvivor外
+TRAIN canonical-first < 20% または non-canonical-first < 20%
+```
+
+**Training set**。eligible row（DISCARD かつ #191 survivor >= 2）だけをsource順で
+使う。#184 shared contextと#189 full candidate tuple encoding（relative gapを
+servingと同じにするためtuple全体をencode）、behavior-selected candidate index、
+`target_q`を持つ。sourceはimmutable / strict-readなので再publishせず、identity
+（source identity、feature / encoding / label block、row provenance / target、
+payload digest）をartifactへbindする。
+
+**Objective / trainer（#79 §5〜§7）**。#189と同じcandidate-scorer MLP
+（`lisjong-offense-l0.2-candidate-scorer-mlp-v1`、hidden width 64固定）で、
+`MSE(Q(context, selected candidate), target_q)`をTRAINでoptimizeする。選ばれ
+なかったsurvivorにはlossを掛けない。SELECTはepoch選択だけに使い、SELECT MSE
+最小のepoch（同値は早いepoch）を採用する。executable entry pointが使うのは
+`FROZEN_OUTCOME_Q_TRAINING_CONFIG`だけで、hyperparameter flagはない。
+
+```text
+optimizer     Adam（deterministic CPU、1 thread）
+learning rate 1.0e-3      weight decay 0.0
+batch size    256 rows    epochs       20
+seed          0           checkpoint   SELECT MSE最小epoch
+```
+
+値は#189 candidate scorerと同じであり、scientific trainingの前にproject Issueで
+freezeを確認する。SELECT diagnosticsとしてSELECT MSE、TRAIN target平均による
+constant baseline MSE、prediction / target平均、survivor内Q spread、Q argmaxが
+canonical-first以外になる割合をartifactへ記録する（gateではない）。
+
+**Artifact（#79 §9）**。`lisjong-offense-l0.3-outcome-q-artifact-v1`。outcome source
+provenance（schema、identity、SCIENTIFIC role、behavior、focal rotation population、
+TRAIN / SELECT allocation binding）、training set identity / split別row数 /
+unique eligible kyoku、#184 feature、#187 / #189 encoding / request policy、
+#191 semantic envelope identity、O0 eligibility、target / objective identity、
+model / parameter layout、training config / selected epoch、weights digestをbindする。
+既存pathを上書きせず、不整合はstrict load時にfail closedする。#189 artifact
+loaderはこのartifactを受け付けない。
+
+**Q residual runtime（#79 A2）**。`OutcomeQRuntime.create_policy()`は既存の
+`SemanticEnvelopeOffensePolicy(self)`を返し、baseline（`ConstantResidualRuntime`）
+と同じPolicy code pathを通る。runtime identityは
+`value_digest({"outcome_q_artifact": <artifact identity>, "selection_policy": SEMANTIC_ENVELOPE_IDENTITY})`
+であり、artifact identity、#191 `semantic_envelope_runtime_identity()`、constant-zero
+baseline identityのいずれとも衝突しない。#189 runtimeとは`build_inference_module()` /
+`score_with_module()`を共有するだけで、#189 behaviorは変えない。
+
+**Cheap serving qualification（#79 §10、step E）**。`evaluate_outcome_q_policy()`は
+focal outcome sourceの指定splitへserving pathを適用し、#191
+`evaluate_semantic_envelope_policy()`のguard / regret / reference oracle gateを
+そのまま再利用する。加えてeligible rowでselected action inside survivors 1.000と、
+Policy選択がsurvivor内Q argmax（canonical tie-break）と一致することをgateにする。
+Q Policy != canonical-first割合、survivor内Q spread、behavior action上のQ MSE、
+prediction分位bin calibrationは診断値である。terminal classificationは
+`OUTCOME-Q SERVING QUALIFIED` / `OUTCOME-Q SERVING INVALID`で、strengthの証明ではない。
+
 ## Optional ML dependency boundary
 
 ```text
@@ -798,10 +884,22 @@ python -m lisjong.learning verify-candidate-artifact --artifact <candidate-artif
 python -m lisjong.learning evaluate-candidate-scorer \
     --artifact <candidate-artifact> --source-record <source-record> \
     --split OFFLINE-EVAL
+
+python -m lisjong.learning outcome-q-preflight --source <outcome-source>
+
+python -m lisjong.learning train-outcome-q \
+    --source <outcome-source> --output <outcome-q-artifact> \
+    --expected-source-identity <#374 readback source identity>
+
+python -m lisjong.learning verify-outcome-q-artifact --artifact <outcome-q-artifact>
+
+python tools/qualify_outcome_q.py \
+    --artifact <outcome-q-artifact> --source <outcome-source> --split SELECT
 ```
 
-`train` / `train-candidate-scorer` / `evaluate-candidate-scorer`だけがoptional
-ML runtimeを必要とする。`evaluate-candidate-scorer`はartifactのtraining /
+`train` / `train-candidate-scorer` / `evaluate-candidate-scorer` /
+`train-outcome-q` / `tools/qualify_outcome_q.py`だけがoptional ML runtimeを
+必要とする。`evaluate-candidate-scorer`はartifactのtraining /
 selection splitを評価splitに指定するとfail closedし、source record identityが
 artifactと一致することを要求する。
 

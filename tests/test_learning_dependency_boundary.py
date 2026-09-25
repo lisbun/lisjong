@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import candidate_fixtures
 import learning_fixtures as fixtures
+import outcome_fixtures
 
 from lisjong.learning import (
     BehaviorCloningConfig,
@@ -40,6 +41,24 @@ from lisjong.learning import (
     write_model_artifact,
 )
 from lisjong.learning.candidate_dataset import CANDIDATE_TRAINING_OBJECTIVE
+from lisjong.learning.outcome_q_artifact import (
+    load_outcome_q_artifact,
+    write_outcome_q_artifact,
+)
+from lisjong.learning.outcome_q_dataset import (
+    PREFLIGHT_PASS,
+    build_outcome_q_training_set,
+    outcome_q_preflight,
+)
+from lisjong.learning.outcome_q_policy import load_outcome_q_policy_factory
+from lisjong.learning.outcome_q_training import (
+    OutcomeQTrainingConfig,
+    train_outcome_q,
+)
+from lisjong.learning.outcome_source import (
+    OUTCOME_OBJECTIVE_IDENTITY,
+    read_outcome_source,
+)
 
 _BLOCKER = """
 import sys
@@ -79,6 +98,11 @@ _LEARNING_MODULES = (
     "lisjong.learning.errors",
     "lisjong.learning.features",
     "lisjong.learning.model",
+    "lisjong.learning.outcome_q_artifact",
+    "lisjong.learning.outcome_q_dataset",
+    "lisjong.learning.outcome_q_diagnostics",
+    "lisjong.learning.outcome_q_policy",
+    "lisjong.learning.outcome_q_training",
     "lisjong.learning.outcome_source",
     "lisjong.learning.policy",
     "lisjong.learning.residual_baseline",
@@ -238,6 +262,50 @@ class CandidateScorerMLRuntimeRequirementTests(unittest.TestCase):
         with patch.dict(sys.modules, {"torch": None}):
             with self.assertRaises(MissingLearningDependencyError):
                 load_candidate_scorer_policy_factory(self.root / "artifact")
+
+
+class OutcomeQMLRuntimeRequirementTests(unittest.TestCase):
+    """lisjong-project#79 step D outcome-Q pathのoptional ML dependency境界。"""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.model = CandidateScorerConfig(hidden_width=64)
+        source_path = outcome_fixtures.write_engine_outcome_source(self.root / "source")
+        with patch.dict(sys.modules, {"torch": None}):
+            self.source = read_outcome_source(source_path)
+            write_outcome_q_artifact(
+                self.root / "artifact",
+                training_set=build_outcome_q_training_set(self.source),
+                model_config=self.model,
+                training=fixtures.training_block(objective=OUTCOME_OBJECTIVE_IDENTITY),
+                weights=fixtures.zero_weights(self.model),
+            )
+
+    def test_non_ml_path_runs_without_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            report = outcome_q_preflight(self.source)
+            artifact = load_outcome_q_artifact(self.root / "artifact")
+
+        self.assertEqual(report["outcome"], PREFLIGHT_PASS)
+        self.assertEqual(artifact.source_identity, self.source.identity)
+
+    def test_outcome_q_training_requires_the_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                train_outcome_q(
+                    self.source,
+                    OutcomeQTrainingConfig(epochs=1),
+                    self.root / "trained",
+                    expected_source_identity=self.source.identity,
+                )
+        self.assertFalse((self.root / "trained").exists())
+
+    def test_outcome_q_inference_requires_the_ml_runtime(self) -> None:
+        with patch.dict(sys.modules, {"torch": None}):
+            with self.assertRaises(MissingLearningDependencyError):
+                load_outcome_q_policy_factory(self.root / "artifact")
 
 
 class NoArenaRuntimeDependencyTests(unittest.TestCase):
