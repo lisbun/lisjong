@@ -758,7 +758,7 @@ docstringを正本とする。
 
 ## L0.3 step D / E prep — outcome-Q trainer / artifact / runtime（#200）
 
-#79 Step D / Eのlisjong側codeを、scientific data（lisjong-arena#374）を使わずに先行して
+lisjong-project#79 Step D / Eのlisjong側codeを、scientific data（lisjong-arena#374）を使わずに先行して
 用意したもの。**real-data trainingは、#374が`ENGINE SCIENTIFIC SOURCE READBACK PASS`となり、
 かつ#200のDP-1（hyperparameter値）/ DP-2（checkpoint rule）が#79でfreezeされるまでblockする。**
 real sourceを読むCLI entry pointは持たない。
