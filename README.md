@@ -254,6 +254,8 @@ $env:LISJONG_SHANTEN_BACKEND = "rust"
 
 `rust`を指定してnative拡張を読み込めない場合はPythonへfallbackせず起動時に失敗します。
 結果・同値性・対応環境は [Rust backend試作記録](docs/rust-backend-prototype.md) を参照してください。
+AWS Arena worker（Amazon Linux 2023 x86_64 / CPython 3.14）向けのcompiler不要なwheelは、
+[Rust backend wheel配布記録](docs/rust-backend-distribution.md) を参照してください。
 
 `lisjong` 自体はRiichiEnv / RiichiLab execution runtimeを所有しません。
 external/local integration testや実対局の実行方法は

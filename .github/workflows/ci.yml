@@ -85,25 +85,33 @@ jobs:
       - name: Run reference validation
         run: python -m unittest discover -s reference_tests -v --durations 30
 
-  native-backend:
-    # Issue #213: opt-in Rust shanten backend prototype. The default install and
-    # the jobs above stay Python-only; this job builds the native extension and
-    # checks it against the Python backend and the independent oracle.
-    name: native backend (opt-in)
+  native-wheel:
+    # Issue #216: build the opt-in Rust shanten backend as one prebuilt wheel for
+    # the single target environment (the lisjong-arena AWS worker: Amazon Linux
+    # 2023, x86_64, dnf CPython 3.14). manylinux_2_28 needs glibc >= 2.28;
+    # AL2023 ships 2.34. The default install and the jobs above stay Python-only.
+    name: native wheel (cp314 manylinux_2_28 x86_64)
     runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
     timeout-minutes: 20
+    env:
+      # Embedded as _lisjong_native.SOURCE_REVISION (the checked-out commit).
+      LISJONG_NATIVE_SOURCE_REVISION: ${{ github.sha }}
+      PYTHON: /opt/python/cp314-cp314/bin/python
+      MATURIN_VERSION: "1.15.0"
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-          cache: pip
+      - name: Install the pinned Rust toolchain
+        working-directory: native
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs             | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
 
-      - name: Show pinned Rust toolchain
+      - name: Show toolchain
         working-directory: native
         run: rustup show active-toolchain && rustc --version && cargo --version
 
@@ -111,18 +119,98 @@ jobs:
         working-directory: native
         run: cargo fmt --check
 
-      - name: Install package, development tools, and native backend
+      - name: Build wheel
+        working-directory: native
         run: |
-          python -m pip install --disable-pip-version-check -e ".[dev]"
-          python -m pip install --disable-pip-version-check ./native
+          "$PYTHON" -m pip install --disable-pip-version-check "maturin==$MATURIN_VERSION"
+          "$PYTHON" -m maturin build --release --locked             --compatibility manylinux_2_28 --interpreter "$PYTHON" --out ../wheelhouse
+
+      - name: Record wheel identity
+        working-directory: wheelhouse
+        run: |
+          test "$(ls *.whl | wc -l)" = 1
+          wheel="$(ls *.whl)"
+          case "$wheel" in
+            lisjong_native-*-cp314-cp314-manylinux_2_28_x86_64.whl) ;;
+            *) echo "unexpected wheel tag: $wheel" >&2; exit 1 ;;
+          esac
+          sha256sum "$wheel" > SHA256SUMS
+          {
+            echo "wheel=$wheel"
+            echo "sha256=$(cut -d' ' -f1 SHA256SUMS)"
+            echo "lisjong_revision=$LISJONG_NATIVE_SOURCE_REVISION"
+            echo "github_event=$GITHUB_EVENT_NAME"
+            echo "github_ref=$GITHUB_REF"
+            echo "github_run=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+            echo "build_image=quay.io/pypa/manylinux_2_28_x86_64 ($AUDITWHEEL_PLAT)"
+            echo "python=$("$PYTHON" -c 'import sys; print(sys.version.split()[0], sys.implementation.cache_tag, sys.abiflags or "-")')"
+            echo "rustc=$(cd ../native && rustc --version)"
+            echo "maturin=$("$PYTHON" -m maturin --version)"
+            echo "cargo_profile=release (native/Cargo.toml), --locked"
+          } > BUILD-INFO.txt
+          cat BUILD-INFO.txt SHA256SUMS
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: lisjong-native-wheel-${{ github.sha }}
+          path: wheelhouse/
+          if-no-files-found: error
+          retention-days: 90
+
+  native-backend:
+    # Issue #213 / #216: install the prebuilt wheel into a clean Amazon Linux
+    # 2023 container that has no C or Rust compiler, then check the native
+    # backend against the Python backend and the independent oracle. The wheel
+    # is installed binary-only from the local file, so an incompatible wheel
+    # fails instead of falling back to a source build.
+    name: native backend (opt-in wheel on AL2023)
+    needs: native-wheel
+    runs-on: ubuntu-latest
+    container: amazonlinux:2023
+    timeout-minutes: 20
+
+    steps:
+      - name: Install CPython 3.14 from the distribution
+        run: dnf -q install -y python3.14 python3.14-pip tar gzip git
+
+      - name: Confirm no compiler is available
+        run: |
+          for tool in cc gcc g++ clang rustc cargo; do
+            if command -v "$tool"; then echo "unexpected compiler: $tool" >&2; exit 1; fi
+          done
+          cat /etc/os-release | grep -E '^(ID|VERSION_ID)='
+          uname -m
+          ldd --version | head -1
+          python3.14 -c 'import sys, sysconfig; print(sys.version); print(sysconfig.get_platform(), sys.abiflags or "-")'
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: lisjong-native-wheel-${{ github.sha }}
+          path: wheelhouse
+
+      - name: Verify wheel identity
+        working-directory: wheelhouse
+        run: sha256sum --strict -c SHA256SUMS && cat BUILD-INFO.txt
+
+      - name: Install lisjong and the wheel (binary only, no index)
+        run: |
+          python3.14 -m venv /opt/venv
+          /opt/venv/bin/python -m pip install --disable-pip-version-check             --only-binary=:all: --no-index --no-deps wheelhouse/*.whl
+          /opt/venv/bin/python -m pip install --disable-pip-version-check .
+          test "$(/opt/venv/bin/python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)')" = "$GITHUB_SHA"
 
       - name: Run native backend equivalence tests
         env:
           LISJONG_REQUIRE_NATIVE: "1"
-        run: python -m unittest tests.test_native_shanten_backend -v
+        run: /opt/venv/bin/python -m unittest tests.test_native_shanten_backend -v
 
       - name: Run full test suite with the Rust backend selected
         env:
           LISJONG_REQUIRE_NATIVE: "1"
           LISJONG_SHANTEN_BACKEND: rust
-        run: python -m unittest discover -s tests -v --durations 30
+        run: /opt/venv/bin/python -m unittest discover -s tests -v --durations 30

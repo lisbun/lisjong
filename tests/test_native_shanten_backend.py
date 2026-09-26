@@ -500,6 +500,19 @@ else:
 """
 
 
+class NativeBuildIdentityTest(unittest.TestCase):
+    """Issue #216: wheelが自身のbuild元lisjong revisionを報告する。"""
+
+    def setUp(self) -> None:
+        _require_native(self)
+
+    def test_source_revision_is_a_full_commit_or_unknown(self) -> None:
+        revision = _lisjong_native.SOURCE_REVISION
+        self.assertIsInstance(revision, str)
+        if revision != "unknown":
+            self.assertRegex(revision, r"^[0-9a-f]{40}$")
+
+
 class NativeBackendSelectedProcessTest(unittest.TestCase):
     """`LISJONG_SHANTEN_BACKEND=rust`のprocessで公開APIの結果が変わらない。"""
 
