@@ -9,13 +9,24 @@ Issue: [lisbun/lisjong#211](https://github.com/lisbun/lisjong/issues/211)
 `DecisionContext -> InternalAction` 契約と既存評価器の上で独立実装した
 deterministic reference Policy である。
 
+本Policyは **「0004 の選択規則を lisjong の exact shanten へ適用した参照実装」** と
+位置付ける。判断順序・候補 filter・ukeire・paijia・評価順といった 0004 の選択規則を再現し、
+向聴数には lisjong の exact shanten を使う。そのため下記の向聴定義差は設計上許容し、
+upstream との全局面での行動同値性は主張しない。
+
 ```text
 identity           kobalab-0004-tile-efficiency-reference-v1
 reference source   kobalab/majiang-ai legacy 0004
+semantics          0004 selection rules on lisjong exact shanten
+                   (no claim of action equivalence in all states)
 role               external documented reference / pure-offense benchmark arm
                    (not a Champion candidate)
 RiichiLab「牌効率くん」との完全同一性   not established
 ```
+
+Arena 等での評価結果は、この移植 Policy（`kobalab-0004-tile-efficiency-reference-v1`）の
+成績として表示する。kobalab 氏の原実装（majiang-ai 0004）や RiichiLab「牌効率くん」の
+成績としては扱わない。
 
 RiichiLab の「牌効率くん」（単純牌効率 / 聴牌即リー / 鳴きなし / オリなし）は 0004 と
 説明上よく似ているが、同一実装であることは確認していない。本Policyは RiichiLab bot の
@@ -117,9 +128,11 @@ lisjong の `calculate_shanten()` を再利用する。通常形・七対子（�
   | `kan-order` | `z2_` | 向聴1, ev 26（改善牌に z1 を含む） | 向聴1, ev 24 | z1 を加えた m111+p555+s234+z111 は m1 / p5 単騎（いずれも5枚目）待ち。upstream は聴牌と数え z1（残り2枚）を改善牌とする |
   | `red-five-tie` | `p1` | 向聴0, ev 0（改善牌なし） | 向聴1, ev 121 | 打牌後 m123456789s0555 は s5 単騎（5枚目）待ちのみ。upstream は和了牌の無い聴牌とする |
 
-- この向聴定義差を reference として許容するかは**未確定**である。differential test は
-  4枚持ち手牌を一括除外せず、上記2候補だけを両側の観測値で固定し、それ以外の全候補は
-  厳密一致を要求する。列挙した差分が再現しなくなった場合も失敗する。
+- この向聴定義差は、exact shanten を使うという位置付け上、**設計上許容する**。ただし
+  許容は上記の分類に限る。differential test は4枚持ち手牌を一括除外せず、上記2候補だけを
+  両側の観測値で固定し、それ以外の全候補は厳密一致を要求する。列挙した差分が再現しなく
+  なった場合も失敗する。fixture の再生成等で新しい不一致が出た場合は、この分類へ機械的に
+  含めず個別に原因を調査し、根拠を確認してから表へ追加する。
 - 聴牌判定だけで和了牌がない（待ち牌を自手に4枚持つ）場合、source の `allow_lizhi()` は
   `tingpai().length > 0` で立直しない。lisjong でも同じく立直しない。
 
@@ -190,3 +203,4 @@ lisjong UkeirePolicy / TwoStep / semantic envelope lineage
 どちらが正しい / 強いかは source inspection だけで結論しない。比較は Arena の
 pure-offense benchmark（lisbun/lisjong-arena#389 系）で descriptive / development
 benchmark として行い、Champion promotion や overall strength claim には使わない。
+結果は本移植 Policy の成績として表示し、kobalab 氏の原実装や「牌効率くん」の成績とは扱わない。

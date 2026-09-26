@@ -1,10 +1,15 @@
-"""kobalab/majiang-ai legacy 0004相当の純牌効率Reference Policy（Issue #211）。
+"""kobalab/majiang-ai legacy 0004の選択規則による純牌効率Reference Policy（Issue #211）。
 
 公開されている`kobalab/majiang-ai`の`legacy/player-0004.js` /
 `legacy/suanpai-0004.js`（MIT License, Copyright (c) Satoshi Kobayashi）の
 公開仕様を、lisjongの`DecisionContext -> InternalAction`契約と既存評価器の上で
 独立実装した deterministic reference である。upstreamのJS package、Node.js、
 `@kobalab/majiang-core`へのruntime依存は持たない。
+
+位置付けは「0004の選択規則をlisjongのexact shantenへ適用した参照実装」である。
+majiang-coreとの向聴定義差（同一牌種5枚目を要する分解）は設計上許容し、
+upstreamとの全局面での行動同値性は主張しない。Arena等の結果はこの移植Policyの
+成績であり、kobalab氏の原実装やRiichiLab「牌効率くん」の成績とは扱わない。
 
 reference source      kobalab/majiang-ai legacy 0004
                       commit e75a9720a12b84c03e6c61c3960c1844b8982eb4
@@ -329,9 +334,9 @@ def _is_ankan_chankan(policy_input: PolicyInput, action: RonAction) -> bool:
 
 
 class Kobalab0004ReferencePolicy:
-    """kobalab/majiang-ai legacy 0004相当の純牌効率Reference Policy。
+    """kobalab/majiang-ai legacy 0004の選択規則をexact shantenへ適用した参照実装。
 
-    鳴きなし・聴牌即リー・オリなし。RiichiLab「牌効率くん」との完全同一性は
+    鳴きなし・聴牌即リー・オリなし。upstreamとの全局面での行動同値性は主張しない。RiichiLab「牌効率くん」との完全同一性は
     確立していない。
     """
 
