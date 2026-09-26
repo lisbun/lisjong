@@ -300,15 +300,23 @@ class _ShantenTable:
         self.honor_frontier_count = len(self.honor_starts)
 
 
-def _load_table() -> _ShantenTable:
+def read_table_payload() -> bytes:
+    """同梱artifactのbytesを返す。
+
+    Python backendとopt-in native backend（Issue #213）は同じresourceを
+    このfunction経由で読み、artifactの所在をこのmoduleだけが持つ。
+    """
     try:
-        payload = resources.files(__package__).joinpath(TABLE_RESOURCE).read_bytes()
+        return resources.files(__package__).joinpath(TABLE_RESOURCE).read_bytes()
     except (FileNotFoundError, OSError) as error:
         raise ShantenTableError(
             f"shanten table artifact {TABLE_RESOURCE!r} is missing from the "
             "lisjong.hand_evaluation package"
         ) from error
-    return _ShantenTable(payload)
+
+
+def _load_table() -> _ShantenTable:
+    return _ShantenTable(read_table_payload())
 
 
 _COMBINE = _build_combine_table()

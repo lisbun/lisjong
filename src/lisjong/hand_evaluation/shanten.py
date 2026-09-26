@@ -37,8 +37,8 @@ predicateもこのmoduleが所有し、special-hand計算は同じhelperを共�
 from collections.abc import Container, Iterable, Sequence
 
 from lisjong.hand_evaluation import (
-    _lookup_shanten,
     _python_shanten,
+    _shanten_backend,
     _structural_predicates,
 )
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
@@ -173,7 +173,7 @@ def calculate_restricted_standard_shanten(
     usable_counts = _count_tile_kinds(
         tuple(tile for tile in snapshot if tile.tile_type in usable_tile_types)
     )
-    return _lookup_shanten.calculate_standard_shanten(
+    return _shanten_backend.calculate_standard_shanten(
         usable_counts, _fixed_meld_count(len(snapshot))
     )
 
@@ -237,15 +237,27 @@ def _shanten_from_valid_counts(counts: Sequence[int], concealed_tile_count: int)
     取って再計算を避ける。
 
     通常形はIssue #115でexact lookup-table backend（`_lookup_shanten`）へ
-    置き換えた。七対子・国士無双は従来どおり`_python_shanten`の単純な
-    count計算を使う。どちらもshanten semanticは変わっていない。
+    置き換えた。Issue #213以降は`_shanten_backend`がprocess起動時に選んだ
+    実装（defaultは`_lookup_shanten`、opt-inでnative）を呼ぶ。七対子・
+    国士無双は従来どおり`_python_shanten`の単純なcount計算を使う。どちらも
+    shanten semanticは変わっていない。
     """
     fixed_meld_count = _fixed_meld_count(concealed_tile_count)
 
-    shanten = _lookup_shanten.calculate_standard_shanten(counts, fixed_meld_count)
+    shanten = _shanten_backend.calculate_standard_shanten(counts, fixed_meld_count)
     if concealed_tile_count in _MELDLESS_TILE_COUNTS:
         shanten = min(shanten, _meldless_special_shanten(counts))
     return shanten
+
+
+_python_shanten_from_valid_counts = _shanten_from_valid_counts
+"""Python numeric coreへの参照。native選択時もdifferential testの基準に使う。"""
+
+if _shanten_backend.native_shanten_from_valid_counts is not None:
+    # Issue #213: `LISJONG_SHANTEN_BACKEND=rust`を明示したprocessだけ、
+    # numeric core全体を同じsemanticのnative実装へ差し替える。defaultの
+    # Python processではこのbranchを通らず、上の関数がそのまま使われる。
+    _shanten_from_valid_counts = _shanten_backend.native_shanten_from_valid_counts
 
 
 def _meldless_special_shanten(counts: Sequence[int]) -> int:
