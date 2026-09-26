@@ -269,13 +269,21 @@ class WorkerBoundaryTests(_Case):
 
     @unittest.skipUnless(HAS_TORCH, "torch is not installed")
     def test_worker_torch_threads_are_pinned_to_one(self) -> None:
-        evaluation = evaluate_semantic_envelope_policy_by_game(
-            _torch_loading_policy,
-            self.outcome_games,
-            ["TRAIN", "SELECT"],
-            workers=2,
-        )
-        self.assertEqual(evaluation["invariants"]["legality"], 1.0)
+        import torch
+
+        previous = torch.get_num_threads()
+        try:
+            for workers in (1, 2):
+                with self.subTest(workers=workers):
+                    evaluation = evaluate_semantic_envelope_policy_by_game(
+                        _torch_loading_policy,
+                        self.outcome_games,
+                        ["TRAIN", "SELECT"],
+                        workers=workers,
+                    )
+                    self.assertEqual(evaluation["invariants"]["legality"], 1.0)
+        finally:
+            torch.set_num_threads(previous)
 
     def test_invalid_arguments_are_rejected_before_replay(self) -> None:
         for workers in (0, -1, True, 2.0, "2", None):
