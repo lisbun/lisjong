@@ -19,13 +19,25 @@
  */
 "use strict";
 
+const path = require('node:path');
 const Majiang = require('@kobalab/majiang-core');
-const Player0004 = require('@kobalab/majiang-ai/legacy/player-0004');
-const SuanPai0004 = require('@kobalab/majiang-ai/legacy/suanpai-0004');
+const Player0004 = require('@kobalab/majiang-ai/legacy')('0004');
+
+// 固定したupstream内部モジュールを開発用検証でのみ読み込む。
+const legacyDir = path.dirname(
+    require.resolve('@kobalab/majiang-ai/legacy')
+);
+const SuanPai0004 = require(
+    path.join(legacyDir, 'suanpai-0004.js')
+);
 
 const MAJIANG_AI_COMMIT = 'e75a9720a12b84c03e6c61c3960c1844b8982eb4';
+const coreRoot = path.resolve(
+    path.dirname(require.resolve('@kobalab/majiang-core')), '..'
+);
 const MAJIANG_CORE_VERSION = require(
-    '@kobalab/majiang-core/package.json').version;
+    path.join(coreRoot, 'package.json')
+).version;
 
 /* ---------------------------------------------------------------- PRNG --- */
 
@@ -201,6 +213,15 @@ function craftedPlayer(c) {
     suanpai._baopai = [...c.baopai];
     for (const p of c.baopai) suanpai.decrease(p);
     for (const p of concealedTiles(shoupai)) suanpai.decrease(p);
+    // Crafted snapshot内の既存暗槓も既知牌として数える。
+    for (const meld of shoupai._fulou) {
+        if (!/^[mpsz]\d{4}$/.test(meld)) {
+            throw new Error(`Unsupported crafted meld: ${meld}`);
+        }
+        for (const digit of meld.slice(1)) {
+            suanpai.decrease(meld[0] + digit);
+        }
+    }
     for (const p of c.seen || []) suanpai.decrease(p);
     player._suanpai = suanpai;
     return player;
@@ -243,9 +264,9 @@ const CRAFTED_TURNS = [
     { id: 'kan-worsens-shanten', note: 'ankan worsens shanten -> no gang',
       shoupai: 'm111123p456s789z56', baopai: ['s1'] },
     { id: 'kan-order', note: 'two ankan candidates, first in m->z order kept',
-      shoupai: 'm1111p5555s234z112', baopai: ['s1'] },
+      shoupai: 'm1111p0555s234z112', baopai: ['s1'] },
     { id: 'kan-order-skip-first', note: 'first ankan worsens, second keeps',
-      shoupai: 'm111123p5555z117s9', baopai: ['s1'] },
+      shoupai: 'm111123p0555z117s9', baopai: ['s1'] },
     { id: 'kyuushu-yes', note: 'nine terminal/honor types, shanten >= 4',
       shoupai: 'm124689p139s1z1234', baopai: ['s1'], diyizimo: true },
     { id: 'kyuushu-no-shanten3', note: 'kokushi shanten 3 -> no abort',
