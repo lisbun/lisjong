@@ -108,9 +108,18 @@ lisjong の `calculate_shanten()` を再利用する。通常形・七対子（�
 - 開発時に majiang-core の式を Python で書き起こした一時oracle（repositoryには含めない）で
   確認した結果、random hand 200,000件で差は0件、4枚持ちを必ず含む手牌に絞った
   sampling で見つかった差はすべて lisjong が +1 の形だった。4枚持ちを含む14枚手牌
-  17,592件で打牌選択を比較しても、選ばれる牌種の差は0件だった。この差は reference の目的上
-  許容し、differential fixture では該当手牌を中間値の厳密比較から除外して、差がこの形に
-  限られることを検証する。
+  17,592件で打牌選択を比較しても、選ばれる牌種の差は0件だった。
+- 実 upstream で生成した differential fixture（下記）では、この差が次の2候補の中間値にだけ
+  現れた。いずれも最終 decision は暗槓で、upstream と一致する。
+
+  | fixture id | 打牌候補 | upstream | lisjong | 理由 |
+  | --- | --- | --- | --- | --- |
+  | `kan-order` | `z2_` | 向聴1, ev 26（改善牌に z1 を含む） | 向聴1, ev 24 | z1 を加えた m111+p555+s234+z111 は m1 / p5 単騎（いずれも5枚目）待ち。upstream は聴牌と数え z1（残り2枚）を改善牌とする |
+  | `red-five-tie` | `p1` | 向聴0, ev 0（改善牌なし） | 向聴1, ev 121 | 打牌後 m123456789s0555 は s5 単騎（5枚目）待ちのみ。upstream は和了牌の無い聴牌とする |
+
+- この向聴定義差を reference として許容するかは**未確定**である。differential test は
+  4枚持ち手牌を一括除外せず、上記2候補だけを両側の観測値で固定し、それ以外の全候補は
+  厳密一致を要求する。列挙した差分が再現しなくなった場合も失敗する。
 - 聴牌判定だけで和了牌がない（待ち牌を自手に4枚持つ）場合、source の `allow_lizhi()` は
   `tingpai().length > 0` で立直しない。lisjong でも同じく立直しない。
 
@@ -130,7 +139,11 @@ lisjong の `calculate_shanten()` を再利用する。通常形・七対子（�
 - upstream differential: `tests/test_kobalab_0004_upstream_differential.py` が
   `tests/fixtures/kobalab_0004_upstream.json` を読み、向聴数・改善牌、SuanPai 残り枚数、
   paijia、候補ごとの ukeire、評価順、最終 decision（和了 / 九種九牌 / 槓 / 立直 / 打牌）、
-  暗槓・加槓へのロン判定を照合する。fixture が無い場合は skip する。
+  暗槓・加槓へのロン判定を照合する。fixture は commit 済みの必須入力であり、欠落時は skip
+  せず失敗する。
+- 検証結果（fixture: seed固定対局 57 turn、crafted 19 turn、crafted 搶槓 2件、向聴数 204件）:
+  最終 decision は同一牌種4枚持ちの8 turn（暗槓・打牌・立直を含む）も含めて全件一致した。
+  SuanPai 残り枚数、paijia、評価順、向聴数サンプルも全件一致した。中間値の不一致は上記の2候補だけ。
 - fixture 生成: `tools/kobalab_0004_reference/generate_upstream_fixture.js`
   （pinned majiang-ai commit と majiang-core 1.4.1 を `npm install` し、seed固定の
   0004 同士の対局から sampling した decision と、crafted scenario、random 手牌の向聴数を出力）。

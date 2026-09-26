@@ -9,12 +9,15 @@ fixtureはupstreamのJS表現（majiang牌譜表記）を言語非依存のJSON�
 このtest側で`PolicyInput` / `InternalAction`へ変換する。upstreamのobject modelを
 lisjongの公開contractへ持ち込まない。Node.jsはCIで実行しない。
 
-既知の分類済み差分:
+fixtureは必須であり、欠落時はskipせず失敗する。自手に同一牌種4枚を持つ手牌も
+含め、全turnの最終decision（暗槓・打牌・立直）を照合する。
 
-- 向聴定義差（Policy evaluatorの差）: majiang-coreの式は同一牌種5枚目を要する
-  分解を数えるが、lisjong exact shantenは数えない。自手に同一牌種4枚を持つ
-  手牌でだけlisjongが+1になり得る。該当ケースは中間値の厳密比較から除外し、
-  差がこの形に限られることを検証する。
+中間値の既知差分は`KNOWN_CANDIDATE_DIFFERENCES`に、fixture id・打牌候補・両側の
+期待値・理由を列挙したものだけに限定する。列挙した差分が再現しない場合も失敗する。
+現fixtureで観測された差分は、majiang-coreの向聴数式が同一牌種5枚目を要する単騎を
+聴牌として数え、lisjong exact shantenが数えないことに起因する（向聴定義差）。
+この差を許容するかは未確定であり、ここでは観測値を固定して変化を検出する。
+
 - 表現差: sourceの`get_dapai()`は、ツモ牌が唯一の通常5で赤5も持つ場合に
   実在しない手出し通常5を列挙する。lisjongの合法手には現れないため変換時に除外する。
 """
@@ -203,19 +206,41 @@ def _legal_actions(record: dict) -> tuple[object, ...]:
     return tuple(actions)
 
 
-def _has_quad(tiles: list[Tile]) -> bool:
-    return max(Counter(tile.tile_type for tile in tiles).values(), default=0) >= 4
+KNOWN_CANDIDATE_DIFFERENCES = {
+    ("kan-order", "z2_"): {
+        "upstream": {"xiangting": 1, "ev": 26, "extra_tingpai": ("z1",)},
+        "lisjong": {"xiangting": 1, "ev": 24},
+        "reason": (
+            "打牌後m1111p0555s234z11にz1を加えたm111+p555+s234+z111は、残りm1/p5の"
+            "単騎がいずれも5枚目を要する。majiang-coreは聴牌と数えてz1を改善牌に"
+            "含め（残り2枚）、lisjongは数えない。"
+        ),
+    },
+    ("red-five-tie", "p1"): {
+        "upstream": {"xiangting": 0, "ev": 0, "extra_tingpai": ()},
+        "lisjong": {"xiangting": 1, "ev": 121},
+        "reason": (
+            "打牌後m123456789s0555はs5単騎（5枚目）待ちのみ。majiang-coreは和了牌の"
+            "無い聴牌として向聴0・改善牌なしとし、lisjongは1向聴として扱う。"
+        ),
+    },
+}
+"""中間値の既知差分: (fixture id, source打牌表記) -> 両側の期待値と理由。
+
+いずれも同一牌種5枚目を要する分解に関する向聴定義差で、許容可否は未確定。
+どちらのturnでも最終decisionは暗槓であり、upstreamと一致する。
+"""
 
 
 def _load() -> dict:
+    if not FIXTURE_PATH.exists():
+        raise AssertionError(
+            f"required upstream differential fixture is missing: {FIXTURE_PATH}; "
+            "see tools/kobalab_0004_reference/generate_upstream_fixture.js"
+        )
     return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
-@unittest.skipUnless(
-    FIXTURE_PATH.exists(),
-    "upstream differential fixture is not generated; see "
-    "tools/kobalab_0004_reference/generate_upstream_fixture.js",
-)
 class UpstreamDifferentialTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -233,23 +258,15 @@ class UpstreamDifferentialTest(unittest.TestCase):
         self.assertEqual(upstream["majiang_core"]["version"], "1.4.1")
 
     def test_shanten_and_improving_tiles(self) -> None:
-        known_difference = 0
         for case in self.fixture["shanten"]:
             tiles = [_tile(p) for p in case["tiles"]]
             with self.subTest(tiles=case["tiles"]):
-                ours = calculate_shanten(tiles)
-                if ours != case["xiangting"]:
-                    # 5枚目を要する分解だけが許容される分類済み差分。
-                    self.assertTrue(_has_quad(tiles))
-                    self.assertEqual(ours, case["xiangting"] + 1)
-                    known_difference += 1
-                    continue
-                if case["tingpai"] is not None and not _has_quad(tiles):
+                self.assertEqual(calculate_shanten(tiles), case["xiangting"])
+                if case["tingpai"] is not None:
                     self.assertEqual(
                         set(_improving_tile_types(tiles)),
                         {_tile(p).tile_type for p in case["tingpai"]},
                     )
-        self.assertLessEqual(known_difference * 10, len(self.fixture["shanten"]))
 
     def test_remaining_counts_match_suanpai(self) -> None:
         for record in self._turns():
@@ -274,6 +291,7 @@ class UpstreamDifferentialTest(unittest.TestCase):
                         )
 
     def test_paijia_ukeire_and_evaluation_order(self) -> None:
+        observed_differences = set()
         for record in self._turns():
             evaluation = record["evaluation"]
             if evaluation is None:
@@ -292,31 +310,46 @@ class UpstreamDifferentialTest(unittest.TestCase):
                     if action is None or action in expected_order:
                         continue
                     expected_order.append(action)
-                    if _has_quad(concealed):
-                        continue
                     after = list(concealed)
                     after.remove(action.tile)
-                    self.assertEqual(calculate_shanten(after), candidate["xiangting"])
+                    improving = _improving_tile_types(after)
+                    ours = {
+                        "xiangting": calculate_shanten(after),
+                        "ev": sum(counts.remaining(t) for t in improving),
+                    }
+                    upstream_tingpai = {
+                        _tile(p).tile_type for p in candidate["tingpai"]
+                    }
+                    key = (record["id"], candidate["p"])
+                    known = KNOWN_CANDIDATE_DIFFERENCES.get(key)
+                    if known is None:
+                        self.assertEqual(ours["xiangting"], candidate["xiangting"], key)
+                        self.assertEqual(ours["ev"], candidate["ev"], key)
+                        self.assertEqual(set(improving), upstream_tingpai, key)
+                        continue
+                    observed_differences.add(key)
+                    upstream = known["upstream"]
+                    self.assertEqual(candidate["xiangting"], upstream["xiangting"], key)
+                    self.assertEqual(candidate["ev"], upstream["ev"], key)
                     self.assertEqual(
-                        sum(counts.remaining(t) for t in _improving_tile_types(after)),
-                        candidate["ev"],
+                        upstream_tingpai - set(improving),
+                        {_tile(p).tile_type for p in upstream["extra_tingpai"]},
+                        key,
                     )
-                if not _has_quad(concealed):
-                    self.assertEqual(
-                        calculate_shanten(concealed), evaluation["n_xiangting"]
-                    )
+                    self.assertEqual(ours, known["lisjong"], key)
+                self.assertEqual(
+                    calculate_shanten(concealed), evaluation["n_xiangting"]
+                )
                 self.assertEqual(
                     list(evaluation_order(policy_input, tuple(expected_order))),
                     expected_order,
                 )
+        self.assertEqual(observed_differences, set(KNOWN_CANDIDATE_DIFFERENCES))
 
     def test_final_decisions(self) -> None:
         policy = Kobalab0004ReferencePolicy()
         for record in self._turns():
             state, decision = record["state"], record["decision"]
-            concealed = [_tile(p) for p in state["concealed"]]
-            if _has_quad(concealed):
-                continue  # 分類済み向聴定義差の影響を受け得る
             actor = Seat(state["menfeng"])
             policy_input = _policy_input(state)
             context = DecisionContext(
@@ -342,6 +375,20 @@ class UpstreamDifferentialTest(unittest.TestCase):
                         )
                         chosen = execute_policy(policy, declared)
                     self.assertEqual(chosen, _discard_action(dapai.rstrip("*"), state))
+
+    def test_quad_holding_turns_cover_ankan_discard_and_riichi(self) -> None:
+        """同一牌種4枚持ちturnが最終decision比較の対象に含まれることを固定する。"""
+        kinds = set()
+        for record in self._turns():
+            counts = Counter(_tile(p).tile_type for p in record["state"]["concealed"])
+            if max(counts.values()) < 4:
+                continue
+            decision = record["decision"]
+            if "gang" in decision:
+                kinds.add("ankan")
+            elif "dapai" in decision:
+                kinds.add("riichi" if decision["dapai"].endswith("*") else "discard")
+        self.assertEqual(kinds, {"ankan", "discard", "riichi"})
 
     def test_chankan(self) -> None:
         policy = Kobalab0004ReferencePolicy()
