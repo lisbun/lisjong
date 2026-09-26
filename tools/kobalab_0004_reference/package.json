@@ -1,0 +1,11 @@
+{
+  "name": "kobalab-0004-differential",
+  "private": true,
+  "dependencies": {
+    "@kobalab/majiang-core": "1.4.1",
+    "@kobalab/majiang-ai": "git+https://github.com/kobalab/majiang-ai.git#e75a9720a12b84c03e6c61c3960c1844b8982eb4"
+  },
+  "overrides": {
+    "@kobalab/majiang-core": "1.4.1"
+  }
+}
