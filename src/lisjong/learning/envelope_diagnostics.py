@@ -510,6 +510,7 @@ def evaluate_semantic_envelope_policy_by_game(
     elif workers == 1:
         policy = policy_factory()
         reference = None if reference_factory is None else reference_factory()
+        _pin_worker_torch_threads()
         tallies = [
             _replay_shard(policy, reference, shard, residual_sample_limit)
             for shard in shards
