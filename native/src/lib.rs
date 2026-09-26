@@ -141,6 +141,30 @@ fn validate_spans(group: &FrontierGroup, label: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject pool entries whose resource state is not a real state.
+///
+/// `compute()` uses `packed >> SCORE_SHIFT` directly as an index into the
+/// 360-entry score / stamp arrays and as the column of a 360-wide combine row.
+/// A 12-bit state can reach 4095, so an unchecked value would index past the
+/// arrays (a panic, which aborts the process in release) or, for 360..4095
+/// values that still land inside the combine table, silently read another
+/// row.  Every pool entry is checked here, once, at construction; together
+/// with `parse_combine()` this makes every state the hot path can see
+/// `< RESOURCE_STATE_COUNT`, so the hot path needs no per-entry check.
+fn validate_pool_states(group: &FrontierGroup, label: &str) -> Result<(), String> {
+    if group
+        .pool
+        .iter()
+        .any(|&packed| (packed >> SCORE_SHIFT) as usize >= RESOURCE_STATE_COUNT)
+    {
+        return Err(format!(
+            "{label} entry pool of the shanten table artifact references an unknown \
+             resource state"
+        ));
+    }
+    Ok(())
+}
+
 fn parse_artifact(payload: &[u8]) -> Result<(FrontierGroup, FrontierGroup), String> {
     if payload.len() < HEADER_SIZE {
         return Err("shanten table artifact is truncated".to_owned());
@@ -198,6 +222,8 @@ fn parse_artifact(payload: &[u8]) -> Result<(FrontierGroup, FrontierGroup), Stri
     };
     validate_spans(&suit, "suit")?;
     validate_spans(&honor, "honor")?;
+    validate_pool_states(&suit, "suit")?;
+    validate_pool_states(&honor, "honor")?;
     Ok((suit, honor))
 }
 

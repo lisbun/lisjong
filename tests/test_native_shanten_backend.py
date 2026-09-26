@@ -434,6 +434,71 @@ class NativeArtifactIntegrityTest(unittest.TestCase):
         with self.assertRaises(_lookup_shanten.ShantenTableError):
             self._build(self.payload, penalties=b"\x00")
 
+    def test_out_of_range_pool_states_fail_closed_without_aborting(self) -> None:
+        # pool entryの上位12 bitはresource state（0..359）としてscore配列と
+        # combine行の添字に使われる。4095のような配列外の値と、360のように
+        # combine table内だが別の行を読む値の両方を、table構築時に
+        # ShantenTableErrorで拒否しなければならない。release buildは
+        # panic=abortなので、範囲外アクセスはprocess全体を落とし得る。
+        # そのためsubprocessで実行し、正常終了して期待した例外になることを
+        # 確認する。
+        cases = (
+            ("suit", 0, 0xFFFF),
+            ("suit", 0, 360 << 4),
+            ("suit", -1, (360 << 4) | 0xF),
+            ("honor", 0, 0xFFF0),
+            ("honor", -1, 361 << 4),
+        )
+        for group, position, packed in cases:
+            with self.subTest(group=group, position=position, packed=packed):
+                result = _run_python(
+                    _CORRUPT_POOL_PROGRAM.format(
+                        group=group, position=position, packed=packed
+                    ),
+                    backend=None,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout.strip(),
+                    "ShantenTableError: unknown resource state",
+                    result.stderr,
+                )
+
+
+_CORRUPT_POOL_PROGRAM = """
+import struct
+import _lisjong_native
+from lisjong.hand_evaluation import _lookup_shanten, _shanten_backend
+
+payload = bytearray(_lookup_shanten.read_table_payload())
+header = struct.unpack_from(_lookup_shanten.HEADER_FORMAT, payload)
+_magic, _version, suit_frontiers, honor_frontiers, suit_pool, honor_pool = header
+suit_pool_offset = (
+    struct.calcsize(_lookup_shanten.HEADER_FORMAT)
+    + (_lookup_shanten.SUIT_KEY_SPACE + _lookup_shanten.HONOR_KEY_SPACE) * 2
+    + (suit_frontiers + honor_frontiers) * 5
+)
+offset, entries = (
+    (suit_pool_offset, suit_pool)
+    if "{group}" == "suit"
+    else (suit_pool_offset + suit_pool * 2, honor_pool)
+)
+index = {position} % entries
+payload[offset + index * 2 : offset + index * 2 + 2] = ({packed}).to_bytes(2, "little")
+try:
+    table = _lisjong_native.StandardShantenTable(
+        bytes(payload),
+        _shanten_backend._little_endian_bytes(_lookup_shanten._COMBINE),
+        b"".join(table.tobytes() for table in _lookup_shanten._PENALTY),
+        _lookup_shanten.ShantenTableError,
+    )
+except _lookup_shanten.ShantenTableError as error:
+    assert "unknown resource state" in str(error), str(error)
+    print("ShantenTableError: unknown resource state")
+else:
+    print("accepted")
+"""
+
 
 class NativeBackendSelectedProcessTest(unittest.TestCase):
     """`LISJONG_SHANTEN_BACKEND=rust`のprocessで公開APIの結果が変わらない。"""
