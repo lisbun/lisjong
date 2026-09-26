@@ -215,7 +215,7 @@ artifact / evaluation policyです。
 - resultを見てseedやthresholdを都合よく追加しない
 - large model / large data / native backend / cloud scaleはmeasured need後に導入する
 - 高頻度のsmall loopはLLMに依存させず、LLM / coding agentは低頻度のresearch decisionに利用できる形を優先する
-- Rustは先行導入せず、profilingで必要性が確認された処理に限って検討する
+- Rust等のnative backendは、profilingで対象を特定した計算の試作・学習としては許容する。本採用（default化）は、既存Python実装との同値性と、変換込みの実測効果・導入保守負担で判断する（[#213の試作記録](docs/rust-backend-prototype.md)）
 
 ## Development environment
 
@@ -240,6 +240,20 @@ python -m ruff format --check .
 python -m ruff check .
 python -m unittest discover -s tests -v
 ```
+
+### Opt-in native shanten backend（試作）
+
+defaultはPython backendで、native拡張なしの通常installで動作します。
+Rust toolchain（`native/rust-toolchain.toml`で固定）がある環境では、
+numeric shanten coreのRust試作を明示的に選択できます。
+
+```powershell
+python -m pip install ./native
+$env:LISJONG_SHANTEN_BACKEND = "rust"
+```
+
+`rust`を指定してnative拡張を読み込めない場合はPythonへfallbackせず起動時に失敗します。
+結果・同値性・対応環境は [Rust backend試作記録](docs/rust-backend-prototype.md) を参照してください。
 
 `lisjong` 自体はRiichiEnv / RiichiLab execution runtimeを所有しません。
 external/local integration testや実対局の実行方法は
