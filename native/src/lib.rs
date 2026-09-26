@@ -517,8 +517,22 @@ fn standard_shanten_call_count() -> u64 {
     STANDARD_SHANTEN_CALLS.load(Ordering::Relaxed)
 }
 
+/// Full lisjong commit this extension was built from (Issue #216).
+///
+/// The extension shares `_shanten_table.bin` and the helper tables with the
+/// Python package and mirrors its special-hand dispatch, so a wheel is only
+/// validated together with the lisjong revision it was built from.  The wheel
+/// CI job sets `LISJONG_NATIVE_SOURCE_REVISION`; a local source build without
+/// it reports `"unknown"`.  Consumers record this value next to the wheel
+/// SHA-256 and compare it with their pinned lisjong revision.
+const SOURCE_REVISION: &str = match option_env!("LISJONG_NATIVE_SOURCE_REVISION") {
+    Some(revision) => revision,
+    None => "unknown",
+};
+
 #[pymodule]
 fn _lisjong_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("SOURCE_REVISION", SOURCE_REVISION)?;
     module.add_class::<StandardShantenTable>()?;
     module.add_function(wrap_pyfunction!(standard_shanten_call_count, module)?)?;
     Ok(())

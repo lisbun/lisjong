@@ -240,9 +240,9 @@ backend名とnative build（本文書のtoolchain / build option）として残�
 | 対応Python | CPython 3.14（非abi3、free-threaded buildは未対応・未検証） |
 | 開発時 | Rust 1.98.1（`native/rust-toolchain.toml`）、Windowsは加えてMSVC Build Tools |
 | build | `python -m pip install ./native`（maturin 1.15 build backend、PyPIから取得） |
-| 利用時のcompiler | source installでは必要。prebuilt wheelがあれば不要（未整備） |
-| 配布 | wheelの配布経路・Arenaのdependency pinへの組み込みは未整備 |
-| CI | `native-backend` job（ubuntu-latest）：rustfmt check、native build、同値性test、rust選択下full suite |
+| 利用時のcompiler | source installでは必要。AWS worker向けprebuilt wheel（#216、[配布記録](rust-backend-distribution.md)）では不要 |
+| 配布 | #216でAmazon Linux 2023 x86_64 / CPython 3.14向けmanylinux_2_28 wheelをCIでbuild（[配布記録](rust-backend-distribution.md)）。Arenaへの組み込みはArena側で扱う |
+| CI | #216以降：`native-wheel` job（manylinux_2_28 containerでrustfmt check・wheel build）と`native-backend` job（compilerなしの`amazonlinux:2023`へwheelをinstallし、同値性test・rust選択下full suite） |
 | Python-only経路 | default。native拡張なしのinstall・import・全testは既存jobで維持 |
 
 実証済み：Windows 11 / CPython 3.14.7 / MSVC target（build、全test、計測、Arena対局、spawn worker）。
