@@ -235,3 +235,7 @@ __marimo__/
 
 # lisjong: RiichiLab protocol trace output (Issue #45, opt-in, secret-safe JSONL)
 /traces/
+
+# lisjong: opt-in native backend build outputs (Issue #213)
+*.pyd
+/native/target/

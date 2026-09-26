@@ -309,6 +309,11 @@ Policy入力の具体field / canonicalization / invariantsは[Policy入力の最
 
 具体的backend / lookup artifactはimplementation detailとして扱う。
 
+opt-in native backend（Issue #213、`native/`）はnumeric shanten coreだけを置き換える試作であり、
+`LISJONG_SHANTEN_BACKEND=rust`を明示したprocessだけで使う。defaultはPython backendで、
+native拡張はcore installの依存に含めない。Rust指定時に利用できなければPythonへfallbackせず
+fail closedする。Policyはnative表現へ依存しない。詳細は[Rust backend試作記録](rust-backend-prototype.md)を参照する。
+
 ## `belief`
 
 `lisjong.belief`は、hidden-information inferenceに必要なstable AI-side representation / physical-accounting semanticsを所有する。

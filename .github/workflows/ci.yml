@@ -84,3 +84,45 @@ jobs:
 
       - name: Run reference validation
         run: python -m unittest discover -s reference_tests -v --durations 30
+
+  native-backend:
+    # Issue #213: opt-in Rust shanten backend prototype. The default install and
+    # the jobs above stay Python-only; this job builds the native extension and
+    # checks it against the Python backend and the independent oracle.
+    name: native backend (opt-in)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Show pinned Rust toolchain
+        working-directory: native
+        run: rustup show active-toolchain && rustc --version && cargo --version
+
+      - name: Check Rust formatting
+        working-directory: native
+        run: cargo fmt --check
+
+      - name: Install package, development tools, and native backend
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[dev]"
+          python -m pip install --disable-pip-version-check ./native
+
+      - name: Run native backend equivalence tests
+        env:
+          LISJONG_REQUIRE_NATIVE: "1"
+        run: python -m unittest tests.test_native_shanten_backend -v
+
+      - name: Run full test suite with the Rust backend selected
+        env:
+          LISJONG_REQUIRE_NATIVE: "1"
+          LISJONG_SHANTEN_BACKEND: rust
+        run: python -m unittest discover -s tests -v --durations 30

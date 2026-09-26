@@ -13,6 +13,7 @@ from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.hand_evaluation import (
     _lookup_shanten,
     _python_shanten,
+    _shanten_backend,
     _shanten_frontier,
     calculate_shanten,
 )
@@ -871,10 +872,28 @@ class ProductionBackendBoundaryTest(unittest.TestCase):
         self.assertFalse(any("_shanten_frontier" in name for name in imported))
 
     def test_production_shanten_module_uses_the_lookup_backend(self) -> None:
-        source = inspect.getsource(shanten_module._shanten_from_valid_counts)
+        # Issue #213: production呼び出しはprocess起動時に選んだbackend経由。
+        # defaultのPython backendは`_lookup_shanten`そのもの（wrapperなし）。
+        # rust選択processではnumeric core全体がnative実装へ差し替わるため、
+        # Python coreのsourceは`_python_shanten_from_valid_counts`から読む。
+        source = inspect.getsource(shanten_module._python_shanten_from_valid_counts)
 
-        self.assertIn("_lookup_shanten.calculate_standard_shanten", source)
+        self.assertIn("_shanten_backend.calculate_standard_shanten", source)
         self.assertNotIn("_python_shanten.calculate_standard_shanten", source)
+        if _shanten_backend.BACKEND_NAME == _shanten_backend.PYTHON_BACKEND:
+            self.assertIs(
+                _shanten_backend.calculate_standard_shanten,
+                _lookup_shanten.calculate_standard_shanten,
+            )
+            self.assertIs(
+                shanten_module._shanten_from_valid_counts,
+                shanten_module._python_shanten_from_valid_counts,
+            )
+        else:
+            self.assertIs(
+                shanten_module._shanten_from_valid_counts,
+                _shanten_backend.native_shanten_from_valid_counts,
+            )
 
 
 class LocalFrontierValidationTest(unittest.TestCase):
@@ -958,7 +977,8 @@ class PublicSurfaceTest(unittest.TestCase):
                         self.assertFalse(node.module.startswith("lisjong.belief"))
 
     def test_backend_stays_behind_a_private_module_name(self) -> None:
-        # Issue #115のnumeric backendとIssue #141のpredicate backendを含む。
+        # Issue #115のnumeric backend、Issue #141のpredicate backend、
+        # Issue #213のbackend選択moduleを含む。
         # 期待するprivate architectureをexact setとして固定する（public
         # surfaceは増やさない）。
         modules = {path.name for path in _PACKAGE_ROOT.glob("*.py")}
@@ -970,6 +990,7 @@ class PublicSurfaceTest(unittest.TestCase):
                 "_python_shanten.py",
                 "_shanten_frontier.py",
                 "_lookup_shanten.py",
+                "_shanten_backend.py",
                 "_structural_predicates.py",
             },
         )
