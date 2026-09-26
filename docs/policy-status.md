@@ -77,6 +77,7 @@ Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、
 | `HandValueTradeoffTargetedHonorReleasePolicy` | — | **experimental candidate; evaluation pending** | predecessor Heuristic Champion `TargetedHonorReleaseTerminalProgressionPolicy` のconfirmed `R5_HONOR_ONLY_SWITCH`を保持し、それ以外のordinary discardへ#175 HandValue v2を合成 |
 | `PlacementAwareSpeedCallPolicy` | `placement-aware-speed-call` | **current Heuristic Champion / current heuristic strength baseline** | `TargetedHonorReleaseTerminalProgressionPolicy`をexact parentとし、Tanyao / Honitsu route確定型のスピード鳴き、役のない副露手のroute保持打牌、オーラス点数状況mode（トップ目SPEED / 大差ラス目VALUE）を追加（[#199](https://github.com/lisbun/lisjong/issues/199)）。Arena #375の`arena-heuristic-candidate-aabb-half-v1`でexact incumbentに対しCANDIDATE SUPERIOR、project #80で昇格 |
 | `KanCoverageYakuhaiCallPolicy` | — | **HandBelief Stage 3 augmentation source; not in strength hierarchy** | kan / rinshan coverage 用 deterministic source |
+| `Kobalab0004ReferencePolicy` | — (lisjong identity `kobalab-0004-tile-efficiency-reference-v1`) | **external documented reference; not in strength hierarchy** | kobalab/majiang-ai legacy 0004 相当の純牌効率（鳴きなし・聴牌即リー・オリなし）。RiichiLab「牌効率くん」との同一性は未確立。詳細は [kobalab 0004 reference](kobalab-0004-reference.md)（[#211](https://github.com/lisbun/lisjong/issues/211)） |
 
 `current role` は Policy-strength / research management 上の位置づけであり、public API stability、deprecation、runtime profile assignment を表さない。
 
