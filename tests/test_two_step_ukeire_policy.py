@@ -605,6 +605,7 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
                 "HandValueAwareTwoStepUkeirePolicy",
                 "HandValueTradeoffMechanismRiichiDefensePolicy",
                 "HandValueTradeoffTargetedHonorReleasePolicy",
+                "Kobalab0004ReferencePolicy",
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",
                 "OpenHandYakuAwareCallPolicy",
