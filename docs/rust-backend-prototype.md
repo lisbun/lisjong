@@ -170,7 +170,7 @@ backendに関係なくrunごとに入れ替わり得るため、全席を連結�
   - 不明なbackend名は失敗し、defaultとpython指定ではnative拡張をimportしない。
   - rust選択processで公開`calculate_shanten()`の結果が一致し、native pathが実行されたことを
     call counterで確認する。
-- `LISJONG_SHANTEN_BACKEND=rust`でfull test suite（1,977 tests）がローカルでpass。
+- `LISJONG_SHANTEN_BACKEND=rust`でfull test suite（1,980 tests）がローカルでpass。
   CIの`native-backend` jobでも同じ構成を実行する。
 - 固定decision再生（3 Policy、計2,022 decision × 複数pass）と小規模対局2半荘で
   action不一致0。

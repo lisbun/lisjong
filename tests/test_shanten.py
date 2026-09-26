@@ -874,7 +874,9 @@ class ProductionBackendBoundaryTest(unittest.TestCase):
     def test_production_shanten_module_uses_the_lookup_backend(self) -> None:
         # Issue #213: production呼び出しはprocess起動時に選んだbackend経由。
         # defaultのPython backendは`_lookup_shanten`そのもの（wrapperなし）。
-        source = inspect.getsource(shanten_module._shanten_from_valid_counts)
+        # rust選択processではnumeric core全体がnative実装へ差し替わるため、
+        # Python coreのsourceは`_python_shanten_from_valid_counts`から読む。
+        source = inspect.getsource(shanten_module._python_shanten_from_valid_counts)
 
         self.assertIn("_shanten_backend.calculate_standard_shanten", source)
         self.assertNotIn("_python_shanten.calculate_standard_shanten", source)
@@ -882,6 +884,15 @@ class ProductionBackendBoundaryTest(unittest.TestCase):
             self.assertIs(
                 _shanten_backend.calculate_standard_shanten,
                 _lookup_shanten.calculate_standard_shanten,
+            )
+            self.assertIs(
+                shanten_module._shanten_from_valid_counts,
+                shanten_module._python_shanten_from_valid_counts,
+            )
+        else:
+            self.assertIs(
+                shanten_module._shanten_from_valid_counts,
+                _shanten_backend.native_shanten_from_valid_counts,
             )
 
 
