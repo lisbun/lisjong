@@ -793,6 +793,59 @@ read_outcome_source()（SCIENTIFICのみ） -> build_outcome_targets()（#193 co
 - Step Eのsafety replayは既存の`evaluate_semantic_envelope_policy()`がQ runtimeで
   そのまま動く。使用するdevelopment dataとterminal labelは未凍結（#200 DP-4）
 
+### strict source readのprocess並列化（#209）
+
+`read_outcome_source(path, *, workers=1)`は、game単位の検証（`_read_game()`）を
+`workers`個のprocessで並列に実行できる。defaultの`workers=1`は従来どおり親processで
+逐次に読み、worker poolを起動しない。
+
+- manifest、game summary、directory集合、seed一意性、allocation bindingなどcross-gameの
+  検証は常に親processで、game検証より前に行う
+- 結果はgame_ordinal順に並べ直す。検証済みsource（identity、decision順、
+  `selected_action`と`legal_actions`の`is`関係）は`workers`によらず同一である
+- 複数gameが不正な場合も、報告するerrorは`workers`によらず最小game_ordinalの失敗
+  gameのもの（同じtype / message）である。部分sourceは返さない。失敗時は未開始taskを
+  cancelし、workerの終了を待ってから送出する
+- 支配的なcostはexploration selectionの再検証（pure Python）なので、threadではなく
+  processを使う
+- `workers > 1`を使うoperator scriptは`if __name__ == "__main__":` guardの下で呼ぶ
+  （CPython 3.14のLinux defaultは`forkserver`）。guardがない場合はworker起動が失敗し、
+  `BrokenProcessPool`でfail closedする
+
+### qualification replayのgame単位process並列化（#209）
+
+既存の`evaluate_semantic_envelope_policy(policy, source, ...)`のAPIと出力は
+変えていない。並列版はgame列を受け取る別関数である。
+
+```text
+evaluate_semantic_envelope_policy_by_game(
+    policy_factory,             引数なしでPolicyを返すpicklableなcallable
+    games,                      canonical順のgame列（各gameはcanonical順のdecision列）
+    splits,
+    *, workers=1, sample_every=1,
+    reference_factory=None,     例: TwoStepUkeirePolicy
+    residual_sample_limit=12,
+)
+outcome-Q candidate:  OutcomeQPolicyLoader(artifact_path, artifact_identity)
+```
+
+- 並列化の単位はgameである。Policy instanceやtorch moduleはprocess間で渡さない。
+  workerごとにfactoryからcandidate / reference Policyを生成し、torchがload済みなら
+  intra-op thread数を1へ固定する。`OutcomeQPolicyLoader`は各workerでartifactを
+  strict loadし、identityが一致しなければfail closedする
+- `sample_every`のstrideは、親processが選択split全体の通しdecision indexで決める
+  （gameごとに数え直さない）
+- worker結果は整数counter / max regret / global index付きresidual sampleとしてgame順に
+  mergeし、rateは親processで最後に計算する。`residual_choice.samples`は
+  global decision index順で先頭`residual_sample_limit`件である
+- `runtime_by_branch`以外の結果は`workers`によらず、同じdecision列に対する
+  `evaluate_semantic_envelope_policy()`と一致する。runtimeはvolatileであり、
+  同値性を要求しない
+- `workers == 1`は親processで逐次に評価し、worker poolを起動しない。
+  1 gameでも失敗すれば例外を送出し、部分evaluationを返さない
+- #206型の、Policyをwrapするoperator-local audit proxyのcounterはworkerごとに
+  分かれるため、`workers > 1`ではそのままでは合算されない
+
 ## Optional ML dependency boundary
 
 ```text

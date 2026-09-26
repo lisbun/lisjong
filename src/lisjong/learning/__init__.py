@@ -110,6 +110,7 @@ from lisjong.learning.envelope_diagnostics import (
     ENVELOPE_READY,
     classify_semantic_envelope_result,
     evaluate_semantic_envelope_policy,
+    evaluate_semantic_envelope_policy_by_game,
 )
 from lisjong.learning.envelope_policy import (
     SEMANTIC_ENVELOPE_IDENTITY,
@@ -153,6 +154,7 @@ from lisjong.learning.outcome_q_dataset import (
     outcome_q_preflight,
 )
 from lisjong.learning.outcome_q_policy import (
+    OutcomeQPolicyLoader,
     OutcomeQRuntime,
     load_outcome_q_policy_factory,
     outcome_q_runtime_identity,
@@ -212,6 +214,7 @@ __all__ = [
     "OUTCOME_Q_CHECKPOINT_RULE",
     "LoadedOutcomeQArtifact",
     "OutcomeQRows",
+    "OutcomeQPolicyLoader",
     "OutcomeQRuntime",
     "OutcomeQTrainingConfig",
     "load_outcome_q_artifact",
@@ -302,6 +305,7 @@ __all__ = [
     "encode_candidates",
     "evaluate_candidate_policy",
     "evaluate_semantic_envelope_policy",
+    "evaluate_semantic_envelope_policy_by_game",
     "feature_fingerprint",
     "feature_specification",
     "legal_discard_candidates",
