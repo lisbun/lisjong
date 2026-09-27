@@ -55,7 +55,10 @@ from collections import Counter
 from collections.abc import Sequence
 
 from lisjong.belief import (
+    ConcealedHandBelief,
+    derive_non_player_hidden_belief,
     derive_remaining_tile_inventory,
+    estimate_conditional_uniform_hand_belief,
     red_five_index,
     tile_type_index,
     wind_for_seat,
@@ -78,6 +81,7 @@ from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.meld import MeldKind
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
+from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 KOBALAB_0004_REFERENCE_IDENTITY = "kobalab-0004-tile-efficiency-reference-v1"
@@ -87,6 +91,17 @@ KOBALAB_0004_REFERENCE_SOURCE = (
     "kobalab/majiang-ai legacy 0004 "
     "(commit e75a9720a12b84c03e6c61c3960c1844b8982eb4, MIT License)"
 )
+
+KOBALAB_0004_BELIEF_PAIJIA_IDENTITY = "kobalab-0004-tile-efficiency-belief-paijia-v1"
+"""paijia入力だけをBelief由来にした対応版（Issue #218）のstableなidentity。"""
+
+KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR = (
+    "lisjong conditional-uniform-hand-belief "
+    "(estimate_conditional_uniform_hand_belief, #65/#68; "
+    "opponent slots = 13 - 3 * public melds) "
+    "-> derive_non_player_hidden_belief (#67)"
+)
+"""対応版の再現に必要な推定器identityと設定。推定器を変える場合はidentityも変える。"""
 
 _KYUUSHU_MINIMUM_SHANTEN = 4
 _MAX_COPIES_PER_TILE_TYPE = 4
@@ -242,6 +257,67 @@ class _PublicCounts:
         return self.paijia_input.paijia(tile)
 
 
+def _opponent_concealed_slot_counts_by_wind(
+    policy_input: PolicyInput,
+) -> tuple[int, int, int, int]:
+    """条件付き一様推定器へ渡す他家concealed slot数（canonical Wind順）。
+
+    自分の打牌decisionでは、他家の純手牌は`13 - 3 * 副露・槓の数`枚である
+    （暗槓・加槓・大明槓も1面子として数える）。公開された副露だけから導出し、
+    Seatは`wind_for_seat()`で自風へ対応付ける。自分のentryは0とする。
+    """
+    slots = [0, 0, 0, 0]
+    for seat in Seat:
+        if seat is policy_input.self_seat:
+            continue
+        count = 13 - 3 * len(policy_input.players[int(seat)].melds)
+        if count < 0:
+            raise Kobalab0004ReferencePolicyError(
+                f"seat {int(seat)} has more public melds than a hand can hold"
+            )
+        slots[wind_index(wind_for_seat(seat, policy_input.round.dealer_seat))] = count
+    return (slots[0], slots[1], slots[2], slots[3])
+
+
+def _estimate_concealed_hand_belief(policy_input: PolicyInput) -> ConcealedHandBelief:
+    """Belief対応版の推定器境界。
+
+    同じ`PolicyInput`だけから他家3人の`HandBelief`を導出する。現行は条件付き
+    一様推定器（Issue #65 / #68）である。別の推定器を接続する場合は、同じ
+    `PolicyInput`から`ConcealedHandBelief`を返す関数をここへ差し替え、別の
+    Policy identityを与える。
+    """
+    return estimate_conditional_uniform_hand_belief(
+        policy_input, _opponent_concealed_slot_counts_by_wind(policy_input)
+    )
+
+
+def _paijia_input_from_belief(
+    policy_input: PolicyInput, counts: _PublicCounts
+) -> _PaijiaInput:
+    """paijia入力を`未見枚数 − 他家3人の手牌内期待枚数`（fixed-point raw）にする。
+
+    ukeireと同じsnapshotの`counts.conservation`から`NonPlayerHiddenBelief`を
+    導出する。自手は`conservation`で既に既知として数えているため差し引かず、
+    赤5は34牌種の5（赤5を含む）とは別axisで与える。保存則違反は
+    `derive_non_player_hidden_belief()`がclampせずに拒否する。
+    """
+    try:
+        belief = _estimate_concealed_hand_belief(policy_input)
+        residual = derive_non_player_hidden_belief(
+            counts.conservation,
+            belief,
+            wind_for_seat(policy_input.self_seat, policy_input.round.dealer_seat),
+        )
+    except ValueError as error:
+        raise Kobalab0004ReferencePolicyError(
+            f"belief-derived paijia input is inconsistent: {error}"
+        ) from error
+    return _PaijiaInput(
+        residual.expected_count_raw, residual.red_five_probability_raw, policy_input
+    )
+
+
 def _remove_exact(tiles: Sequence[Tile], removed: Sequence[Tile]) -> list[Tile]:
     """赤牌区分を含むexact equalityで`removed`を1枚ずつ取り除く。"""
     remaining = list(tiles)
@@ -383,8 +459,12 @@ def _choose_discard(
     policy_input: PolicyInput,
     discard_actions: Sequence[DiscardAction],
     structures: _DiscardStructures,
+    *,
+    belief_paijia: bool = False,
 ) -> DiscardAction:
     counts = _PublicCounts(policy_input)
+    if belief_paijia:
+        counts.paijia_input = _paijia_input_from_belief(policy_input, counts)
     remaining = counts.remaining_tile_counts
     n_xiangting = structures.shanten
 
@@ -453,6 +533,7 @@ class Kobalab0004ReferencePolicy:
 
     identity = KOBALAB_0004_REFERENCE_IDENTITY
     reference_source = KOBALAB_0004_REFERENCE_SOURCE
+    _belief_paijia = False
 
     def choose_action(self, decision: DecisionContext) -> InternalAction:
         policy_input = decision.input
@@ -497,7 +578,12 @@ class Kobalab0004ReferencePolicy:
 
         if discards:
             structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
-            chosen = _choose_discard(policy_input, discards, structures)
+            chosen = _choose_discard(
+                policy_input,
+                discards,
+                structures,
+                belief_paijia=self._belief_paijia,
+            )
             riichi = [a for a in legal if isinstance(a, RiichiAction)]
             if (
                 riichi
@@ -518,9 +604,31 @@ class Kobalab0004ReferencePolicy:
         )
 
 
+class Kobalab0004BeliefPaijiaPolicy(Kobalab0004ReferencePolicy):
+    """0004参照Policyのpaijia入力だけをBelief由来の残余期待枚数へ替えた版（#218）。
+
+    paijiaの入力を`未見枚数 − 他家3人の手牌内期待枚数`
+    （`NonPlayerHiddenBelief`、fixed-point raw）にする。受入枚数・向聴数・
+    候補filter・評価順の同点処理・立直・槓・九種九牌・和了の判断規則は参照版と
+    同じで、ukeireは実残り枚数のままである。
+
+    現行の条件付き一様推定器では、残余期待枚数は丸め誤差を除いて未見枚数と
+    共通比率になる。この接続だけで打牌が改善するとは主張しない。期待枚数を
+    代入したpaijiaはヒューリスティックな牌価であり、牌価の期待値・ツモ確率・
+    和了確率ではない。
+    """
+
+    identity = KOBALAB_0004_BELIEF_PAIJIA_IDENTITY
+    belief_estimator = KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR
+    _belief_paijia = True
+
+
 __all__ = [
+    "KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR",
+    "KOBALAB_0004_BELIEF_PAIJIA_IDENTITY",
     "KOBALAB_0004_REFERENCE_IDENTITY",
     "KOBALAB_0004_REFERENCE_SOURCE",
+    "Kobalab0004BeliefPaijiaPolicy",
     "Kobalab0004ReferencePolicy",
     "Kobalab0004ReferencePolicyError",
     "evaluation_order",

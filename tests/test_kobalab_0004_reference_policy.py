@@ -12,16 +12,31 @@ import itertools
 import random
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from lisjong.belief import tile_type_index
+from lisjong.belief import (
+    SCALE,
+    ConcealedHandBelief,
+    HandBelief,
+    exact_self_belief,
+    tile_type_index,
+    wind_for_seat,
+    wind_index,
+)
 from lisjong.hand_evaluation import calculate_shanten
-from lisjong.policies import Kobalab0004ReferencePolicy
+from lisjong.policies import Kobalab0004BeliefPaijiaPolicy, Kobalab0004ReferencePolicy
+from lisjong.policies import kobalab_0004_reference as reference_module
 from lisjong.policies.kobalab_0004_reference import (
+    KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR,
+    KOBALAB_0004_BELIEF_PAIJIA_IDENTITY,
     KOBALAB_0004_REFERENCE_IDENTITY,
     Kobalab0004ReferencePolicyError,
     _allows_riichi_discard,
     _DiscardStructures,
     _improving_tile_types,
+    _opponent_concealed_slot_counts_by_wind,
+    _paijia_input_from_belief,
+    _PaijiaInput,
     _PublicCounts,
     evaluation_order,
 )
@@ -639,6 +654,232 @@ class TopLevelTest(unittest.TestCase):
         )
         with self.assertRaises(Kobalab0004ReferencePolicyError):
             Kobalab0004ReferencePolicy().choose_action(decision)
+
+
+def _choose_with(policy, policy_input: PolicyInput, actions: tuple) -> object:
+    decision = DecisionContext(input=policy_input, legal_actions=actions)
+    return execute_policy(policy, decision)
+
+
+def _belief_with_opponent_mass(
+    policy_input: PolicyInput, mass: dict[tuple[Seat, str], int]
+) -> ConcealedHandBelief:
+    """selfはexact、他家は`mass`（(seat, 牌) -> raw）だけを持つbelief。"""
+    rows = [[0] * 34 for _ in range(4)]
+    for (seat, spec), raw in mass.items():
+        wind = wind_for_seat(seat, policy_input.round.dealer_seat)
+        rows[wind_index(wind)][tile_type_index(_t(spec).tile_type)] += raw
+    self_wind = wind_for_seat(policy_input.self_seat, policy_input.round.dealer_seat)
+    return ConcealedHandBelief(
+        hands=tuple(
+            exact_self_belief(policy_input.own_hand)
+            if number == wind_index(self_wind)
+            else HandBelief(
+                expected_count_raw=tuple(rows[number]),
+                red_five_probability_raw=(0,) * 3,
+            )
+            for number in range(4)
+        )
+    )
+
+
+class BeliefPaijiaIdentityTest(unittest.TestCase):
+    def test_belief_variant_has_its_own_identity_and_estimator_record(self) -> None:
+        self.assertEqual(
+            KOBALAB_0004_BELIEF_PAIJIA_IDENTITY,
+            "kobalab-0004-tile-efficiency-belief-paijia-v1",
+        )
+        self.assertEqual(
+            Kobalab0004BeliefPaijiaPolicy.identity, KOBALAB_0004_BELIEF_PAIJIA_IDENTITY
+        )
+        self.assertNotEqual(
+            Kobalab0004BeliefPaijiaPolicy.identity, Kobalab0004ReferencePolicy.identity
+        )
+        self.assertEqual(
+            Kobalab0004BeliefPaijiaPolicy.belief_estimator,
+            KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR,
+        )
+        self.assertIn("conditional-uniform", KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR)
+        self.assertEqual(
+            Kobalab0004ReferencePolicy.identity, KOBALAB_0004_REFERENCE_IDENTITY
+        )
+
+
+class PaijiaScaleTest(unittest.TestCase):
+    """paijiaの式は入力の共通倍率に対して同じ倍率になる（丸めなし）。"""
+
+    def test_common_scale_multiplies_every_paijia(self) -> None:
+        generator = random.Random(218)
+        policy_input = _input("123m456p789s1234z5z", dora_indicators="4m7z")
+        tiles = sorted(set(_physical_tiles()), key=repr)
+        fives = tuple(
+            TileType(category, 5) for category in list(_CATEGORIES.values())[:3]
+        )
+        for _ in range(50):
+            counts = [generator.randint(0, 4) for _ in range(34)]
+            red = [
+                generator.randint(0, min(1, counts[tile_type_index(five)]))
+                for five in fives
+            ]
+            base = _PaijiaInput(counts, red, policy_input)
+            scaled = _PaijiaInput(
+                [c * SCALE for c in counts], [r * SCALE for r in red], policy_input
+            )
+            for tile in tiles:
+                self.assertEqual(scaled.paijia(tile), base.paijia(tile) * SCALE)
+
+    def test_zero_mass_is_all_zero_without_division(self) -> None:
+        zero = _PaijiaInput((0,) * 34, (0,) * 3, _input("123m456p789s1234z5z"))
+        self.assertEqual({zero.paijia(tile) for tile in _physical_tiles()}, {0})
+
+
+class OpponentSlotCountTest(unittest.TestCase):
+    def test_slots_follow_public_melds_and_seat_wind(self) -> None:
+        pon = PublicMeld(
+            kind=MeldKind.PON,
+            tiles=_hand("555z"),
+            from_seat=Seat.SEAT_0,
+            called_tile=_t("5z"),
+        )
+        ankan = PublicMeld(
+            kind=MeldKind.ANKAN, tiles=_hand("9999m"), from_seat=None, called_tile=None
+        )
+        players = (
+            _player(),
+            _player(melds=(pon,)),
+            _player(melds=(pon, ankan)),
+            _player(),
+        )
+        # dealer SEAT_2 = 東、SEAT_3 = 南、SEAT_0（self）= 西、SEAT_1 = 北。
+        policy_input = _input(
+            "123m456p789s1234z5z", players=players, dealer_seat=Seat.SEAT_2
+        )
+        self.assertEqual(
+            _opponent_concealed_slot_counts_by_wind(policy_input), (7, 13, 0, 10)
+        )
+
+    def test_more_melds_than_a_hand_can_hold_fails_closed(self) -> None:
+        ankan = PublicMeld(
+            kind=MeldKind.ANKAN, tiles=_hand("9999m"), from_seat=None, called_tile=None
+        )
+        players = (_player(), _player(melds=(ankan,) * 5), _player(), _player())
+        with self.assertRaises(Kobalab0004ReferencePolicyError):
+            _opponent_concealed_slot_counts_by_wind(_input("123m", players=players))
+
+
+class BeliefPaijiaInputTest(unittest.TestCase):
+    """Belief由来のpaijia入力 = 未見枚数 − 他家3人の手牌内期待枚数。"""
+
+    def test_uniform_residual_does_not_subtract_self_or_double_count_red(
+        self,
+    ) -> None:
+        policy_input = _input("05m1234567z123p45s", dora_indicators="3p")
+        counts = _PublicCounts(policy_input)
+        belief = reference_module._estimate_concealed_hand_belief(policy_input)
+        residual = _paijia_input_from_belief(policy_input, counts)
+        self_wind = wind_for_seat(
+            policy_input.self_seat, policy_input.round.dealer_seat
+        )
+        opponents = [
+            hand
+            for number, hand in enumerate(belief.hands)
+            if number != wind_index(self_wind)
+        ]
+        conservation = counts.conservation
+        for index in range(34):
+            self.assertEqual(
+                residual._counts[index],
+                conservation.remaining_tile_counts[index] * SCALE
+                - sum(hand.expected_count_raw[index] for hand in opponents),
+            )
+        for color in range(3):
+            self.assertEqual(
+                residual._red[color],
+                conservation.remaining_red_five_counts[color] * SCALE
+                - sum(hand.red_five_probability_raw[color] for hand in opponents),
+            )
+        # 他家3人のslotは39枚。残余は136 - 14（自手）- 1（ドラ表示牌）- 39 = 82枚分で、
+        # 推定器はphysical tile pool（34牌種 + 赤5 3色）ごとに丸めるため合計は
+        # pool数以内のraw unitだけずれ得る。
+        self.assertLessEqual(abs(sum(residual._counts) - 82 * SCALE), 37)
+
+    def test_without_opponent_mass_belief_paijia_is_reference_times_scale(
+        self,
+    ) -> None:
+        concealed = "1239m456p789s1167z"
+        policy_input = _input(concealed, "7z")
+        with mock.patch.object(
+            reference_module,
+            "_estimate_concealed_hand_belief",
+            lambda pi: _belief_with_opponent_mass(pi, {}),
+        ):
+            counts = _PublicCounts(policy_input)
+            residual = _paijia_input_from_belief(policy_input, counts)
+            for tile in _hand(concealed):
+                self.assertEqual(residual.paijia(tile), counts.paijia(tile) * SCALE)
+            actions = _all_discards(concealed, "7z")
+            self.assertEqual(
+                _choose_with(Kobalab0004BeliefPaijiaPolicy(), policy_input, actions),
+                _choose(policy_input, actions),
+            )
+
+    def test_non_uniform_belief_changes_paijia_order_but_not_ukeire(self) -> None:
+        # 6z / 7zはどちらを切ってもukeireが同じ。参照版はpaijia同点
+        # （白・中とも未見3枚）でsource順の7zを切る。他家が6zを2枚持つbeliefでは
+        # 6zの残余が1枚分になりpaijiaが下がるため、6zを先に評価して切る。
+        concealed = "1239m456p789s1167z"
+        policy_input = _input(concealed)
+        actions = _all_discards(concealed)
+        self.assertEqual(_choose(policy_input, actions), _discard("7z"))
+        belief = _belief_with_opponent_mass(
+            policy_input, {(Seat.SEAT_2, "6z"): 2 * SCALE}
+        )
+        with mock.patch.object(
+            reference_module, "_estimate_concealed_hand_belief", lambda pi: belief
+        ):
+            residual = _paijia_input_from_belief(
+                policy_input, _PublicCounts(policy_input)
+            )
+            self.assertEqual(
+                residual._counts[tile_type_index(_t("6z").tile_type)], SCALE
+            )
+            self.assertLess(residual.paijia(_t("6z")), residual.paijia(_t("7z")))
+            self.assertEqual(
+                _choose_with(Kobalab0004BeliefPaijiaPolicy(), policy_input, actions),
+                _discard("6z"),
+            )
+
+    def test_belief_exceeding_remaining_mass_fails_closed(self) -> None:
+        concealed = "1239m456p789s1167z"
+        policy_input = _input(concealed)
+        belief = _belief_with_opponent_mass(
+            policy_input, {(Seat.SEAT_1, "6z"): 4 * SCALE}
+        )
+        with mock.patch.object(
+            reference_module, "_estimate_concealed_hand_belief", lambda pi: belief
+        ):
+            with self.assertRaises(Kobalab0004ReferencePolicyError):
+                _choose_with(
+                    Kobalab0004BeliefPaijiaPolicy(),
+                    policy_input,
+                    _all_discards(concealed),
+                )
+
+    def test_non_discard_rules_are_unchanged(self) -> None:
+        concealed = "123456789m11p24s1z"
+        actions = (RiichiAction(actor=Seat.SEAT_0),) + _all_discards(concealed)
+        self.assertEqual(
+            _choose_with(Kobalab0004BeliefPaijiaPolicy(), _input(concealed), actions),
+            RiichiAction(actor=Seat.SEAT_0),
+        )
+        self.assertEqual(
+            _choose_with(
+                Kobalab0004BeliefPaijiaPolicy(),
+                _input("123m"),
+                (PassAction(actor=Seat.SEAT_0),),
+            ),
+            PassAction(actor=Seat.SEAT_0),
+        )
 
 
 class InformationBoundaryTest(unittest.TestCase):
