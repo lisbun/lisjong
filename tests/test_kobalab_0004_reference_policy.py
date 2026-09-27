@@ -28,19 +28,22 @@ from lisjong.belief import (
 from lisjong.belief import conditional_uniform_hand_belief as uniform_module
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import Kobalab0004BeliefPaijiaPolicy, Kobalab0004ReferencePolicy
+from lisjong.policies import kobalab_0004_discard as discard_module
 from lisjong.policies import kobalab_0004_reference as reference_module
+from lisjong.policies.kobalab_0004_discard import (
+    _DiscardStructures,
+    _improving_tile_types,
+    _PaijiaInput,
+    _PublicCounts,
+)
 from lisjong.policies.kobalab_0004_reference import (
     KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR,
     KOBALAB_0004_BELIEF_PAIJIA_IDENTITY,
     KOBALAB_0004_REFERENCE_IDENTITY,
     Kobalab0004ReferencePolicyError,
     _allows_riichi_discard,
-    _DiscardStructures,
-    _improving_tile_types,
     _opponent_concealed_slot_counts_by_wind,
     _paijia_input_from_belief,
-    _PaijiaInput,
-    _PublicCounts,
     evaluation_order,
 )
 from lisjong.policy_contract.action import (
@@ -426,14 +429,14 @@ class DiscardStructuresEquivalenceTest(unittest.TestCase):
         # 1回の一括評価で求める（手出し / ツモ切り、赤 / 通常は同じ牌種で1件）。
         concealed = "05m1234567z123p45s"
         calls = []
-        original = reference_module.evaluate_discards_from_canonical_counts
+        original = discard_module.evaluate_discards_from_canonical_counts
 
         def spy(counts, indexes, improving_max_shanten=None):
             calls.append((tuple(indexes), improving_max_shanten))
             return original(counts, indexes, improving_max_shanten)
 
         with mock.patch.object(
-            reference_module, "evaluate_discards_from_canonical_counts", spy
+            discard_module, "evaluate_discards_from_canonical_counts", spy
         ):
             action = Kobalab0004ReferencePolicy().choose_action(
                 DecisionContext(
@@ -969,9 +972,9 @@ class BeliefInventorySharingTest(unittest.TestCase):
         policy_input = _input(concealed, dora_indicators="3p")
         with (
             mock.patch.object(
-                reference_module,
+                discard_module,
                 "derive_remaining_tile_inventory",
-                wraps=reference_module.derive_remaining_tile_inventory,
+                wraps=discard_module.derive_remaining_tile_inventory,
             ) as policy_side,
             mock.patch.object(
                 uniform_module,
@@ -1032,20 +1035,33 @@ class BeliefInventorySharingTest(unittest.TestCase):
 
 class InformationBoundaryTest(unittest.TestCase):
     def test_module_imports_only_lisjong_and_stdlib(self) -> None:
-        import lisjong.policies.kobalab_0004_reference as module
+        for module in (reference_module, discard_module):
+            with self.subTest(module=module.__name__):
+                tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+                imported = {
+                    (node.module or "").split(".")[0]
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.ImportFrom)
+                } | {
+                    alias.name.split(".")[0]
+                    for node in ast.walk(tree)
+                    if isinstance(node, ast.Import)
+                    for alias in node.names
+                }
+                self.assertLessEqual(imported, {"lisjong", "collections"})
 
-        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    def test_shared_discard_module_does_not_depend_on_a_policy(self) -> None:
+        # Issue #226: 共通処理から特定Policyへ逆依存しない。
+        tree = ast.parse(Path(discard_module.__file__).read_text(encoding="utf-8"))
         imported = {
-            (node.module or "").split(".")[0]
+            node.module or ""
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom)
-        } | {
-            alias.name.split(".")[0]
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
         }
-        self.assertLessEqual(imported, {"lisjong", "collections"})
+        self.assertFalse(
+            any(name.startswith("lisjong.policies") for name in imported), imported
+        )
+        self.assertNotIn("_lisjong_native", {name.split(".")[0] for name in imported})
 
 
 if __name__ == "__main__":

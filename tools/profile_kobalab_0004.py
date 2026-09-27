@@ -50,23 +50,29 @@ _BREAKDOWN_TARGETS = (
     # (module, attribute, label)。存在しない属性はskipし、reportへ記録する。
     ("lisjong.policies.kobalab_0004_reference", "calculate_shanten", "shanten"),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        # Issue #226: 打牌前向聴数の検証（`_DiscardStructures`）は共通moduleにある。
+        "lisjong.policies.kobalab_0004_discard",
+        "calculate_shanten",
+        "structures_shanten",
+    ),
+    (
+        "lisjong.policies.kobalab_0004_discard",
         # Issue #224: 打牌候補の一括構造評価（打牌後向聴数と改善牌）。
         "evaluate_discards_from_canonical_counts",
         "discard_batch",
     ),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "_improving_tile_types",
         "improving_tile_types",
     ),
     ("lisjong.policies.kobalab_0004_reference", "_remove_exact", "remove_exact"),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "derive_remaining_tile_inventory",
         "remaining_inventory",
     ),
-    ("lisjong.policies.kobalab_0004_reference", "_evaluation_order", "eval_order"),
+    ("lisjong.policies.kobalab_0004_discard", "_evaluation_order", "eval_order"),
     ("lisjong.policies.kobalab_0004_reference", "_choose_discard", "choose_discard"),
     (
         "lisjong.policies.kobalab_0004_reference",
@@ -106,8 +112,8 @@ _BREAKDOWN_TARGETS = (
     ),
 )
 _PAIJIA_TARGETS = (
-    ("lisjong.policies.kobalab_0004_reference", "_PublicCounts", "paijia"),
-    ("lisjong.policies.kobalab_0004_reference", "_PaijiaInput", "paijia"),
+    ("lisjong.policies.kobalab_0004_discard", "_PublicCounts", "paijia"),
+    ("lisjong.policies.kobalab_0004_discard", "_PaijiaInput", "paijia"),
 )
 
 

@@ -32,12 +32,12 @@ from pathlib import Path
 from lisjong.belief import derive_remaining_tile_inventory, tile_type_index
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import Kobalab0004ReferencePolicy
-from lisjong.policies.kobalab_0004_reference import (
+from lisjong.policies.kobalab_0004_discard import (
     _DiscardStructures,
     _improving_tile_types,
     _PublicCounts,
-    evaluation_order,
 )
+from lisjong.policies.kobalab_0004_reference import evaluation_order
 from lisjong.policy_contract.action import (
     AnkanAction,
     DiscardAction,

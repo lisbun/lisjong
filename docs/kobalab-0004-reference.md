@@ -15,6 +15,12 @@ Issue: [lisbun/lisjong#211](https://github.com/lisbun/lisjong/issues/211)
 `DecisionContext -> InternalAction` 契約と既存評価器の上で独立実装した
 deterministic reference Policy である。
 
+打牌選択の構造評価・枚数集計・候補選択は、他のPolicy（[#226](https://github.com/lisbun/lisjong/issues/226)の
+`PlacementAwareSpeedCallKobalab0004DiscardPolicy`）と共有するため
+`lisjong.policies.kobalab_0004_discard`に置く。attribution・upstream commitと本文書の意味対応はその
+moduleにも適用される。参照版・Belief版の判断順序、paijia入力の選択、立直判定は
+`kobalab_0004_reference`に残る。
+
 本Policyは **「0004 の選択規則を lisjong の exact shanten へ適用した参照実装」** と
 位置付ける。判断順序・候補 filter・ukeire・paijia・評価順といった 0004 の選択規則を再現し、
 向聴数には lisjong の exact shanten を使う。そのため下記の向聴定義差は設計上許容し、
@@ -82,6 +88,8 @@ sourceの `action_zimo()` / `action_dapai()` / `action_gang()` に対応する�
    選択を更新する。受入・paijia が同値なら評価順で先の候補が残る。
 5. 全候補が除外された場合は評価順の最初の候補を返す（source の初期値 fallback）。
    通常は14枚向聴数と最良打牌後の向聴数が一致するため到達しない。
+   この fallback は参照版・Belief版だけの規則で、#226 の合成版は候補制限後の最小打牌後向聴数の候補から
+   同じ規則で選ぶ（[合成版の記録](placement-aware-speed-call-kobalab-0004-discard.md)）。
 
 ### 実残り枚数
 
