@@ -99,7 +99,7 @@ Issue: [lisbun/lisjong#226](https://github.com/lisbun/lisjong/issues/226)
 
 ### 5.1 切り出しの同値性
 
-基準は`main` `8bdfd3f5`（本Issue起票時）のsourceをlocal artifactへcopyしたものとし、本branchと同じ手順で
+基準は`main` `8bdfd3f942ced49830bcee1894aefe3d2e0acc3a`（本Issue起票時）のsourceをlocal artifactへcopyしたものとし、本branchと同じ手順で
 記録を比較した。記録は[#224 §8.4](kobalab-0004-belief-paijia.md#84-同値性)と同じfixtureを拡張したもので、
 固定decision 3入力（計2,022 decision）と合成入力について次を含む。
 
@@ -126,7 +126,7 @@ backendの記録と全件一致することを確認した（708 / 684 / 630件�
 
 | 項目 | 値 |
 | --- | --- |
-| 基準（B） | `main` `8bdfd3f5`（sourceのcopyを別processで実行） |
+| 基準（B） | `main` `8bdfd3f942ced49830bcee1894aefe3d2e0acc3a`（sourceのcopyを別processで実行） |
 | 変更後（N / 新候補） | 本branch |
 | native | #224のlocal source build（`.pyd` SHA-256 `8ca87921…446e1c`、`API_VERSION = 2`）。B・Nとも同じbuild。本Issueで`native/`は変更していない |
 | backend | `LISJONG_SHANTEN_BACKEND=rust` |
