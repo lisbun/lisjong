@@ -51,6 +51,7 @@ Policyを古典的な純牌効率baselineと比較するための外部documente
 hidden opponent hand、wall truth、外部環境privateなstateは参照しない。
 """
 
+from collections import Counter
 from collections.abc import Sequence
 
 from lisjong.belief import (
@@ -61,6 +62,7 @@ from lisjong.belief import (
     wind_index,
 )
 from lisjong.hand_evaluation import calculate_shanten
+from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
 from lisjong.policy_contract.action import (
     AnkanAction,
     DiscardAction,
@@ -146,6 +148,11 @@ class _PublicCounts:
         )
         self._paijia_cache: dict[Tile, int] = {}
 
+    @property
+    def remaining_tile_counts(self) -> tuple[int, ...]:
+        """canonical 34牌種indexの未見枚数（赤5を含む）。"""
+        return self._remaining
+
     def remaining(self, tile_type: TileType) -> int:
         """sourceの`_paishu[s][n]`（赤5を含む基礎牌種の未見枚数）。"""
         return self._remaining[tile_type_index(tile_type)]
@@ -229,7 +236,11 @@ def _remove_exact(tiles: Sequence[Tile], removed: Sequence[Tile]) -> list[Tile]:
 
 
 def _improving_tile_types(hand: Sequence[Tile]) -> tuple[TileType, ...]:
-    """sourceの`Majiang.Util.tingpai()`: 手中4枚でなく向聴数を下げる牌種。"""
+    """sourceの`Majiang.Util.tingpai()`: 手中4枚でなく向聴数を下げる牌種。
+
+    Tile列を直接評価する単純な定義。判断経路は同値な`_DiscardStructures`を使い、
+    この関数はその定義の正本・testのoracleとして残す。
+    """
     current = calculate_shanten(hand)
     counts: dict[TileType, int] = {}
     for tile in hand:
@@ -240,6 +251,75 @@ def _improving_tile_types(hand: Sequence[Tile]) -> tuple[TileType, ...]:
         if counts.get(tile_type, 0) < _MAX_COPIES_PER_TILE_TYPE
         and calculate_shanten([*hand, Tile(tile_type)]) < current
     )
+
+
+class _DiscardStructures:
+    """1 decisionの打牌候補について、打牌後の向聴数と改善牌を牌種ごとに共有する。
+
+    Issue #218の同値最適化。打牌後の牌姿は捨てる牌の基礎牌種だけで決まるため、
+    ツモ切り / 手出し、赤5 / 通常5の候補は同じ構造評価を共有する。値は牌姿だけに
+    依存し、公開枚数・ドラ・Beliefには依存しない（それらはukeire / paijia側で
+    適用する）。instanceはdecision-localで、snapshot間で共有しない。
+
+    打牌前の手牌を`calculate_shanten()`で1度だけ検証し、以降は34牌種countの
+    -1（打牌）/ +1（仮想ツモ）だけでcount-native hot pathを呼ぶ。改善牌は
+    `_improving_tile_types()`と同じ「手中4枚でなく向聴数を下げる牌種」で、
+    未見枚数0の牌種も含む（形としての改善牌。立直の和了牌判定にも使う）。
+    """
+
+    def __init__(self, concealed: Sequence[Tile]) -> None:
+        self.shanten = calculate_shanten(concealed)
+        self._held = Counter(concealed)
+        counts = [0] * len(_ALL_TILE_TYPES)
+        for tile in concealed:
+            counts[tile_type_index(tile.tile_type)] += 1
+        self._counts = counts
+        self._shanten_after: dict[int, int] = {}
+        self._improving_after: dict[int, tuple[int, ...]] = {}
+
+    def _discard_index(self, tile: Tile) -> int:
+        if self._held[tile] <= 0:
+            raise Kobalab0004ReferencePolicyError(
+                f"{tile} is not in own_hand.concealed_tiles"
+            )
+        return tile_type_index(tile.tile_type)
+
+    def shanten_after(self, tile: Tile) -> int:
+        """`tile`を捨てた後の向聴数。"""
+        index = self._discard_index(tile)
+        shanten = self._shanten_after.get(index)
+        if shanten is None:
+            counts = self._counts
+            counts[index] -= 1
+            try:
+                shanten = calculate_shanten_from_canonical_counts(counts)
+            finally:
+                counts[index] += 1
+            self._shanten_after[index] = shanten
+        return shanten
+
+    def improving_after(self, tile: Tile) -> tuple[int, ...]:
+        """`tile`を捨てた後の改善牌（canonical 34牌種index、昇順）。"""
+        index = self._discard_index(tile)
+        improving = self._improving_after.get(index)
+        if improving is None:
+            current = self.shanten_after(tile)
+            counts = self._counts
+            counts[index] -= 1
+            try:
+                found = []
+                for drawn in range(len(counts)):
+                    if counts[drawn] >= _MAX_COPIES_PER_TILE_TYPE:
+                        continue
+                    counts[drawn] += 1
+                    shanten = calculate_shanten_from_canonical_counts(counts)
+                    counts[drawn] -= 1
+                    if shanten < current:
+                        found.append(drawn)
+            finally:
+                counts[index] += 1
+            improving = self._improving_after[index] = tuple(found)
+        return improving
 
 
 def _source_order_key(action: DiscardAction) -> tuple[int, ...]:
@@ -280,21 +360,22 @@ def _evaluation_order(
 
 
 def _choose_discard(
-    policy_input: PolicyInput, discard_actions: Sequence[DiscardAction]
+    policy_input: PolicyInput,
+    discard_actions: Sequence[DiscardAction],
+    structures: _DiscardStructures,
 ) -> DiscardAction:
     counts = _PublicCounts(policy_input)
-    concealed = policy_input.own_hand.concealed_tiles
-    n_xiangting = calculate_shanten(concealed)
+    remaining = counts.remaining_tile_counts
+    n_xiangting = structures.shanten
 
     chosen: DiscardAction | None = None
     best = -1
     for action in _evaluation_order(counts, discard_actions):
         if chosen is None:
             chosen = action
-        after = _remove_exact(concealed, (action.tile,))
-        if calculate_shanten(after) > n_xiangting:
+        if structures.shanten_after(action.tile) > n_xiangting:
             continue
-        ukeire = sum(counts.remaining(t) for t in _improving_tile_types(after))
+        ukeire = sum(remaining[i] for i in structures.improving_after(action.tile))
         if ukeire > best:
             best = ukeire
             chosen = action
@@ -302,10 +383,20 @@ def _choose_discard(
     return chosen
 
 
-def _allows_riichi_discard(policy_input: PolicyInput, action: DiscardAction) -> bool:
-    """source `allow_lizhi(shoupai, p)`の牌姿条件: 打牌後聴牌かつ和了牌あり。"""
-    after = _remove_exact(policy_input.own_hand.concealed_tiles, (action.tile,))
-    return calculate_shanten(after) == 0 and bool(_improving_tile_types(after))
+def _allows_riichi_discard(
+    policy_input: PolicyInput,
+    action: DiscardAction,
+    structures: _DiscardStructures | None = None,
+) -> bool:
+    """source `allow_lizhi(shoupai, p)`の牌姿条件: 打牌後聴牌かつ和了牌あり。
+
+    和了牌は形としての改善牌で判定し、未見枚数では絞らない。
+    """
+    if structures is None:
+        structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
+    return structures.shanten_after(action.tile) == 0 and bool(
+        structures.improving_after(action.tile)
+    )
 
 
 def _kan_removed_tiles(action: AnkanAction | KakanAction) -> tuple[Tile, ...]:
@@ -385,13 +476,14 @@ class Kobalab0004ReferencePolicy:
                     return action
 
         if discards:
-            chosen = _choose_discard(policy_input, discards)
+            structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
+            chosen = _choose_discard(policy_input, discards, structures)
             riichi = [a for a in legal if isinstance(a, RiichiAction)]
             if (
                 riichi
                 and policy_input.players[int(policy_input.self_seat)].riichi
                 is RiichiState.NONE
-                and _allows_riichi_discard(policy_input, chosen)
+                and _allows_riichi_discard(policy_input, chosen, structures)
             ):
                 return riichi[0]
             return chosen

@@ -9,15 +9,18 @@ Policy実装を呼んで期待値を作る自己検証は避ける。upstream実
 
 import ast
 import itertools
+import random
 import unittest
 from pathlib import Path
 
+from lisjong.belief import tile_type_index
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import Kobalab0004ReferencePolicy
 from lisjong.policies.kobalab_0004_reference import (
     KOBALAB_0004_REFERENCE_IDENTITY,
     Kobalab0004ReferencePolicyError,
     _allows_riichi_discard,
+    _DiscardStructures,
     _improving_tile_types,
     _PublicCounts,
     evaluation_order,
@@ -314,6 +317,78 @@ class ShantenReuseTest(unittest.TestCase):
     def test_post_kan_hand_uses_standard_form(self) -> None:
         # 暗槓後10枚: 23m 456p 789s 5z6z -> 確定1面子込みで1向聴。
         self.assertEqual(len(_improving_tile_types(_hand("23m456p789s56z"))) > 0, True)
+
+
+def _physical_tiles() -> list[Tile]:
+    tiles: list[Tile] = []
+    for category in _CATEGORIES.values():
+        for rank in range(1, (7 if category is TileCategory.HONOR else 9) + 1):
+            tile_type = TileType(category, rank)
+            red = 1 if rank == 5 and category is not TileCategory.HONOR else 0
+            if red:
+                tiles.append(Tile(tile_type, is_red=True))
+            tiles += [Tile(tile_type)] * (4 - red)
+    return tiles
+
+
+class DiscardStructuresEquivalenceTest(unittest.TestCase):
+    """#218の共有構造評価がTile単位の定義（打牌後`calculate_shanten` /
+    `_improving_tile_types`）と中間値で一致することを固定する。"""
+
+    def _assert_equivalent(self, hand: tuple[Tile, ...]) -> None:
+        structures = _DiscardStructures(hand)
+        self.assertEqual(structures.shanten, calculate_shanten(hand))
+        for tile in set(hand):
+            after = list(hand)
+            after.remove(tile)
+            with self.subTest(hand=hand, tile=tile):
+                self.assertEqual(
+                    structures.shanten_after(tile), calculate_shanten(after)
+                )
+                self.assertEqual(
+                    structures.improving_after(tile),
+                    tuple(tile_type_index(t) for t in _improving_tile_types(after)),
+                )
+
+    def test_random_hands_of_every_meld_count(self) -> None:
+        generator = random.Random(218)
+        physical = _physical_tiles()
+        for size in (14, 11, 8, 5, 2):
+            for _ in range(60):
+                self._assert_equivalent(tuple(generator.sample(physical, size)))
+
+    def test_four_copies_red_fives_and_special_forms(self) -> None:
+        for spec in (
+            "123456789p1111s5z",
+            "0555s1p123456789m",
+            "1133557799m11p3p5z",
+            "19m19p19s1234567z1m",
+            "05m1234567z123p45s",
+            "1111m2222p3333s44z",
+        ):
+            self._assert_equivalent(_hand(spec))
+
+    def test_red_and_normal_five_share_structure(self) -> None:
+        structures = _DiscardStructures(_hand("05m1234567z123p45s"))
+        self.assertEqual(
+            structures.improving_after(_t("0m")), structures.improving_after(_t("5m"))
+        )
+
+    def test_tile_not_in_hand_fails_closed(self) -> None:
+        structures = _DiscardStructures(_hand("123m456p789s1234z5z"))
+        with self.assertRaises(Kobalab0004ReferencePolicyError):
+            structures.shanten_after(_t("9m"))
+        with self.assertRaises(Kobalab0004ReferencePolicyError):
+            _DiscardStructures(_hand("123m456p789s1235z5z")).improving_after(_t("0m"))
+
+    def test_riichi_check_reuses_structures_with_same_result(self) -> None:
+        policy_input = _input("123456789p1111s5z", "5z")
+        structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
+        for spec in ("5z", "1s", "1p"):
+            self.assertEqual(
+                _allows_riichi_discard(policy_input, _discard(spec), structures),
+                _allows_riichi_discard(policy_input, _discard(spec)),
+            )
 
 
 class DiscardSelectionTest(unittest.TestCase):
