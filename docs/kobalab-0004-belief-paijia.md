@@ -143,7 +143,7 @@ role               正規版への採用準備の候補。Champion候補・defau
 | --- | --- |
 | 生成・供給 | Policy自身が、打牌候補を評価するdecisionごとに**同じ`PolicyInput`から1回だけ**導出する（候補ごとに再計算しない）。ukeireと同じsnapshotの`TileConservationResult`を`derive_non_player_hidden_belief()`へ渡す |
 | 他家concealed slot数 | 公開情報だけから`13 − 3 × 副露・槓の数`（暗槓・加槓・大明槓も1面子）。自分の打牌decisionでは他家は手番外で常にこの枚数。Seatは`wind_for_seat(seat, dealer_seat)`で自風へ対応付け、自分のentryは0 |
-| 推定器 | `_estimate_concealed_hand_belief()`（`estimate_conditional_uniform_hand_belief()`を呼ぶ）。**将来の推定器の接続境界**：同じ`PolicyInput`から`ConcealedHandBelief`を返す関数へ差し替え、別のPolicy identityを与える。汎用Belief frameworkは作っていない |
+| 推定器 | `_estimate_concealed_hand_belief()`（`estimate_conditional_uniform_hand_belief()`と同じ結果の内部経路`_estimate_from_conservation()`へ、同じdecisionで導出済みの未見枚数を渡す。§6）。**将来の推定器の接続境界**：同じ`PolicyInput`から`ConcealedHandBelief`を返す関数へ差し替え、別のPolicy identityを与える。汎用Belief frameworkは作っていない |
 | 再現情報 | Policy classの`identity`と`belief_estimator`（推定器と設定の記述）。推定器・slot導出を変える場合は両方を変える |
 | 不正・欠落入力 | 副露数が手牌で保持できる範囲を超える、推定器入力の不整合、Beliefが残余massを超える保存則違反はclampせず、`Kobalab0004ReferencePolicyError`でfail closedする。未見枚数の導出自体の不整合は参照版と同じく`derive_remaining_tile_inventory()`が拒否する |
 
@@ -213,5 +213,82 @@ Python backendでは1,750 ms → 1,914 ms（1 process）。
    参照版・一様Belief版とArenaのpure-offense benchmark（lisjong-arena#406系）で記述的に比較する。
    一様Belief版単独の比較は、差が量子化による同点崩れに限られるため優先度は低い。
 2. 正規版としてdefault / Arena catalogへ登録するかの判断（参照版の単純な改名は行わない）。
-3. 一様推定器と`derive_remaining_tile_inventory()`の二重導出の解消（推定器APIへ導出済みinventoryを
-   渡せるようにする等）。共有belief基盤の変更になるため別Issueで扱う。
+3. ~~一様推定器と`derive_remaining_tile_inventory()`の二重導出の解消~~ →
+   [#220](https://github.com/lisbun/lisjong/issues/220)で実施（§6）。
+
+## 6. 未見枚数の共有（Issue #220）
+
+Issue: [lisbun/lisjong#220](https://github.com/lisbun/lisjong/issues/220)。
+推定能力・丸め・Policy identityは変えず、同じdecision内の未見枚数（`TileConservationResult`）の
+二重導出だけを解消した。
+
+### 6.1 重複の実測（基準 = `1263db5`、Rust、`breakdown`、1 passあたり）
+
+| 対象 | 呼び出し | self [ms] |
+| --- | ---: | ---: |
+| Policy側の未見枚数導出（`_PublicCounts`） | 502 | 37.0 |
+| 推定器内部の未見枚数の再導出（重複） | 502 | 34.9 |
+| 推定器の固定小数点配分（`HandBelief`生成・検証を含む） | 502 | 54.4 |
+| 推定器内の自手exact belief | 502 | 5.9 |
+| 残余の導出・保存則検証（`derive_non_player_hidden_belief`） | 502 | 11.3 |
+| 自手の34牌種count構築（`_DiscardStructures`初期化、self） | 502 | 5.1 |
+| 参照版paijia入力の生成（Belief版で置き換えられる分を含む） | 1,004 | 2.3 |
+
+wrapのoverheadを含むため比率の目安であり、速度比較には§6.3の`timing`を使う。
+
+### 6.2 共有経路と整合性
+
+- 推定器module（`conditional_uniform_hand_belief.py`）に内部関数`_estimate_from_conservation(policy_input,
+  conservation, slots)`を設けた。公開API`estimate_conditional_uniform_hand_belief(policy_input, slots)`は
+  未見枚数を導出してから同じ配分関数を呼ぶだけで、引数・結果・検証・例外の順序は変わらない。
+  公開API（`__all__`）は増やしていない。
+- **生成責務・有効期間**：`_choose_discard()`が判断ごとに作る`_PublicCounts`が、その判断の
+  `PolicyInput`から未見枚数を1回だけ導出する。同じ`counts.conservation`をukeire、推定器、
+  `derive_non_player_hidden_belief()`へ渡し、判断をまたいで保持しない（cacheなし）。
+  `TileConservationResult`は不変のtupleで、共有先は変更しない。
+- snapshotの照合（再導出して比較する等）は行わない。組み合わせは上記の内部経路でだけ作られ、
+  照合のために同じinventoryを再導出すると共有の意味がなくなるため。
+- 保存則検証（推定器のslot上限、`derive_non_player_hidden_belief()`のclampしない拒否）は維持した。
+
+### 6.3 同値性と性能
+
+**同値性**：比較元は変更前commit `1263db5`のsourceを別processで実行して生成した。
+固定decision 3入力（§1の0004 / two-step / champion、計2,022 decision、打牌1,601件）と合成入力
+（赤5、ポン・暗槓・加槓と鳴かれた捨て牌、親の位置4通り × 自席2通り、残余0、未見枚数の不整合、
+公開APIの不正slot・不正型）について、公開API・Policy推定器境界の期待枚数raw・赤5 raw、残余raw、
+両版のpaijia・評価順・最終行動・例外（型とmessage）を記録した。基準・変更後 × Rust / Python backend の
+4通りで内容のSHA-256が一致した（`a3087c6189930d9d199c6f18bbda2dabdeeb3ce5669167521e341847f06519d7`）。
+Issue #218で観測した量子化による同点崩れもそのまま維持されている。
+
+**性能**（Rust、0004入力630 decision、1 process 7 pass、warm pass合計の中央値、各版3 process）。
+版の実行順は`B N N B B N`（B = 基準、N = 変更後）と反転組`N B B N N B`で、計測前に固定した。
+計測時の機械状態が#218時点と異なるため、絶対値は§4.5と直接比較しない。
+
+| 版 | 組1 `B N N B B N` [ms] | 組2 `N B B N N B` [ms] |
+| --- | --- | --- |
+| Belief版 基準 | **301.3**（318.2 / 301.3 / 298.1） | **268.7**（268.6 / 268.7 / 269.8） |
+| Belief版 変更後 | **276.4**（288.4 / 276.4 / 249.7） | **233.4**（228.9 / 237.5 / 233.4） |
+| 参照版 基準 | 149.1（149.1 / 149.4 / 145.2） | 141.9（140.5 / 141.9 / 143.7） |
+| 参照版 変更後 | 146.8（147.2 / 146.8 / 145.6） | 143.3（142.1 / 158.8 / 143.3） |
+
+組1はprocess間の変動が大きく（時間経過とともに全体が速くなった）、組2は安定していた。
+Belief版は組2で約35 ms / pass（約13%）短縮し、§6.1の重複導出分と一致する。参照版はコード経路が
+変わらず、差は変動の範囲内。Python backendでは組1で基準2,074.4 ms・変更後1,998.6 msだが、
+向聴数計算が支配的でpass間の変動（±150 ms程度）の範囲内である。
+変更後の`breakdown`では推定器内部の未見枚数導出は0回、Policy側は打牌decisionごとに1回（502回）。
+
+### 6.4 判断
+
+- **未見枚数の共有：採用**。変更は内部関数1つと呼び出し側の引数追加だけで、公開APIと挙動を維持したまま
+  重複分を除けた。
+- **自手countの共有：見送り**。自手の34牌種化は未見枚数の導出、`exact_self_belief()`、
+  `_DiscardStructures`でそれぞれ行うが、合計しても1 passあたり十数ms未満（wrap込み）で、共有には
+  `exact_self_belief()`や`TileConservationResult`の入力型（Tile列 → count）を変える必要がある。
+  型境界を崩すほどの効果はない。今後、非一様推定器等で自手countを使う処理が増え、`breakdown`で
+  主要な割合を占めるようになった場合に再検討する。
+- 残りの主な追加costは推定器の配分（`HandBelief`生成・検証を含む）で、推定器の実装自体の変更に
+  なるため本Issueの範囲外とした。
+
+raw JSON・補助script・基準sourceのcopyはlocal artifact root
+`C:\Dev\lisjong-artifacts\issue-220-belief-inventory\`（`results/`、`scripts/`、`baseline-1263db5/`）にある。
+Rust backendは§1と同じlocal build（`SOURCE_REVISION = 2553c1b…`）、CPython 3.14.7。

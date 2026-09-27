@@ -18,11 +18,13 @@ from lisjong.belief import (
     SCALE,
     ConcealedHandBelief,
     HandBelief,
+    derive_remaining_tile_inventory,
     exact_self_belief,
     tile_type_index,
     wind_for_seat,
     wind_index,
 )
+from lisjong.belief import conditional_uniform_hand_belief as uniform_module
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import Kobalab0004BeliefPaijiaPolicy, Kobalab0004ReferencePolicy
 from lisjong.policies import kobalab_0004_reference as reference_module
@@ -775,7 +777,9 @@ class BeliefPaijiaInputTest(unittest.TestCase):
     ) -> None:
         policy_input = _input("05m1234567z123p45s", dora_indicators="3p")
         counts = _PublicCounts(policy_input)
-        belief = reference_module._estimate_concealed_hand_belief(policy_input)
+        belief = reference_module._estimate_concealed_hand_belief(
+            policy_input, counts.conservation
+        )
         residual = _paijia_input_from_belief(policy_input, counts)
         self_wind = wind_for_seat(
             policy_input.self_seat, policy_input.round.dealer_seat
@@ -811,7 +815,7 @@ class BeliefPaijiaInputTest(unittest.TestCase):
         with mock.patch.object(
             reference_module,
             "_estimate_concealed_hand_belief",
-            lambda pi: _belief_with_opponent_mass(pi, {}),
+            lambda pi, conservation: _belief_with_opponent_mass(pi, {}),
         ):
             counts = _PublicCounts(policy_input)
             residual = _paijia_input_from_belief(policy_input, counts)
@@ -835,7 +839,9 @@ class BeliefPaijiaInputTest(unittest.TestCase):
             policy_input, {(Seat.SEAT_2, "6z"): 2 * SCALE}
         )
         with mock.patch.object(
-            reference_module, "_estimate_concealed_hand_belief", lambda pi: belief
+            reference_module,
+            "_estimate_concealed_hand_belief",
+            lambda pi, conservation: belief,
         ):
             residual = _paijia_input_from_belief(
                 policy_input, _PublicCounts(policy_input)
@@ -856,7 +862,9 @@ class BeliefPaijiaInputTest(unittest.TestCase):
             policy_input, {(Seat.SEAT_1, "6z"): 4 * SCALE}
         )
         with mock.patch.object(
-            reference_module, "_estimate_concealed_hand_belief", lambda pi: belief
+            reference_module,
+            "_estimate_concealed_hand_belief",
+            lambda pi, conservation: belief,
         ):
             with self.assertRaises(Kobalab0004ReferencePolicyError):
                 _choose_with(
@@ -880,6 +888,75 @@ class BeliefPaijiaInputTest(unittest.TestCase):
             ),
             PassAction(actor=Seat.SEAT_0),
         )
+
+
+class BeliefInventorySharingTest(unittest.TestCase):
+    """Issue #220: 未見枚数はdecisionごとに1回だけ導出し、推定器と残余で共有する。"""
+
+    def test_inventory_is_derived_once_per_belief_discard_decision(self) -> None:
+        concealed = "05m1234567z123p45s"
+        policy_input = _input(concealed, dora_indicators="3p")
+        with (
+            mock.patch.object(
+                reference_module,
+                "derive_remaining_tile_inventory",
+                wraps=reference_module.derive_remaining_tile_inventory,
+            ) as policy_side,
+            mock.patch.object(
+                uniform_module,
+                "derive_remaining_tile_inventory",
+                wraps=uniform_module.derive_remaining_tile_inventory,
+            ) as estimator_side,
+        ):
+            _choose_with(
+                Kobalab0004BeliefPaijiaPolicy(),
+                policy_input,
+                _all_discards(concealed),
+            )
+        self.assertEqual(policy_side.call_count + estimator_side.call_count, 1)
+
+    def test_consecutive_decisions_use_their_own_snapshot(self) -> None:
+        pon = PublicMeld(
+            kind=MeldKind.PON,
+            tiles=_hand("555z"),
+            from_seat=Seat.SEAT_0,
+            called_tile=_t("5z"),
+        )
+        first = _input("1239m456p789s1167z")
+        second = _input(
+            "1239m456p789s1167z",
+            players=(
+                _player(discards=_discards("5z", called_by=Seat.SEAT_2)),
+                _player(discards=_discards("6z7z")),
+                _player(melds=(pon,)),
+                _player(),
+            ),
+            dealer_seat=Seat.SEAT_1,
+        )
+        actions = _all_discards("1239m456p789s1167z")
+        policy = Kobalab0004BeliefPaijiaPolicy()
+        with mock.patch.object(
+            reference_module,
+            "_estimate_from_conservation",
+            wraps=reference_module._estimate_from_conservation,
+        ) as estimator:
+            for policy_input in (first, second, first):
+                self.assertEqual(
+                    _choose_with(policy, policy_input, actions),
+                    _choose_with(
+                        Kobalab0004BeliefPaijiaPolicy(), policy_input, actions
+                    ),
+                )
+        received = [call.args[:2] for call in estimator.call_args_list]
+        self.assertEqual(len(received), 6)
+        for (policy_input, conservation), expected_input in zip(
+            received, (first, first, second, second, first, first), strict=True
+        ):
+            self.assertIs(policy_input, expected_input)
+            self.assertEqual(
+                conservation, derive_remaining_tile_inventory(expected_input)
+            )
+        self.assertNotEqual(received[0][1], received[2][1])
 
 
 class InformationBoundaryTest(unittest.TestCase):
