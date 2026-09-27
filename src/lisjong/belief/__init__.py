@@ -38,6 +38,9 @@ marginals（`expected_count` / `red_five_probability`）はconcealed handのみ�
 を条件としたderived hand-state beliefである。hidden handからのwait推定
 heuristic、learned estimator、training dataset生成、Policyへの統合はこの
 builderの責務ではない。
+Issue #221で、有効牌等の牌種集合をcanonical index tupleで表し、確定枚数・
+fixed-point期待枚数の34牌種配列へmask適用・合計する共通処理
+（`tile_type_set.py`）を追加した。
 
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
@@ -107,6 +110,12 @@ from lisjong.belief.tile_inventory import (
     TILE_TYPE_COUNT,
     TOTAL_PHYSICAL_TILE_COUNT,
 )
+from lisjong.belief.tile_type_set import (
+    intersect_tile_type_sets,
+    mask_tile_type_values,
+    sum_tile_type_values,
+    tile_type_set,
+)
 
 __all__ = [
     "BASE_TILE_COUNT_MAX",
@@ -136,6 +145,8 @@ __all__ = [
     "exact_hand_belief_with_waits_for_own_hand_state",
     "exact_self_belief",
     "expected_count_to_raw",
+    "intersect_tile_type_sets",
+    "mask_tile_type_values",
     "probability_to_raw",
     "raw_to_semantic",
     "red_five_index",
@@ -143,8 +154,10 @@ __all__ = [
     "red_five_probability_to_raw",
     "round_half_to_even_ratio",
     "seat_for_wind",
+    "sum_tile_type_values",
     "tile_type_from_index",
     "tile_type_index",
+    "tile_type_set",
     "wind_for_seat",
     "wind_from_index",
     "wind_index",
