@@ -89,7 +89,7 @@ sourceの `action_zimo()` / `action_dapai()` / `action_gang()` に対応する�
 5. 全候補が除外された場合は評価順の最初の候補を返す（source の初期値 fallback）。
    通常は14枚向聴数と最良打牌後の向聴数が一致するため到達しない。
    この fallback は参照版・Belief版だけの規則で、#226 の合成版は候補制限後の最小打牌後向聴数の候補から
-   同じ規則で選ぶ（[合成版の記録](placement-aware-speed-call-kobalab-0004-discard.md)）。
+   同じ規則で選ぶ（[合成版の記録](placement-aware-speed-call-kobalab-0004-discard.md)。PUSHのpaijia入力だけをBelief由来にした別候補は[#230の記録](placement-aware-speed-call-kobalab-0004-belief-paijia-discard.md)）。
 
 ### 実残り枚数
 
