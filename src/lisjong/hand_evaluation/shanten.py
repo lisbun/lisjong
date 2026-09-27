@@ -28,7 +28,9 @@ lisjong内部向けのperformance contractであり、package rootの`__all__`�
 追加しない一般非公開の入口である。新しい向聴semanticを定義するものでも、
 private backendを公開するものでもない。numeric shantenのstandard / 七対子 /
 国士無双 / 確定面子数のdispatchは`_shanten_from_valid_counts()`だけが持ち、
-入口ごとに複製しない。package-internalのstructural completion / tenpai
+入口ごとに複製しない。Issue #224の`evaluate_discards_from_canonical_counts()`は
+打牌（-1）と仮想ツモ（+1）の列挙を1回の呼び出しにまとめる同じ層の入口で、各向聴数は
+同じsemantic coreで求める。package-internalのstructural completion / tenpai
 predicateもこのmoduleが所有し、special-hand計算は同じhelperを共有する。
 
 34牌種countはprivateな内部表現であり、一般公開APIにはしない。
@@ -65,6 +67,12 @@ _VALID_CONCEALED_TILE_COUNTS = frozenset({1, 2, 4, 5, 7, 8, 10, 11, 13, 14})
 
 _MELDLESS_TILE_COUNTS = frozenset({13, 14})
 """確定面子が0で、七対子・国士無双を候補にできる純手牌枚数。"""
+
+_DISCARD_HAND_SIZES = frozenset({2, 5, 8, 11, 14})
+"""打牌後も有効な純手牌枚数になる、打牌前の純手牌枚数。"""
+
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
 
 
 def calculate_shanten(tiles: Iterable[Tile]) -> int:
@@ -147,6 +155,119 @@ def calculate_shanten_from_canonical_counts(counts: Sequence[int]) -> int:
     `use_validation=False`のようなruntime flagは持たせない。
     """
     return _shanten_from_valid_counts(counts, sum(counts))
+
+
+def evaluate_discards_from_canonical_counts(
+    counts: Sequence[int],
+    discard_indexes: Iterable[int],
+    improving_max_shanten: int | None = None,
+) -> tuple[tuple[int, ...], tuple[tuple[int, ...] | None, ...]]:
+    """打牌候補の打牌後向聴数と改善牌を一括で求める、lisjong内部の入口（Issue #224）。
+
+    `calculate_shanten_from_canonical_counts()`と同じくpackage-internalで、
+    package rootの`__all__`へは追加しない。打牌（-1）と仮想ツモ（+1）の列挙を
+    1回の呼び出しにまとめ、各向聴数は同じnumeric core
+    （`_shanten_from_valid_counts()`）で求める。打牌戦略（候補の選別規則、
+    受入集計、評価順）は持たない。backendの切替は`_shanten_backend`だけが行い、
+    rust選択時はnative実装（`StandardShantenTable.evaluate_discards`）に
+    差し替わる。呼び出し側は`_lisjong_native`を直接importしない。
+
+    入力::
+
+        counts                 canonical 34牌種count（各0..4）。打牌できる純手牌
+                               枚数（2 / 5 / 8 / 11 / 14）
+        discard_indexes        評価する打牌牌種のcanonical index（int、boolは不可、
+                               0..33、重複不可、countsに1枚以上あること）
+        improving_max_shanten  Noneなら全候補の改善牌を求める。intなら打牌後向聴数が
+                               この値以下の候補だけ改善牌を求める
+
+    返り値は`(shanten_after, improving_after)`で、どちらも`discard_indexes`と
+    同じ順序・同じ長さのtupleである（候補が空なら`((), ())`）。
+
+    - `shanten_after[i]`: `discard_indexes[i]`を1枚捨てた後の向聴数
+    - `improving_after[i]`: その打牌後に1枚引くと向聴数が下がる牌種の
+      canonical index（昇順・重複なし）。打牌後の手中に4枚ある牌種は引けない
+      ので除外し、残り枚数（未見枚数0を含む）は参照しない。評価済みの空集合は
+      `()`、評価しなかった候補は`None`で、両者を区別する。
+
+    入力は変更しない。不正入力は評価前に例外にする（lenや値域・手牌枚数・
+    indexの範囲・重複・保有なし・threshold範囲は`ValueError`、indexやthresholdが
+    int以外またはbool、countがint以外は`TypeError`）。両backendで同じ例外型を
+    送出する（messageはcountの型エラーだけbackendで異なり得る）。
+    """
+    return _evaluate_discards(counts, discard_indexes, improving_max_shanten)
+
+
+def _python_evaluate_discards(
+    counts: Sequence[int],
+    discard_indexes: Iterable[int],
+    improving_max_shanten: int | None = None,
+) -> tuple[tuple[int, ...], tuple[tuple[int, ...] | None, ...]]:
+    """`evaluate_discards_from_canonical_counts()`のPython実装（Python numeric core）。"""
+    work = list(counts)
+    if len(work) != _python_shanten.TILE_KIND_COUNT:
+        raise ValueError("counts must contain exactly 34 values")
+    for count in work:
+        if not isinstance(count, int):
+            raise TypeError("counts must contain only int values")
+        if not 0 <= count <= _MAX_COPIES_PER_TILE_KIND:
+            raise ValueError("counts must contain only values from 0 to 4")
+    total = sum(work)
+    if total not in _DISCARD_HAND_SIZES:
+        raise ValueError(
+            "counts must hold a concealed hand size that allows a discard "
+            "(2, 5, 8, 11 or 14)"
+        )
+    indexes = _read_discard_indexes(discard_indexes, work)
+    if improving_max_shanten is not None:
+        if type(improving_max_shanten) is bool or not isinstance(
+            improving_max_shanten, int
+        ):
+            raise TypeError("improving_max_shanten must be None or an int")
+        if not _INT64_MIN <= improving_max_shanten <= _INT64_MAX:
+            raise ValueError("improving_max_shanten is out of range")
+
+    core = _python_shanten_from_valid_counts
+    shanten_after = []
+    improving_after: list[tuple[int, ...] | None] = []
+    for index in indexes:
+        work[index] -= 1
+        after = core(work, total - 1)
+        if improving_max_shanten is None or after <= improving_max_shanten:
+            found = []
+            for drawn in range(len(work)):
+                if work[drawn] >= _MAX_COPIES_PER_TILE_KIND:
+                    continue
+                work[drawn] += 1
+                shanten = core(work, total)
+                work[drawn] -= 1
+                if shanten < after:
+                    found.append(drawn)
+            improving_after.append(tuple(found))
+        else:
+            improving_after.append(None)
+        work[index] += 1
+        shanten_after.append(after)
+    return tuple(shanten_after), tuple(improving_after)
+
+
+def _read_discard_indexes(
+    discard_indexes: Iterable[int], counts: list[int]
+) -> list[int]:
+    indexes = []
+    seen = set()
+    for index in discard_indexes:
+        if type(index) is bool or not isinstance(index, int):
+            raise TypeError("discard_indexes must contain only int values")
+        if not 0 <= index < _python_shanten.TILE_KIND_COUNT:
+            raise ValueError("discard_indexes must contain only values from 0 to 33")
+        if index in seen:
+            raise ValueError("discard_indexes must not contain duplicates")
+        seen.add(index)
+        if counts[index] == 0:
+            raise ValueError("discard_indexes must reference tile types held in counts")
+        indexes.append(index)
+    return indexes
 
 
 def calculate_restricted_standard_shanten(
@@ -258,6 +379,13 @@ if _shanten_backend.native_shanten_from_valid_counts is not None:
     # numeric core全体を同じsemanticのnative実装へ差し替える。defaultの
     # Python processではこのbranchを通らず、上の関数がそのまま使われる。
     _shanten_from_valid_counts = _shanten_backend.native_shanten_from_valid_counts
+
+_evaluate_discards = _python_evaluate_discards
+if _shanten_backend.native_evaluate_discards is not None:
+    # Issue #224: 同じくrust選択時だけ、打牌候補の一括構造評価をnative実装へ
+    # 差し替える。native側は同じnumeric coreを使い、入口の組はimport時に
+    # `_shanten_backend`がAPI_VERSIONで確認済みである。
+    _evaluate_discards = _shanten_backend.native_evaluate_discards
 
 
 def _meldless_special_shanten(counts: Sequence[int]) -> int:

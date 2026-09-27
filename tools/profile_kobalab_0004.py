@@ -51,8 +51,9 @@ _BREAKDOWN_TARGETS = (
     ("lisjong.policies.kobalab_0004_reference", "calculate_shanten", "shanten"),
     (
         "lisjong.policies.kobalab_0004_reference",
-        "calculate_shanten_from_canonical_counts",
-        "shanten_counts",
+        # Issue #224: 打牌候補の一括構造評価（打牌後向聴数と改善牌）。
+        "evaluate_discards_from_canonical_counts",
+        "discard_batch",
     ),
     (
         "lisjong.policies.kobalab_0004_reference",
@@ -154,8 +155,16 @@ def _native_revision() -> str | None:
 
 
 def _native_call_count() -> int | None:
+    """native numeric coreの実計算回数（境界呼び出し回数ではない。Issue #224）。"""
     module = sys.modules.get("_lisjong_native")
     return None if module is None else module.standard_shanten_call_count()
+
+
+def _native_batch_call_count() -> int | None:
+    """一括構造評価の境界呼び出し回数（#224以前のnativeにはないのでNone）。"""
+    module = sys.modules.get("_lisjong_native")
+    counter = getattr(module, "discard_evaluation_call_count", None)
+    return None if counter is None else counter()
 
 
 def _environment() -> dict[str, object]:
@@ -176,6 +185,7 @@ def _run_timing(arguments: argparse.Namespace) -> dict[str, object]:
     passes = []
     mismatches = 0
     native_before = _native_call_count()
+    batch_before = _native_batch_call_count()
     per_decision: list[list[float]] = []
     for pass_index in range(arguments.repeat):
         gc.collect()
@@ -200,6 +210,7 @@ def _run_timing(arguments: argparse.Namespace) -> dict[str, object]:
             }
         )
     native_after = _native_call_count()
+    batch_after = _native_batch_call_count()
 
     warm = per_decision[1:] or per_decision
     medians = [statistics.median(column) for column in zip(*warm, strict=True)]
@@ -223,6 +234,9 @@ def _run_timing(arguments: argparse.Namespace) -> dict[str, object]:
         "action_mismatches": mismatches if arguments.compare_recorded else None,
         "native_standard_shanten_calls": (
             None if native_before is None else native_after - native_before
+        ),
+        "native_discard_batch_calls": (
+            None if batch_before is None else batch_after - batch_before
         ),
         "environment": _environment(),
     }

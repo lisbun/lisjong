@@ -54,6 +54,14 @@ native拡張は、Python側の`_shanten_table.bin`、resource state combine tabl
 
 利用側（Arena）は、導入前に2を照合し、導入後に3が1と一致することを確認する。一致しなければ対局開始前に失敗させる。
 
+**native API version（Issue #224）**：上記とは別に、native拡張は提供する入口の組を`_lisjong_native.API_VERSION`で示す
+（1 = `standard_shanten` / `shanten_from_valid_counts`、#224以前のwheelは属性なしで1とみなす。
+2 = 打牌候補の一括構造評価`evaluate_discards`を追加）。`LISJONG_SHANTEN_BACKEND=rust`のprocessは
+`_shanten_backend`のimport時に`API_VERSION`が本体の`REQUIRED_NATIVE_API_VERSION`と一致することを確認し、
+不一致なら`ShantenBackendError`で失敗する（一部の入口だけPythonへ切り替えない）。python選択時はnative拡張をimportしないため、
+旧wheelがinstallされていても影響しない。これは古いwheelの取り違えを起動時に検出する最低限の検査であり、
+§3の3値による組み合わせ固定（SHA-256・`SOURCE_REVISION`照合）を置き換えない。
+
 ## 4. CI
 
 `.github/workflows/ci.yml`の2 job。default installと他のjobはPython-onlyのままで、Rust toolchainを要求しない。

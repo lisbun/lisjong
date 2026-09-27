@@ -34,6 +34,15 @@ native backendは入力preconditionを実行時にも検査する（34要素、�
 `fixed_meld_count` 0..4）。Python backendはtrusted callerを前提に検査しない。
 precondition違反の入力に対する例外型だけはbackendで異なり得るが、
 precondition内の入力に対する結果は一致する（differential testsで固定）。
+
+Issue #224で、打牌候補の構造評価を一括で行う
+`shanten.evaluate_discards_from_canonical_counts()`のnative実装
+（`StandardShantenTable.evaluate_discards`）を追加した。native拡張は入口の組を
+`API_VERSION`で識別し、rust選択時はimport時に`REQUIRED_NATIVE_API_VERSION`と
+一致することを確認する。#224以前のwheel（`API_VERSION`属性なし = 1）や将来の
+不一致なwheelは`ShantenBackendError`でfail closedし、一部の入口だけPythonへ
+切り替えることはしない。python選択時はnative拡張をimportしないため、旧wheelが
+installされていても影響しない。
 """
 
 import os
@@ -44,6 +53,8 @@ from lisjong.hand_evaluation import _lookup_shanten
 BACKEND_ENVIRONMENT_VARIABLE = "LISJONG_SHANTEN_BACKEND"
 PYTHON_BACKEND = "python"
 RUST_BACKEND = "rust"
+REQUIRED_NATIVE_API_VERSION = 2
+"""rust選択時に要求する`_lisjong_native.API_VERSION`（Issue #224）。"""
 
 
 class ShantenBackendError(Exception):
@@ -77,6 +88,15 @@ def _import_native_module():
             "'python -m pip install ./native'); refusing to fall back to the "
             "Python backend"
         ) from error
+    # API_VERSIONを持たない#224以前のwheelは1として扱う。
+    api_version = getattr(_lisjong_native, "API_VERSION", 1)
+    if api_version != REQUIRED_NATIVE_API_VERSION:
+        raise ShantenBackendError(
+            f"{BACKEND_ENVIRONMENT_VARIABLE}={RUST_BACKEND!r} requires "
+            f"_lisjong_native API_VERSION {REQUIRED_NATIVE_API_VERSION}, got "
+            f"{api_version!r}; rebuild or reinstall the native extension from "
+            "the same lisjong revision"
+        )
     return _lisjong_native
 
 
@@ -102,12 +122,18 @@ native_shanten_from_valid_counts = None
 そのまま使う。
 """
 
+native_evaluate_discards = None
+"""rust選択時だけ設定される、`shanten.evaluate_discards_from_canonical_counts()`の
+native実装（Issue #224）。python選択時はNoneで、Python実装をそのまま使う。
+"""
+
 if BACKEND_NAME == RUST_BACKEND:
-    # rustを明示した場合はimport時にnative tableまで構築する。artifactや
-    # native拡張の問題を最初のdecisionではなく起動時にfail closedで検出し、
-    # hot pathにlazy-load用のPython wrapper frameを挟まない。
+    # rustを明示した場合はimport時にnative API versionの確認とnative table構築まで
+    # 行う。artifactやnative拡張の問題を最初のdecisionではなく起動時にfail closedで
+    # 検出し、hot pathにlazy-load用のPython wrapper frameを挟まない。
     _NATIVE_TABLE = build_native_table(_import_native_module())
     calculate_standard_shanten = _NATIVE_TABLE.standard_shanten
     native_shanten_from_valid_counts = _NATIVE_TABLE.shanten_from_valid_counts
+    native_evaluate_discards = _NATIVE_TABLE.evaluate_discards
 else:
     calculate_standard_shanten = _lookup_shanten.calculate_standard_shanten
