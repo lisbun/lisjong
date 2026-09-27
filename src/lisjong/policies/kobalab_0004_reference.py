@@ -64,6 +64,7 @@ from lisjong.belief import (
     derive_non_player_hidden_belief,
     derive_remaining_tile_inventory,
     red_five_index,
+    sum_tile_type_values,
     tile_type_index,
     wind_for_seat,
     wind_index,
@@ -375,6 +376,8 @@ class _DiscardStructures:
     -1（打牌）/ +1（仮想ツモ）だけでcount-native hot pathを呼ぶ。改善牌は
     `_improving_tile_types()`と同じ「手中4枚でなく向聴数を下げる牌種」で、
     未見枚数0の牌種も含む（形としての改善牌。立直の和了牌判定にも使う）。
+    改善牌はcanonical index昇順・重複なしで構築し、`lisjong.belief.tile_type_set`の
+    牌種集合の契約を満たす（Issue #221。集約時に再検証しない）。
     """
 
     def __init__(self, concealed: Sequence[Tile]) -> None:
@@ -409,7 +412,7 @@ class _DiscardStructures:
         return shanten
 
     def improving_after(self, tile: Tile) -> tuple[int, ...]:
-        """`tile`を捨てた後の改善牌（canonical 34牌種index、昇順）。"""
+        """`tile`を捨てた後の改善牌（canonical 34牌種indexの牌種集合、昇順）。"""
         index = self._discard_index(tile)
         improving = self._improving_after.get(index)
         if improving is None:
@@ -489,7 +492,9 @@ def _choose_discard(
             chosen = action
         if structures.shanten_after(action.tile) > n_xiangting:
             continue
-        ukeire = sum(remaining[i] for i in structures.improving_after(action.tile))
+        ukeire = sum_tile_type_values(
+            remaining, structures.improving_after(action.tile)
+        )
         if ukeire > best:
             best = ukeire
             chosen = action
@@ -508,8 +513,9 @@ def _allows_riichi_discard(
     """
     if structures is None:
         structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
-    return structures.shanten_after(action.tile) == 0 and bool(
-        structures.improving_after(action.tile)
+    return (
+        structures.shanten_after(action.tile) == 0
+        and len(structures.improving_after(action.tile)) > 0
     )
 
 

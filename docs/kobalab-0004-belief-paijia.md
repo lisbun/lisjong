@@ -292,3 +292,88 @@ Belief版は組2で約35 ms / pass（約13%）短縮し、§6.1の重複導出�
 raw JSON・補助script・基準sourceのcopyはlocal artifact root
 `C:\Dev\lisjong-artifacts\issue-220-belief-inventory\`（`results/`、`scripts/`、`baseline-1263db5/`）にある。
 Rust backendは§1と同じlocal build（`SOURCE_REVISION = 2553c1b…`）、CPython 3.14.7。
+
+## 7. canonical有効牌集合のmask適用・集約（Issue #221）
+
+Issue: [lisbun/lisjong#221](https://github.com/lisbun/lisjong/issues/221)
+
+有効牌等の牌種集合を34牌種canonical axis上で表し、確定枚数（`TileConservationResult.remaining_tile_counts`）と
+fixed-point期待枚数（`HandBelief` / `NonPlayerHiddenBelief`の`expected_count_raw`）へ同じ集合を適用・合計する
+共通処理を`lisjong.belief.tile_type_set`に置き、0004の従来の受入集計へ統合した。新しい推定器・打牌規則は導入していない。
+
+### 7.1 契約（正本はmodule docstring）
+
+| 項目 | 契約 |
+| --- | --- |
+| axis | 既存の`tile_type_index()`（0..33）だけを使い、新しい牌種順序を作らない |
+| 集合の表現 | canonical indexを昇順・重複なしに並べた`tuple[int, ...]`（既存0004の`improving_after()`と同じ）。赤 / 通常、手出し / ツモ切りのidentityは持たない |
+| 空集合 | `()`。空判定は`len(...) == 0` / `> 0`で明示する（0004の立直判定も`bool(...)`から明示判定へ変更、結果は同じ） |
+| 検証境界 | `tile_type_set()`が入力indexを検証（`int`かつ0..33、`bool`不可）し、重複を集合として除去して昇順にする唯一の境界。交差・mask・合計は正規化済みの集合を前提とし、呼び出しごとに再検証しない（`values`の長さ34だけを検証）。0004の`_DiscardStructures`は構築時にこの契約を満たす |
+| 交差 | `intersect_tile_type_sets()`（昇順を保つ）。「未見枚数が正の改善牌」は構造上の集合を狭めず、別の交差として得る |
+| mask出力 | `mask_tile_type_values()`は選択位置の値をそのまま、非選択位置を0にした同じaxisの34要素。選択値だけを詰めた配列ではない |
+| 合計 | `sum_tile_type_values()`は34要素の中間配列を作らず、入力と同じ尺度の正確な整数和を返す。exact枚数ならexact枚数、rawなら`SCALE = 8192`倍のraw。float化・丸め戻し・1牌種上限（4枚 / `4 * SCALE`）での切り詰めをしない。bitwise ANDは値へ適用しない |
+| 赤5 | 34牌種の5は赤5を含むため、受入合計へ赤5を追加加算しない。赤5の内訳は本Issueでは返さない |
+| 派生値 | 元の`values` / beliefは変更しない。mask後の値は完全な手牌beliefではなく`HandBelief`等へ再構築しない。残余は王牌等を含み、mask後の期待枚数はツモ確率・和了確率ではない |
+
+構造上の改善牌（向聴数を下げる手中4枚未満の牌種、未見枚数0を含む）の算出は既存の向聴数評価のままで、
+mask演算で有効牌そのものを求めるわけではない。Belief由来の合計を打牌選択へ導入する変更は行っておらず、
+参照版・Belief版とも受入は実残り枚数、paijia規則も従来どおりである。
+
+### 7.2 表現候補の試作（micro計測）
+
+基準`fafa6c7`（#220を含む`main`）のPolicyで0004入力（§1、630 decision）を再生し、向聴数を悪化させない
+打牌候補2,717件の（改善牌、未見枚数、残余raw）を採取した（集合サイズ平均7.9、最大27）。各候補表現について
+**集合の生成・検証・合計を含めて**同じ入力で計測した（15回、順序を交互に反転、中央値）。
+
+| 候補 | 実経路（1配列）[ms] | 再利用例（未見枚数 + 残余rawの2配列）[ms] |
+| --- | ---: | ---: |
+| A: 既存index tuple + inline `sum(genexpr)`（基準） | 1.00 | 1.98 |
+| B: index tuple + helper（`values`長の検証 + `sum([...])`） | 0.63 | 1.21 |
+| C: int bitset（bit i = index i、範囲検証 + set bit走査） | 2.43 | 4.16 |
+| D: 0/1の34要素配列（乗算で合計） | 4.03 | 8.09 |
+
+全候補で2,717件すべての合計が基準Aと一致した。差は1 passあたり数msで、Policy全体（§7.3、Rustで約130 ms）に
+比べて小さい。bitsetは交差・範囲検証がO(1)だが、Pythonでは合計時のbit走査が遅く、構造評価がすでにindexを
+昇順に列挙するためtuple→bitset変換も追加になる。bitset・専用class・SIMD / Rust化は採用しない。
+再利用例の数値は同じ集合を2配列へ適用した場合の参考であり、実Policyの高速化とは扱わない。
+
+### 7.3 同値性と性能（Policy全体）
+
+**同値性**：比較元は固定基準`fafa6c78673f278a797ff5bd29ea8ac4f33e136e`のsourceを別processで実行して生成した。
+固定decision 3入力（§1、計2,022 decision、打牌trace 3,202件）と合成入力（赤5、待ちの未見0での立直、聴牌立直、
+残余0、保存則違反）について、両Policyの最終行動（立直を含む）、評価順、候補ごとの打牌後向聴数・改善牌集合・
+立直可否、`_choose_discard()`が評価順に比較したukeire列と選択結果、例外を記録した。ukeire列は、基準では
+fixture側で基準の式（inline sum）を適用し、変更後では`sum_tile_type_values`をspyしてPolicy経路で実際に
+計算された値を記録しており、新規helperで期待値を作っていない。基準・変更後 × Rust / Python backendの4通りで
+内容のSHA-256が一致した（`1ff15cb07d2e721e28e9f482f15328123c039d032906b28417d0356956cd7543`）。
+Belief版の量子化による同点崩れ（記録済み行動との差14件）も基準と同じである。
+
+**性能**：§6.3と同じ手順（0004入力630 decision、1 process 7 pass、warm pass合計の中央値、各版3 process、
+実行順`B N N B B N`と反転組`N B B N N B`を計測前に固定、B = 基準`fafa6c7`、N = 変更後）。
+Rust backendは§1と同じlocal build（`SOURCE_REVISION = 2553c1b…`）、CPython 3.14.7。
+
+| 版 | 組1 `B N N B B N` [ms] | 組2 `N B B N N B` [ms] |
+| --- | --- | --- |
+| 参照版 基準（Rust） | **127.6**（124.6 / 130.2 / 127.6） | **133.1**（129.8 / 133.1 / 139.7） |
+| 参照版 変更後（Rust） | **127.3**（127.3 / 127.9 / 124.6） | **133.4**（135.1 / 133.4 / 128.2） |
+| Belief版 基準（Rust） | **212.0**（212.0 / 225.4 / 210.2） | **224.2**（222.9 / 224.2 / 251.0） |
+| Belief版 変更後（Rust） | **211.4**（209.3 / 211.4 / 217.5） | **215.4**（215.4 / 214.1 / 257.9） |
+| 参照版 基準（Python） | **1,430.0**（1,430.0 / 1,465.0 / 1,420.0） | — |
+| 参照版 変更後（Python） | **1,434.9**（1,434.9 / 1,438.8 / 1,406.9） | — |
+| Belief版 基準（Python） | **1,502.9**（1,510.5 / 1,486.3 / 1,502.9） | — |
+| Belief版 変更後（Python） | **1,487.5**（1,487.5 / 1,528.1 / 1,483.3） | — |
+
+いずれも差はprocess間の変動の範囲内で、性能上の改善・悪化とは判断しない（受入集計は§7.2のとおり
+1 passあたり約1 msで、Policy全体の1%未満）。
+
+### 7.4 判断
+
+- **採用**（既存index tuple表現を正本とする最小の共通処理）。集合の意味・空判定・尺度・赤5・派生値の契約を
+  1か所に固定し、同じ集合を確定枚数とBelief rawへ同じ関数で適用できるようにした。表現変更による高速化は
+  前提にしておらず、Policy全体の時間は変わらない。
+- 0004では従来の受入集計を`sum_tile_type_values()`へ置き換え、立直判定を明示的な空判定にした。
+  構造評価のcache（打牌後の牌種ごとの改善牌tuple）はそのまま使い、tuple→mask→tupleの往復変換は追加していない。
+- 全Policyへの展開、Belief由来の合計の打牌選択への導入、赤5内訳の返却は範囲外とした。
+
+raw JSON・補助script・基準sourceのcopyはlocal artifact root
+`C:\Dev\lisjong-artifacts\issue-221-tile-type-set\`（`results/`、`scripts/`、`baseline-fafa6c7/`）にある。

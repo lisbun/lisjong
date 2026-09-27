@@ -20,6 +20,7 @@ from lisjong.belief import (
     HandBelief,
     derive_remaining_tile_inventory,
     exact_self_belief,
+    sum_tile_type_values,
     tile_type_index,
     wind_for_seat,
     wind_index,
@@ -397,6 +398,26 @@ class DiscardStructuresEquivalenceTest(unittest.TestCase):
             structures.shanten_after(_t("9m"))
         with self.assertRaises(Kobalab0004ReferencePolicyError):
             _DiscardStructures(_hand("123m456p789s1235z5z")).improving_after(_t("0m"))
+
+    def test_wait_with_no_unseen_copy_stays_improving_and_allows_riichi(self) -> None:
+        # Issue #221: 待ち5z（単騎）の残り3枚が河に見えていて未見0でも、
+        # 構造上の改善牌には残り、立直可否を狭めない。受入合計は0になる。
+        players = (
+            (_player(),) + (_player(discards=_discards("5z5z5z")),) + (_player(),) * 2
+        )
+        policy_input = _input("123456789m123p5z9s", "9s", players=players)
+        structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
+        improving = structures.improving_after(_t("9s"))
+        waits = (tile_type_index(_t("5z").tile_type),)
+        self.assertEqual(improving, waits)
+        counts = _PublicCounts(policy_input)
+        self.assertEqual(sum_tile_type_values(counts.remaining_tile_counts, waits), 0)
+        self.assertTrue(
+            _allows_riichi_discard(policy_input, _discard("9s"), structures)
+        )
+        self.assertFalse(
+            _allows_riichi_discard(policy_input, _discard("1m"), structures)
+        )
 
     def test_riichi_check_reuses_structures_with_same_result(self) -> None:
         policy_input = _input("123456789p1111s5z", "5z")
