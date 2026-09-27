@@ -506,7 +506,8 @@ native実装を照合する（打牌可能な全枚数の乱択手、七対子�
   Pythonでは1,468 ms / 1,561 msで差は変動の範囲。
 - import時間（rust、`import lisjong.policies`、5回の中央値）：B 102.5 ms、N 103.7 ms（+1.2 ms）。
   peak working set（3 pass後）はB・Nとも約38–39 MBで、nativeは呼び出し間で状態を持たない。
-- 短縮はM2の上限（48% / 31%）の約半分で、残りは一括版でも残るRust内の向聴数計算である。
+- 短縮はM2の参考値（48% / 31%）の約半分だった。一括版にもRust内の向聴数計算、Python側の処理、
+  入力・戻り値の生成等が残るため、M2との差を特定の処理だけに帰属させることはできない。
 
 **判断：採用**（条件1–5をすべて満たした）。Policy計算の短縮であり、対局全体の短縮率とは扱わない。
 compilerなしのAL2023でのwheel検証はCIの`native-backend` job（新しいtestを含むrust選択下のfull suite）で行う。
