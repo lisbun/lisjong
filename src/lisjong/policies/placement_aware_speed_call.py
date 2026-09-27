@@ -386,6 +386,17 @@ def _top_fold_actions(
     return tuple(action for action, danger in dangers if danger == minimum)
 
 
+def _eligible_discard_actions(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+) -> tuple[DiscardAction, ...]:
+    """役保持・オーラストップFOLDの候補制限を、parentへ渡す順序で適用する。"""
+    eligible_actions = _route_preserving_actions(policy_input, discard_actions)
+    if situation_mode(policy_input) is GameSituationMode.ALL_LAST_TOP_SPEED:
+        eligible_actions = _top_fold_actions(policy_input, eligible_actions)
+    return eligible_actions
+
+
 class PlacementAwareSpeedCallPolicy(TargetedHonorReleaseTerminalProgressionPolicy):
     """Issue #199: 役確定型スピード鳴き + 役保持打牌 + オーラスmode。"""
 
@@ -424,10 +435,9 @@ class PlacementAwareSpeedCallPolicy(TargetedHonorReleaseTerminalProgressionPolic
         policy_input: PolicyInput,
         discard_actions: tuple[DiscardAction, ...],
     ) -> PolicyDecision:
-        eligible_actions = _route_preserving_actions(policy_input, discard_actions)
-        if situation_mode(policy_input) is GameSituationMode.ALL_LAST_TOP_SPEED:
-            eligible_actions = _top_fold_actions(policy_input, eligible_actions)
-        return super()._decide_discard(policy_input, eligible_actions)
+        return super()._decide_discard(
+            policy_input, _eligible_discard_actions(policy_input, discard_actions)
+        )
 
 
 __all__ = ["GameSituationMode", "PlacementAwareSpeedCallPolicy", "situation_mode"]

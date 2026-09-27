@@ -15,13 +15,15 @@ commit e75a9720a12b84c03e6c61c3960c1844b8982eb4）の`select_dapai()` /
 - 枚数集計 `_PublicCounts` / `_PaijiaInput`: 同じdecisionの公開情報から
   再構成した未見枚数と、paijia（ドラ・赤牌・役牌等を含むヒューリスティックな
   牌価）の入力snapshot。仮に捨てる牌を未見牌へ戻さない。
-- 候補選択 `_evaluation_order()` / `_choose_reference_discard()`: paijiaと
-  source順による決定的な評価順で、受入（未見枚数の合計）が厳密に増えた場合だけ
-  選択を更新する。
+- 候補選択 `_evaluation_order()` / `_choose_reference_discard()` /
+  `_choose_minimum_shanten_discard()`: paijiaとsource順による決定的な評価順で、
+  受入（未見枚数の合計）が厳密に増えた場合だけ選択を更新する。
 
 参照版の選択（`_choose_reference_discard()`）は、打牌前向聴数以下の候補が
-なければ評価順の先頭を返すsourceの初期値fallbackを含む。渡された候補集合の外の
-Actionを返さない。
+なければ評価順の先頭を返すsourceの初期値fallbackを含む。合成版の選択
+（`_choose_minimum_shanten_discard()`、Issue #226）は、渡された候補集合に
+打牌前向聴数以下の候補がなければ、最小の打牌後向聴数を達成する候補の中を
+同じ規則で比較する。どちらも渡された候補集合の外のActionを返さない。
 
 このmoduleはPolicyのclassや判断規則（立直・槓・和了・九種九牌・鳴き）を
 持たず、特定Policyへ依存しない。instanceはdecision-localで、snapshotを跨ぐ
@@ -71,7 +73,7 @@ _SUITED_MAXIMUM_RANK = 9
 class Kobalab0004ReferencePolicyError(Exception):
     """入力がreference semanticsの前提と整合せず、fail closedする場合。
 
-    0004の打牌評価を使うPolicy（参照版・Belief版）が共有する。
+    0004の打牌評価を使うPolicy（参照版・Belief版・Issue #226の合成版）が共有する。
     """
 
 
@@ -234,7 +236,9 @@ class _DiscardStructures:
     をまとめて1回評価し、改善牌は打牌後向聴数が現在の向聴数以下の候補だけ求める
     （参照版の選択が改善牌を使うのはその候補だけ）。それ以外の候補の改善牌
     （和了形からの立直判定等）や、候補に含まれなかった牌種は、問い合わせ時に
-    その牌種だけ評価する。未評価（`None`）を空集合として扱わない。
+    その牌種だけ評価する。複数候補の改善牌が後から必要な場合（Issue #226の
+    合成版fallback）は`evaluate_improving()`で未評価分をまとめて1回評価する。
+    未評価（`None`）を空集合として扱わない。
 
     改善牌は`_improving_tile_types()`と同じ「手中4枚でなく向聴数を下げる牌種」で、
     未見枚数0の牌種も含む（形としての改善牌。立直の和了牌判定にも使う）。
@@ -312,6 +316,16 @@ class _DiscardStructures:
                 improving = self._improving_after[index]
         return improving
 
+    def evaluate_improving(self, tiles: Sequence[Tile]) -> None:
+        """`tiles`の改善牌のうち未評価の牌種を、まとめて1回の一括評価で求める。"""
+        indexes = tuple(dict.fromkeys(self._discard_index(tile) for tile in tiles))
+        self._evaluate_pending()
+        missing = tuple(
+            index for index in indexes if index not in self._improving_after
+        )
+        if missing:
+            self._evaluate(missing, None)
+
 
 def _source_order_key(action: DiscardAction) -> tuple[int, ...]:
     """`get_dapai().reverse()`の位置を表すkey（小さいほど先）。
@@ -379,4 +393,34 @@ def _choose_reference_discard(
     chosen = _maximum_ukeire_discard(counts, ordered, structures, structures.shanten)
     if chosen is None:
         return ordered[0]
+    return chosen
+
+
+def _choose_minimum_shanten_discard(
+    counts: _PublicCounts,
+    discard_actions: Sequence[DiscardAction],
+    structures: _DiscardStructures,
+) -> DiscardAction:
+    """合成版（Issue #226）の選択。参照版のfallbackを使わない。
+
+    `discard_actions`（呼び出し側が制限した非空の候補集合）に打牌前向聴数以下の
+    候補があれば参照版と同じ規則で選ぶ。なければ、その集合で最小の打牌後向聴数を
+    達成する候補に限り、受入最大・paijia / source順で選ぶ。
+    """
+    if not discard_actions:
+        raise ValueError("discard_actions must not be empty")
+    ordered = _evaluation_order(counts, discard_actions)
+    chosen = _maximum_ukeire_discard(counts, ordered, structures, structures.shanten)
+    if chosen is not None:
+        return chosen
+    minimum = min(structures.shanten_after(action.tile) for action in ordered)
+    structures.evaluate_improving(
+        tuple(
+            action.tile
+            for action in ordered
+            if structures.shanten_after(action.tile) == minimum
+        )
+    )
+    chosen = _maximum_ukeire_discard(counts, ordered, structures, minimum)
+    assert chosen is not None
     return chosen
