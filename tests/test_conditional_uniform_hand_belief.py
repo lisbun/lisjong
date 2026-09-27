@@ -7,6 +7,7 @@ from lisjong.belief.canonical_axes import (
 )
 from lisjong.belief.conditional_uniform_hand_belief import (
     _allocate_fixed_point_pool,
+    _estimate_from_conservation,
     estimate_conditional_uniform_hand_belief,
 )
 from lisjong.belief.fixed_point import SCALE, round_half_to_even_ratio
@@ -494,6 +495,85 @@ class QuantizationErrorBoundTest(unittest.TestCase):
                 continue
             row_mass = sum(result.hand(wind).expected_count_raw)
             self.assertLess(abs(row_mass - player_slots * SCALE), 37)
+
+
+class DerivedConservationPathTest(unittest.TestCase):
+    """Issue #220: 導出済みinventoryを受け取る内部経路は公開APIと同じ結果・例外。"""
+
+    def _inputs(self) -> list[tuple[PolicyInput, tuple[int, int, int, int]]]:
+        red_manzu = _tile(MANZU_5, is_red=True)
+        souzu_1 = _tile(TileType(TileCategory.SOUZU, 1))
+        discards = (
+            Discard(tile=red_manzu, tsumogiri=False, order=0, called_by=None),
+            Discard(tile=souzu_1, tsumogiri=True, order=1, called_by=None),
+        )
+        players = (_player(), _player(discards), _player(), _player())
+        concealed = (
+            _tile(MANZU_5),
+            _tile(TileType(TileCategory.PINZU, 5), is_red=True),
+            _tile(TileType(TileCategory.HONOR, 7)),
+        )
+        cases = []
+        for dealer in Seat:
+            for self_seat in (Seat.SEAT_0, Seat.SEAT_3):
+                policy_input = _policy_input(
+                    self_seat=self_seat,
+                    dealer_seat=dealer,
+                    concealed_tiles=concealed,
+                    players=players,
+                )
+                self_wind = wind_for_seat(self_seat, dealer)
+                slots = tuple(0 if wind is self_wind else 13 for wind in Wind)
+                cases.append((policy_input, slots))
+        return cases
+
+    def test_matches_public_api_raw_and_self_belief(self) -> None:
+        for policy_input, slots in self._inputs():
+            conservation = derive_remaining_tile_inventory(policy_input)
+            with self.subTest(
+                self_seat=policy_input.self_seat,
+                dealer=policy_input.round.dealer_seat,
+            ):
+                self.assertEqual(
+                    _estimate_from_conservation(policy_input, conservation, slots),
+                    estimate_conditional_uniform_hand_belief(policy_input, slots),
+                )
+
+    def test_does_not_mutate_shared_conservation(self) -> None:
+        policy_input, slots = self._inputs()[0]
+        conservation = derive_remaining_tile_inventory(policy_input)
+        before = (
+            conservation.remaining_tile_counts,
+            conservation.remaining_red_five_counts,
+        )
+        _estimate_from_conservation(policy_input, conservation, slots)
+        self.assertEqual(
+            (
+                conservation.remaining_tile_counts,
+                conservation.remaining_red_five_counts,
+            ),
+            before,
+        )
+        self.assertEqual(conservation, derive_remaining_tile_inventory(policy_input))
+
+    def test_rejects_the_same_invalid_inputs_as_public_api(self) -> None:
+        policy_input = _policy_input()
+        conservation = derive_remaining_tile_inventory(policy_input)
+        for slots in ((1, 0, 0, 0), (0, -1, 0, 0), (0, 1.5, 0, 0), (0, 0, 0)):
+            with self.subTest(slots=slots):
+                with self.assertRaises((TypeError, ValueError)) as public:
+                    estimate_conditional_uniform_hand_belief(policy_input, slots)
+                with self.assertRaises(type(public.exception)) as internal:
+                    _estimate_from_conservation(policy_input, conservation, slots)
+                self.assertEqual(str(internal.exception), str(public.exception))
+        with self.assertRaises(TypeError):
+            _estimate_from_conservation(None, conservation, (0, 0, 0, 0))
+
+        full = _policy_input(concealed_tiles=_full_standard_tile_list())
+        with self.assertRaises(ValueError):
+            _estimate_from_conservation(
+                full, derive_remaining_tile_inventory(full), (0, 1, 0, 0)
+            )
 
 
 if __name__ == "__main__":

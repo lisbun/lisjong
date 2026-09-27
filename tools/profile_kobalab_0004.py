@@ -89,8 +89,14 @@ _BREAKDOWN_TARGETS = (
     ),
     (
         "lisjong.policies.kobalab_0004_reference",
-        "estimate_conditional_uniform_hand_belief",
+        "_estimate_from_conservation",
         "belief_uniform_estimator",
+    ),
+    (
+        # 推定器内部のinventory導出（Issue #220以降、Policy経路では呼ばれない）。
+        "lisjong.belief.conditional_uniform_hand_belief",
+        "derive_remaining_tile_inventory",
+        "belief_estimator_inventory",
     ),
     (
         "lisjong.policies.kobalab_0004_reference",

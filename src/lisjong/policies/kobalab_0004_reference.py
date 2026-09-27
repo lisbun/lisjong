@@ -60,13 +60,16 @@ from collections.abc import Sequence
 
 from lisjong.belief import (
     ConcealedHandBelief,
+    TileConservationResult,
     derive_non_player_hidden_belief,
     derive_remaining_tile_inventory,
-    estimate_conditional_uniform_hand_belief,
     red_five_index,
     tile_type_index,
     wind_for_seat,
     wind_index,
+)
+from lisjong.belief.conditional_uniform_hand_belief import (
+    _estimate_from_conservation,
 )
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
@@ -283,16 +286,23 @@ def _opponent_concealed_slot_counts_by_wind(
     return (slots[0], slots[1], slots[2], slots[3])
 
 
-def _estimate_concealed_hand_belief(policy_input: PolicyInput) -> ConcealedHandBelief:
+def _estimate_concealed_hand_belief(
+    policy_input: PolicyInput, conservation: TileConservationResult
+) -> ConcealedHandBelief:
     """Belief対応版の推定器境界。
 
     同じ`PolicyInput`だけから他家3人の`HandBelief`を導出する。現行は条件付き
-    一様推定器（Issue #65 / #68）である。別の推定器を接続する場合は、同じ
-    `PolicyInput`から`ConcealedHandBelief`を返す関数をここへ差し替え、別の
+    一様推定器（Issue #65 / #68）である。`conservation`は同じdecisionの
+    `_PublicCounts`が同じ`policy_input`から導出した未見枚数で、推定器内部では
+    再導出しない（Issue #220。結果は`estimate_conditional_uniform_hand_belief()`と
+    同一）。別の推定器を接続する場合は、同じ`PolicyInput`（と同じsnapshotの
+    未見枚数）から`ConcealedHandBelief`を返す関数をここへ差し替え、別の
     Policy identityを与える。
     """
-    return estimate_conditional_uniform_hand_belief(
-        policy_input, _opponent_concealed_slot_counts_by_wind(policy_input)
+    return _estimate_from_conservation(
+        policy_input,
+        conservation,
+        _opponent_concealed_slot_counts_by_wind(policy_input),
     )
 
 
@@ -307,7 +317,7 @@ def _paijia_input_from_belief(
     `derive_non_player_hidden_belief()`がclampせずに拒否する。
     """
     try:
-        belief = _estimate_concealed_hand_belief(policy_input)
+        belief = _estimate_concealed_hand_belief(policy_input, counts.conservation)
         residual = derive_non_player_hidden_belief(
             counts.conservation,
             belief,

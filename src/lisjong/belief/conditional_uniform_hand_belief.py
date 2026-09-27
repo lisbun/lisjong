@@ -34,7 +34,10 @@ exact保存するbalanced matrix quantizationは実装しない。
 
 同一`PolicyInput`から`derive_remaining_tile_inventory()` /
 `exact_self_belief()` / `wind_for_seat()`をすべて導出するため、remaining
-inventoryとself exact beliefのsnapshot不整合は起きない。state / cacheを
+inventoryとself exact beliefのsnapshot不整合は起きない。導出済みinventoryを
+受け取る`_estimate_from_conservation()`は、同じ`PolicyInput`から1 decision内で
+inventoryを1回だけ導出する呼び出し側（kobalab 0004 Belief対応版、Issue #220）の
+ための内部経路であり、snapshotの一致は呼び出し側の生成責務で保証する。state / cacheを
 持たないpure functionであり、estimatorが複数必要になるまで
 class / Protocol / ABC等の抽象化framework化は行わない。
 """
@@ -49,7 +52,10 @@ from lisjong.belief.concealed_hand_belief import ConcealedHandBelief
 from lisjong.belief.fixed_point import SCALE, round_half_to_even_ratio
 from lisjong.belief.hand_belief import HandBelief
 from lisjong.belief.self_belief import exact_self_belief
-from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
+from lisjong.belief.tile_conservation import (
+    TileConservationResult,
+    derive_remaining_tile_inventory,
+)
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.tile import TileCategory, TileType
 
@@ -177,6 +183,41 @@ def estimate_conditional_uniform_hand_belief(
     ならない。selfのHandBeliefは`exact_self_belief()`をそのまま使い、
     baseline推定の対象にしない。
     """
+    slot_counts, self_wind_number = _validated_slot_counts(
+        policy_input, opponent_concealed_slot_counts_by_wind
+    )
+    return _allocate_concealed_hand_belief(
+        policy_input,
+        derive_remaining_tile_inventory(policy_input),
+        slot_counts,
+        self_wind_number,
+    )
+
+
+def _estimate_from_conservation(
+    policy_input: PolicyInput,
+    conservation: TileConservationResult,
+    opponent_concealed_slot_counts_by_wind: tuple[int, int, int, int],
+) -> ConcealedHandBelief:
+    """導出済みremaining inventoryを使う同一decision内の内部経路（Issue #220）。
+
+    `conservation`は呼び出し側が**同じ`policy_input`**から
+    `derive_remaining_tile_inventory()`で導出したものでなければならない。
+    snapshotの照合は行わない（照合には同じinventoryの再導出が必要になるため）。
+    生成責務と有効期間は呼び出し側の1 decisionに閉じ、公開APIとしては提供しない。
+    結果・検証・例外は`estimate_conditional_uniform_hand_belief()`と同じである。
+    """
+    slot_counts, self_wind_number = _validated_slot_counts(
+        policy_input, opponent_concealed_slot_counts_by_wind
+    )
+    return _allocate_concealed_hand_belief(
+        policy_input, conservation, slot_counts, self_wind_number
+    )
+
+
+def _validated_slot_counts(
+    policy_input: PolicyInput, opponent_concealed_slot_counts_by_wind: object
+) -> tuple[tuple[int, int, int, int], int]:
     if not isinstance(policy_input, PolicyInput):
         raise TypeError("policy_input must be a PolicyInput")
 
@@ -187,8 +228,15 @@ def estimate_conditional_uniform_hand_belief(
     )
     if slot_counts[self_wind_number] != 0:
         raise ValueError("opponent_concealed_slot_counts_by_wind[self] must be 0")
+    return slot_counts, self_wind_number
 
-    conservation = derive_remaining_tile_inventory(policy_input)
+
+def _allocate_concealed_hand_belief(
+    policy_input: PolicyInput,
+    conservation: TileConservationResult,
+    slot_counts: tuple[int, int, int, int],
+    self_wind_number: int,
+) -> ConcealedHandBelief:
     total_hidden_slots = sum(conservation.remaining_tile_counts)
 
     if sum(slot_counts) > total_hidden_slots:
