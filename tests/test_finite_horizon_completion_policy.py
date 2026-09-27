@@ -1813,6 +1813,7 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",
                 "OpenHandYakuAwareCallPolicy",
+                "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
                 "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
                 "PlacementAwareSpeedCallPolicy",
                 "ShantenPolicy",

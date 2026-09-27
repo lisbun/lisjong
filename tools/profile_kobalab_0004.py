@@ -85,17 +85,17 @@ _BREAKDOWN_TARGETS = (
         "structural_eval",
     ),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "_paijia_input_from_belief",
         "belief_paijia_input",
     ),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "_opponent_concealed_slot_counts_by_wind",
         "belief_slot_counts",
     ),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "_estimate_from_conservation",
         "belief_uniform_estimator",
     ),
@@ -106,7 +106,7 @@ _BREAKDOWN_TARGETS = (
         "belief_estimator_inventory",
     ),
     (
-        "lisjong.policies.kobalab_0004_reference",
+        "lisjong.policies.kobalab_0004_discard",
         "derive_non_player_hidden_belief",
         "belief_non_player_hidden",
     ),

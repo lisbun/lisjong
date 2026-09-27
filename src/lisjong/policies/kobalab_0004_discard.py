@@ -8,13 +8,17 @@ commit e75a9720a12b84c03e6c61c3960c1844b8982eb4）の`select_dapai()` /
 `SuanPai.paijia()`を、lisjongのexact shantenへ適用した移植である。upstreamとの
 全局面での行動同値性は主張しない（詳細は`docs/kobalab-0004-reference.md`）。
 
-処理は次の3層に分かれる。
+処理は次の層に分かれる。
 
 - 構造評価 `_DiscardStructures`: 打牌後向聴数と形としての改善牌（未見枚数0も
   含む）。牌姿だけに依存し、未見枚数・ドラ・Beliefには依存しない。
 - 枚数集計 `_PublicCounts` / `_PaijiaInput`: 同じdecisionの公開情報から
   再構成した未見枚数と、paijia（ドラ・赤牌・役牌等を含むヒューリスティックな
   牌価）の入力snapshot。仮に捨てる牌を未見牌へ戻さない。
+- Belief由来のpaijia入力 `_belief_paijia_counts()`: 同じsnapshotの未見枚数から
+  条件付き一様推定器で他家3人の手牌を推定し、`未見枚数 − 他家手牌内期待枚数`
+  （fixed-point raw）をpaijiaへ渡す。ukeireは実残り枚数のまま（Issue #218。
+  Issue #230の合成版と共有するため参照版moduleから移した）。
 - 候補選択 `_evaluation_order()` / `_choose_reference_discard()` /
   `_choose_minimum_shanten_discard()`: paijiaとsource順による決定的な評価順で、
   受入（未見枚数の合計）が厳密に増えた場合だけ選択を更新する。
@@ -35,6 +39,9 @@ from collections import Counter
 from collections.abc import Sequence
 
 from lisjong.belief import (
+    ConcealedHandBelief,
+    TileConservationResult,
+    derive_non_player_hidden_belief,
     derive_remaining_tile_inventory,
     red_five_index,
     sum_tile_type_values,
@@ -42,10 +49,14 @@ from lisjong.belief import (
     wind_for_seat,
     wind_index,
 )
+from lisjong.belief.conditional_uniform_hand_belief import (
+    _estimate_from_conservation,
+)
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.hand_evaluation.shanten import evaluate_discards_from_canonical_counts
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.policy_input import PolicyInput
+from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 _MAX_COPIES_PER_TILE_TYPE = 4
@@ -68,6 +79,18 @@ _WIND_RANKS = 4
 _DRAGON_START_RANK = 5
 _DRAGON_RANKS = 3
 _SUITED_MAXIMUM_RANK = 9
+
+KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR = (
+    "lisjong conditional-uniform-hand-belief "
+    "(estimate_conditional_uniform_hand_belief, #65/#68; "
+    "opponent slots = 13 - 3 * public melds) "
+    "-> derive_non_player_hidden_belief (#67)"
+)
+"""Belief由来paijia入力の推定器identityと設定。
+
+0004 Belief版（Issue #218）と、Championの攻撃打牌へ接続した合成版（Issue #230）が
+共有する。推定器を変える場合は、それを使うPolicyのidentity（または識別名）も変える。
+"""
 
 
 class Kobalab0004ReferencePolicyError(Exception):
@@ -202,6 +225,86 @@ class _PublicCounts:
     def paijia(self, tile: Tile) -> int:
         """sourceの`SuanPai.paijia()`（牌の評価値）。"""
         return self.paijia_input.paijia(tile)
+
+
+def _opponent_concealed_slot_counts_by_wind(
+    policy_input: PolicyInput,
+) -> tuple[int, int, int, int]:
+    """条件付き一様推定器へ渡す他家concealed slot数（canonical Wind順）。
+
+    自分の打牌decisionでは、他家の純手牌は`13 - 3 * 副露・槓の数`枚である
+    （暗槓・加槓・大明槓も1面子として数える）。公開された副露だけから導出し、
+    Seatは`wind_for_seat()`で自風へ対応付ける。自分のentryは0とする。
+    """
+    slots = [0, 0, 0, 0]
+    for seat in Seat:
+        if seat is policy_input.self_seat:
+            continue
+        count = 13 - 3 * len(policy_input.players[int(seat)].melds)
+        if count < 0:
+            raise Kobalab0004ReferencePolicyError(
+                f"seat {int(seat)} has more public melds than a hand can hold"
+            )
+        slots[wind_index(wind_for_seat(seat, policy_input.round.dealer_seat))] = count
+    return (slots[0], slots[1], slots[2], slots[3])
+
+
+def _estimate_concealed_hand_belief(
+    policy_input: PolicyInput, conservation: TileConservationResult
+) -> ConcealedHandBelief:
+    """Belief対応版の推定器境界。
+
+    同じ`PolicyInput`だけから他家3人の`HandBelief`を導出する。現行は条件付き
+    一様推定器（Issue #65 / #68）である。`conservation`は同じdecisionの
+    `_PublicCounts`が同じ`policy_input`から導出した未見枚数で、推定器内部では
+    再導出しない（Issue #220。結果は`estimate_conditional_uniform_hand_belief()`と
+    同一）。別の推定器を接続する場合は、同じ`PolicyInput`（と同じsnapshotの
+    未見枚数）から`ConcealedHandBelief`を返す関数をここへ差し替え、別の
+    Policy identityを与える。
+    """
+    return _estimate_from_conservation(
+        policy_input,
+        conservation,
+        _opponent_concealed_slot_counts_by_wind(policy_input),
+    )
+
+
+def _paijia_input_from_belief(
+    policy_input: PolicyInput, counts: _PublicCounts
+) -> _PaijiaInput:
+    """paijia入力を`未見枚数 − 他家3人の手牌内期待枚数`（fixed-point raw）にする。
+
+    ukeireと同じsnapshotの`counts.conservation`から`NonPlayerHiddenBelief`を
+    導出する。自手は`conservation`で既に既知として数えているため差し引かず、
+    赤5は34牌種の5（赤5を含む）とは別axisで与える。保存則違反は
+    `derive_non_player_hidden_belief()`がclampせずに拒否する。
+    """
+    try:
+        belief = _estimate_concealed_hand_belief(policy_input, counts.conservation)
+        residual = derive_non_player_hidden_belief(
+            counts.conservation,
+            belief,
+            wind_for_seat(policy_input.self_seat, policy_input.round.dealer_seat),
+        )
+    except ValueError as error:
+        raise Kobalab0004ReferencePolicyError(
+            f"belief-derived paijia input is inconsistent: {error}"
+        ) from error
+    return _PaijiaInput(
+        residual.expected_count_raw, residual.red_five_probability_raw, policy_input
+    )
+
+
+def _belief_paijia_counts(policy_input: PolicyInput) -> _PublicCounts:
+    """ukeireは実残り枚数のまま、paijia入力だけをBelief由来にしたsnapshot。
+
+    0004 Belief版（Issue #218）と合成版（Issue #230）の共通入口。未見枚数は
+    `_PublicCounts`が1度だけ導出し、同じ`conservation`を推定器・残余導出で共有する
+    （Issue #220）。
+    """
+    counts = _PublicCounts(policy_input)
+    counts.paijia_input = _paijia_input_from_belief(policy_input, counts)
+    return counts
 
 
 def _improving_tile_types(hand: Sequence[Tile]) -> tuple[TileType, ...]:
