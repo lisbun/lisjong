@@ -521,6 +521,7 @@ class PublicGenerationAndScopeTest(unittest.TestCase):
                 "HandValueAwareTwoStepUkeirePolicy",
                 "HandValueTradeoffMechanismRiichiDefensePolicy",
                 "HandValueTradeoffTargetedHonorReleasePolicy",
+                "Kobalab0004BeliefPaijiaPolicy",
                 "Kobalab0004ReferencePolicy",
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",

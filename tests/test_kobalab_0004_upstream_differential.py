@@ -33,6 +33,7 @@ from lisjong.belief import derive_remaining_tile_inventory, tile_type_index
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.policies import Kobalab0004ReferencePolicy
 from lisjong.policies.kobalab_0004_reference import (
+    _DiscardStructures,
     _improving_tile_types,
     _PublicCounts,
     evaluation_order,
@@ -303,6 +304,7 @@ class UpstreamDifferentialTest(unittest.TestCase):
             concealed = list(policy_input.own_hand.concealed_tiles)
             with self.subTest(id=record["id"]):
                 counts = _PublicCounts(policy_input)
+                structures = _DiscardStructures(concealed)
                 expected_order = []
                 for candidate in evaluation["candidates"]:
                     action = _discard_action(candidate["p"], state)
@@ -319,6 +321,14 @@ class UpstreamDifferentialTest(unittest.TestCase):
                         "xiangting": calculate_shanten(after),
                         "ev": sum(counts.remaining(t) for t in improving),
                     }
+                    # 判断経路の共有構造評価（#218）もTile定義と同じ中間値を返す。
+                    self.assertEqual(
+                        structures.shanten_after(action.tile), ours["xiangting"]
+                    )
+                    self.assertEqual(
+                        structures.improving_after(action.tile),
+                        tuple(tile_type_index(t) for t in improving),
+                    )
                     upstream_tingpai = {
                         _tile(p).tile_type for p in candidate["tingpai"]
                     }

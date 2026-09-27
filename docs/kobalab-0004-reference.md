@@ -2,6 +2,12 @@
 
 Issue: [lisbun/lisjong#211](https://github.com/lisbun/lisjong/issues/211)
 
+[#218](https://github.com/lisbun/lisjong/issues/218)で、本Policyの内部を同値最適化
+（打牌後の構造評価を牌種ごとに共有、paijiaの式と入力の分離）した。identity・挙動・本書の参照仕様は
+変わらない。paijiaの入力だけをBelief由来にした別identityの対応版
+`Kobalab0004BeliefPaijiaPolicy`と計測記録は
+[kobalab 0004 profile / optimization / Belief paijia](kobalab-0004-belief-paijia.md)を参照。
+
 ## 位置付け
 
 `Kobalab0004ReferencePolicy`（`lisjong.policies.kobalab_0004_reference`）は、
