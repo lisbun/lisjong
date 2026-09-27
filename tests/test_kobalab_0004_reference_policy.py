@@ -31,19 +31,19 @@ from lisjong.policies import Kobalab0004BeliefPaijiaPolicy, Kobalab0004Reference
 from lisjong.policies import kobalab_0004_discard as discard_module
 from lisjong.policies import kobalab_0004_reference as reference_module
 from lisjong.policies.kobalab_0004_discard import (
+    KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR,
     _DiscardStructures,
     _improving_tile_types,
+    _opponent_concealed_slot_counts_by_wind,
+    _paijia_input_from_belief,
     _PaijiaInput,
     _PublicCounts,
 )
 from lisjong.policies.kobalab_0004_reference import (
-    KOBALAB_0004_BELIEF_PAIJIA_ESTIMATOR,
     KOBALAB_0004_BELIEF_PAIJIA_IDENTITY,
     KOBALAB_0004_REFERENCE_IDENTITY,
     Kobalab0004ReferencePolicyError,
     _allows_riichi_discard,
-    _opponent_concealed_slot_counts_by_wind,
-    _paijia_input_from_belief,
     evaluation_order,
 )
 from lisjong.policy_contract.action import (
@@ -851,7 +851,7 @@ class BeliefPaijiaInputTest(unittest.TestCase):
     ) -> None:
         policy_input = _input("05m1234567z123p45s", dora_indicators="3p")
         counts = _PublicCounts(policy_input)
-        belief = reference_module._estimate_concealed_hand_belief(
+        belief = discard_module._estimate_concealed_hand_belief(
             policy_input, counts.conservation
         )
         residual = _paijia_input_from_belief(policy_input, counts)
@@ -887,7 +887,7 @@ class BeliefPaijiaInputTest(unittest.TestCase):
         concealed = "1239m456p789s1167z"
         policy_input = _input(concealed, "7z")
         with mock.patch.object(
-            reference_module,
+            discard_module,
             "_estimate_concealed_hand_belief",
             lambda pi, conservation: _belief_with_opponent_mass(pi, {}),
         ):
@@ -913,7 +913,7 @@ class BeliefPaijiaInputTest(unittest.TestCase):
             policy_input, {(Seat.SEAT_2, "6z"): 2 * SCALE}
         )
         with mock.patch.object(
-            reference_module,
+            discard_module,
             "_estimate_concealed_hand_belief",
             lambda pi, conservation: belief,
         ):
@@ -936,7 +936,7 @@ class BeliefPaijiaInputTest(unittest.TestCase):
             policy_input, {(Seat.SEAT_1, "6z"): 4 * SCALE}
         )
         with mock.patch.object(
-            reference_module,
+            discard_module,
             "_estimate_concealed_hand_belief",
             lambda pi, conservation: belief,
         ):
@@ -1010,9 +1010,9 @@ class BeliefInventorySharingTest(unittest.TestCase):
         actions = _all_discards("1239m456p789s1167z")
         policy = Kobalab0004BeliefPaijiaPolicy()
         with mock.patch.object(
-            reference_module,
+            discard_module,
             "_estimate_from_conservation",
-            wraps=reference_module._estimate_from_conservation,
+            wraps=discard_module._estimate_from_conservation,
         ) as estimator:
             for policy_input in (first, second, first):
                 self.assertEqual(

@@ -50,9 +50,14 @@ PolicyInput以外の状態やhidden informationは使用せず、Policy instance
 cross-decision stateを保持しない。Arena等での識別はclass名
 （`lisjong.policies.PlacementAwareSpeedCallKobalab0004DiscardPolicy`）で行い、
 新しい`identity`属性は持たない。
+
+PUSHのpaijia入力だけをBelief由来の残余期待枚数へ替えた別候補は
+`PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy`（Issue #230、
+`placement_aware_speed_call_kobalab_0004_belief_paijia_discard`）である。
 """
 
 from lisjong.policies.kobalab_0004_discard import (
+    _belief_paijia_counts,
     _choose_minimum_shanten_discard,
     _DiscardStructures,
     _PublicCounts,
@@ -73,18 +78,30 @@ from lisjong.policy_contract.policy_input import PolicyInput
 def _choose_push_discard(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
+    *,
+    belief_paijia: bool = False,
 ) -> DiscardAction:
-    """PUSHのeligible集合を0004方式（合成版fallback付き）で比較する。"""
+    """PUSHのeligible集合を0004方式（合成版fallback付き）で比較する。
+
+    `belief_paijia`はpaijiaの入力だけをBelief由来の残余期待枚数へ替える
+    （Issue #230の別候補）。構造評価・受入（実残り枚数）・候補選択は同じである。
+    """
     structures = _DiscardStructures(
         policy_input.own_hand.concealed_tiles,
         tuple(action.tile for action in discard_actions),
     )
-    counts = _PublicCounts(policy_input)
+    counts = (
+        _belief_paijia_counts(policy_input)
+        if belief_paijia
+        else _PublicCounts(policy_input)
+    )
     return _choose_minimum_shanten_discard(counts, discard_actions, structures)
 
 
 class PlacementAwareSpeedCallKobalab0004DiscardPolicy(PlacementAwareSpeedCallPolicy):
     """Issue #226: Championの攻撃打牌（PUSH）だけを0004の牌効率で選ぶ。"""
+
+    _belief_paijia = False
 
     def _decide_discard(
         self,
@@ -99,7 +116,10 @@ class PlacementAwareSpeedCallKobalab0004DiscardPolicy(PlacementAwareSpeedCallPol
                 policy_input, eligible_actions
             )
         return PolicyDecision(
-            action=_choose_push_discard(policy_input, branch_actions), analysis=None
+            action=_choose_push_discard(
+                policy_input, branch_actions, belief_paijia=self._belief_paijia
+            ),
+            analysis=None,
         )
 
 

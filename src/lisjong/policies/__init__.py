@@ -34,6 +34,9 @@ from lisjong.policies.open_hand_yaku_aware_call import OpenHandYakuAwareCallPoli
 from lisjong.policies.placement_aware_speed_call import (
     PlacementAwareSpeedCallPolicy,
 )
+from lisjong.policies.placement_aware_speed_call_kobalab_0004_belief_paijia_discard import (
+    PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy,
+)
 from lisjong.policies.placement_aware_speed_call_kobalab_0004_discard import (
     PlacementAwareSpeedCallKobalab0004DiscardPolicy,
 )
@@ -65,6 +68,7 @@ __all__ = [
     "MechanismRiichiDefenseYakuhaiCallPolicy",
     "MinimalPolicy",
     "OpenHandYakuAwareCallPolicy",
+    "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
     "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
     "PlacementAwareSpeedCallPolicy",
     "ShantenPolicy",
