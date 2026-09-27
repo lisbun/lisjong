@@ -61,6 +61,7 @@ lisjong ecosystem全体のrepository責務、依存方向、長期ロードマ�
 - [Project roadmap](https://github.com/lisbun/lisjong-project/blob/main/docs/roadmap.md)
 - [Policy current status](docs/policy-status.md)
 - [kobalab 0004 tile-efficiency reference](docs/kobalab-0004-reference.md)
+- [kobalab 0004 profile / optimization / Belief paijia](docs/kobalab-0004-belief-paijia.md)
 - [lisjong architecture](docs/architecture.md)
 
 ## Current research phase
