@@ -49,6 +49,10 @@ Policyを古典的な純牌効率baselineと比較するための外部documente
   入力順には依存しない。
 
 hidden opponent hand、wall truth、外部環境privateなstateは参照しない。
+
+`Kobalab0004BeliefPaijiaPolicy`（Issue #218）は、paijiaの入力だけを
+`NonPlayerHiddenBelief`由来の残余期待枚数へ替えた別identityの対応版である。
+計測・検証・Beliefの供給責務は`docs/kobalab-0004-belief-paijia.md`を正本とする。
 """
 
 from collections import Counter

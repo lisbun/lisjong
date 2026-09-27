@@ -13,7 +13,7 @@ Issue: [lisbun/lisjong#218](https://github.com/lisbun/lisjong/issues/218)
 | 項目 | 値 |
 | --- | --- |
 | 基準（最適化前） | lisjong `main` `2553c1b9f22545bb2fcb914adce1879d15cdc58d` |
-| 最適化後・Belief対応版 | 本PRのbranch（commit別は§3・§4） |
+| 最適化後・Belief対応版 | 本PR branchの`2d5a384`（同値最適化は`3324887` + `79569cd`、Belief対応は`2d5a384`。以降の変更は文書のみ） |
 | Rust backend | `native/`を`2553c1b`から`LISJONG_NATIVE_SOURCE_REVISION`付きでlocal build（`SOURCE_REVISION = 2553c1b…`、`.pyd` SHA-256 `70acd5be7261e8ba93b1403d0705bf9d2ade187f468c57705d8fe8194446b0c3`）。本Issueでnative sourceは変更していない |
 | backend選択 | `LISJONG_SHANTEN_BACKEND=rust`。native core呼び出し回数（`standard_shanten_call_count()`）でRust pathの実行を確認 |
 | Python | CPython 3.14.7（MSC v.1944, 64 bit）、通常版 |
