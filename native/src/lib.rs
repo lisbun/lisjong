@@ -20,6 +20,15 @@
 //! failure the Python backend reports as `ShantenTableError` is reported with
 //! the exception type passed in by the caller.  There is no fallback.
 //!
+//! Issue #224 adds one batched entry on the same table,
+//! `StandardShantenTable.evaluate_discards()`: the shanten after each
+//! requested discard and the improving tile types after the discards the
+//! caller selects by a shanten threshold, all evaluated with the same numeric
+//! core.  It
+//! enumerates only the discard (-1) and hypothetical draw (+1) transitions;
+//! it holds no hand state between calls and knows no discard strategy.
+//! `API_VERSION` identifies this entry set for the Python backend selector.
+//!
 //! Integer range: frontier entry scores are 4-bit (0..=15) and at most four
 //! groups are summed, so every intermediate score is in 0..=60 and the final
 //! value is in -1..=8.  `i16` / `i32` cannot overflow for any input accepted by
@@ -28,9 +37,9 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyTuple, PyType};
+use pyo3::types::{PyBool, PyBytes, PyInt, PyList, PyTuple, PyType};
 
 const MAGIC: &[u8; 8] = b"LISJSHT\x01";
 const FORMAT_VERSION: u32 = 1;
@@ -50,11 +59,27 @@ const INVALID_STATE: u16 = 0xFFFF;
 const UNREACHABLE_PENALTY: i8 = 127;
 const STANDARD_SHANTEN_BASE: i32 = 8;
 
+/// Native entry-set version checked by `_shanten_backend` at import time.
+///
+/// 1 = `standard_shanten` / `shanten_from_valid_counts` (Issue #213; wheels
+/// built before Issue #224 have no `API_VERSION` attribute),
+/// 2 = additionally `evaluate_discards` (Issue #224).
+const API_VERSION: u32 = 2;
+
 /// Number of successful native shanten evaluations in this process.
 ///
 /// Diagnostic only: tests use it to prove that the Rust path actually ran when
-/// the Rust backend was explicitly selected.
+/// the Rust backend was explicitly selected.  It counts numeric-core
+/// evaluations, not Python-to-Rust calls: one `evaluate_discards()` call adds
+/// every evaluation it performed (only when the whole call succeeds).
 static STANDARD_SHANTEN_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Number of successful `evaluate_discards()` calls (Python-to-Rust boundary
+/// crossings of the batched entry) in this process.  Diagnostic only.
+static DISCARD_EVALUATION_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Concealed hand sizes from which a discard leaves a valid concealed size.
+const DISCARD_HAND_SIZES: [usize; 5] = [2, 5, 8, 11, 14];
 
 struct FrontierGroup {
     ids: Vec<u16>,
@@ -471,18 +496,172 @@ impl StandardShantenTable {
                 "concealed_tile_count must equal sum(counts) and be a valid concealed hand size",
             ));
         }
-        let fixed_meld_count = (4 - (total - 1) / 3) as usize;
-        let mut shanten = self
-            .compute(&counts, fixed_meld_count)
+        let shanten = self
+            .numeric_shanten(&counts, total as usize)
             .map_err(|message| self.table_error(py, message))?;
-        if total == 13 || total == 14 {
-            shanten = shanten
-                .min(seven_pairs_shanten(&counts))
-                .min(thirteen_orphans_shanten(&counts));
-        }
         STANDARD_SHANTEN_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(shanten)
     }
+
+    /// Batched structural evaluation of discard candidates (Issue #224).
+    ///
+    /// `counts` is a canonical 34-count hand whose size allows a discard
+    /// (2 / 5 / 8 / 11 / 14).  `discard_indexes` is an iterable of distinct
+    /// canonical indexes (`int`, not `bool`), each held at least once.
+    /// `improving_max_shanten` is `None` or an `int` (not `bool`).
+    /// Returns `(shanten_after, improving_after)`, both in the order of
+    /// `discard_indexes`:
+    ///
+    /// - `shanten_after[i]`: numeric shanten after discarding
+    ///   `discard_indexes[i]`;
+    /// - `improving_after[i]`: ascending tuple of the tile types that lower
+    ///   `shanten_after[i]` when drawn after that discard, skipping types the
+    ///   hand then holds four of (an evaluated empty set is `()`), or `None`
+    ///   when it was not evaluated.  It is evaluated when
+    ///   `improving_max_shanten` is `None` or
+    ///   `shanten_after[i] <= improving_max_shanten`.
+    ///
+    /// Remaining inventory is not consulted.  Invalid input raises
+    /// `TypeError` / `ValueError` before any evaluation; artifact failures
+    /// raise the table's error type.  The input is not modified.
+    #[pyo3(signature = (counts, discard_indexes, improving_max_shanten = None))]
+    fn evaluate_discards<'py>(
+        &self,
+        py: Python<'py>,
+        counts: &Bound<'py, PyAny>,
+        discard_indexes: &Bound<'py, PyAny>,
+        improving_max_shanten: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyTuple>, Bound<'py, PyTuple>)> {
+        let mut counts = read_counts(counts)?;
+        let total: usize = counts.iter().map(|&count| count as usize).sum();
+        if !DISCARD_HAND_SIZES.contains(&total) {
+            return Err(PyValueError::new_err(
+                "counts must hold a concealed hand size that allows a discard \
+                 (2, 5, 8, 11 or 14)",
+            ));
+        }
+        let indexes = read_discard_indexes(discard_indexes, &counts)?;
+        let improving_max_shanten = read_improving_max_shanten(improving_max_shanten)?;
+        let table_error = |message: String| self.table_error(py, message);
+
+        let mut evaluations = 0u64;
+        let mut after_values = Vec::with_capacity(indexes.len());
+        let mut improving_values = Vec::with_capacity(indexes.len());
+        for &index in &indexes {
+            counts[index] -= 1;
+            evaluations += 1;
+            let after = self
+                .numeric_shanten(&counts, total - 1)
+                .map_err(table_error)?;
+            let evaluate_improving =
+                improving_max_shanten.is_none_or(|maximum| after as i64 <= maximum);
+            let improving = if evaluate_improving {
+                let mut found = Vec::new();
+                for drawn in 0..TILE_KIND_COUNT {
+                    if counts[drawn] as i64 >= MAX_COPIES {
+                        continue;
+                    }
+                    counts[drawn] += 1;
+                    evaluations += 1;
+                    let shanten = self.numeric_shanten(&counts, total);
+                    counts[drawn] -= 1;
+                    if shanten.map_err(table_error)? < after {
+                        found.push(drawn as i64);
+                    }
+                }
+                Some(found)
+            } else {
+                None
+            };
+            counts[index] += 1;
+            after_values.push(after);
+            improving_values.push(improving);
+        }
+
+        let improving_objects = improving_values
+            .into_iter()
+            .map(|improving| match improving {
+                Some(found) => PyTuple::new(py, found).map(Bound::into_any),
+                None => Ok(py.None().into_bound(py)),
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let result = (
+            PyTuple::new(py, after_values)?,
+            PyTuple::new(py, improving_objects)?,
+        );
+        STANDARD_SHANTEN_CALLS.fetch_add(evaluations, Ordering::Relaxed);
+        DISCARD_EVALUATION_CALLS.fetch_add(1, Ordering::Relaxed);
+        Ok(result)
+    }
+}
+
+impl StandardShantenTable {
+    /// Same dispatch as `shanten._shanten_from_valid_counts()`; `total` must
+    /// equal the sum of `counts` and be a valid concealed hand size.
+    fn numeric_shanten(&self, counts: &[u8; TILE_KIND_COUNT], total: usize) -> Result<i32, String> {
+        let fixed_meld_count = 4 - (total - 1) / 3;
+        let mut shanten = self.compute(counts, fixed_meld_count)?;
+        if total == 13 || total == 14 {
+            shanten = shanten
+                .min(seven_pairs_shanten(counts))
+                .min(thirteen_orphans_shanten(counts));
+        }
+        Ok(shanten)
+    }
+}
+
+/// Read the optional improving threshold (`None` = evaluate every candidate).
+fn read_improving_max_shanten(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<i64>> {
+    let Some(value) = value.filter(|value| !value.is_none()) else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "improving_max_shanten must be None or an int",
+        ));
+    }
+    value
+        .extract::<i64>()
+        .map(Some)
+        .map_err(|_| PyValueError::new_err("improving_max_shanten is out of range"))
+}
+
+/// Read distinct canonical discard indexes, each held in `counts`.
+fn read_discard_indexes(
+    indexes: &Bound<'_, PyAny>,
+    counts: &[u8; TILE_KIND_COUNT],
+) -> PyResult<Vec<usize>> {
+    let mut seen = [false; TILE_KIND_COUNT];
+    let mut values = Vec::new();
+    for item in indexes.try_iter()? {
+        let item = item?;
+        if item.is_instance_of::<PyBool>() || !item.is_instance_of::<PyInt>() {
+            return Err(PyTypeError::new_err(
+                "discard_indexes must contain only int values",
+            ));
+        }
+        let index = match item.extract::<i64>() {
+            Ok(value) if (0..TILE_KIND_COUNT as i64).contains(&value) => value as usize,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "discard_indexes must contain only values from 0 to 33",
+                ));
+            }
+        };
+        if seen[index] {
+            return Err(PyValueError::new_err(
+                "discard_indexes must not contain duplicates",
+            ));
+        }
+        seen[index] = true;
+        if counts[index] == 0 {
+            return Err(PyValueError::new_err(
+                "discard_indexes must reference tile types held in counts",
+            ));
+        }
+        values.push(index);
+    }
+    Ok(values)
 }
 
 const VALID_CONCEALED_TILE_COUNTS: [i64; 10] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14];
@@ -517,6 +696,12 @@ fn standard_shanten_call_count() -> u64 {
     STANDARD_SHANTEN_CALLS.load(Ordering::Relaxed)
 }
 
+/// Number of successful `evaluate_discards()` calls in this process.
+#[pyfunction]
+fn discard_evaluation_call_count() -> u64 {
+    DISCARD_EVALUATION_CALLS.load(Ordering::Relaxed)
+}
+
 /// Full lisjong commit this extension was built from (Issue #216).
 ///
 /// The extension shares `_shanten_table.bin` and the helper tables with the
@@ -533,7 +718,9 @@ const SOURCE_REVISION: &str = match option_env!("LISJONG_NATIVE_SOURCE_REVISION"
 #[pymodule]
 fn _lisjong_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("SOURCE_REVISION", SOURCE_REVISION)?;
+    module.add("API_VERSION", API_VERSION)?;
     module.add_class::<StandardShantenTable>()?;
     module.add_function(wrap_pyfunction!(standard_shanten_call_count, module)?)?;
+    module.add_function(wrap_pyfunction!(discard_evaluation_call_count, module)?)?;
     Ok(())
 }

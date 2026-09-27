@@ -354,19 +354,21 @@ class DiscardStructuresEquivalenceTest(unittest.TestCase):
     `_improving_tile_types`）と中間値で一致することを固定する。"""
 
     def _assert_equivalent(self, hand: tuple[Tile, ...]) -> None:
-        structures = _DiscardStructures(hand)
-        self.assertEqual(structures.shanten, calculate_shanten(hand))
-        for tile in set(hand):
-            after = list(hand)
-            after.remove(tile)
-            with self.subTest(hand=hand, tile=tile):
-                self.assertEqual(
-                    structures.shanten_after(tile), calculate_shanten(after)
-                )
-                self.assertEqual(
-                    structures.improving_after(tile),
-                    tuple(tile_type_index(t) for t in _improving_tile_types(after)),
-                )
+        # 候補なし（牌種ごとの評価）と、全候補を渡した一括評価（Issue #224）の両方。
+        for candidates in ((), hand):
+            structures = _DiscardStructures(hand, candidates)
+            self.assertEqual(structures.shanten, calculate_shanten(hand))
+            for tile in set(hand):
+                after = list(hand)
+                after.remove(tile)
+                with self.subTest(hand=hand, tile=tile, batched=bool(candidates)):
+                    self.assertEqual(
+                        structures.shanten_after(tile), calculate_shanten(after)
+                    )
+                    self.assertEqual(
+                        structures.improving_after(tile),
+                        tuple(tile_type_index(t) for t in _improving_tile_types(after)),
+                    )
 
     def test_random_hands_of_every_meld_count(self) -> None:
         generator = random.Random(218)
@@ -417,6 +419,54 @@ class DiscardStructuresEquivalenceTest(unittest.TestCase):
         )
         self.assertFalse(
             _allows_riichi_discard(policy_input, _discard("1m"), structures)
+        )
+
+    def test_decision_evaluates_candidates_in_one_batch(self) -> None:
+        # Issue #224: 打牌decisionでは候補の打牌後向聴数と非悪化候補の改善牌を
+        # 1回の一括評価で求める（手出し / ツモ切り、赤 / 通常は同じ牌種で1件）。
+        concealed = "05m1234567z123p45s"
+        calls = []
+        original = reference_module.evaluate_discards_from_canonical_counts
+
+        def spy(counts, indexes, improving_max_shanten=None):
+            calls.append((tuple(indexes), improving_max_shanten))
+            return original(counts, indexes, improving_max_shanten)
+
+        with mock.patch.object(
+            reference_module, "evaluate_discards_from_canonical_counts", spy
+        ):
+            action = Kobalab0004ReferencePolicy().choose_action(
+                DecisionContext(
+                    input=_input(concealed, "5s"),
+                    legal_actions=_all_discards(concealed, "5s"),
+                )
+            )
+        self.assertIsInstance(action, DiscardAction)
+        self.assertEqual(len(calls), 1)
+        indexes, threshold = calls[0]
+        held = {tile_type_index(tile.tile_type) for tile in _hand(concealed)}
+        self.assertEqual(sorted(indexes), sorted(held))
+        self.assertEqual(threshold, calculate_shanten(_hand(concealed)))
+
+    def test_complete_hand_riichi_evaluates_the_excluded_candidate(self) -> None:
+        # 和了形（向聴-1）で和了actionがない場合、全候補が改善牌評価の対象外になり、
+        # 立直判定で先頭候補の改善牌を後から求める。未評価を空集合とみなさない。
+        concealed = "123m456p789s111z2z2z"
+        policy_input = _input(concealed, "2z")
+        riichi = RiichiAction(actor=Seat.SEAT_0)
+        discards = _all_discards(concealed, "2z")
+        structures = _DiscardStructures(
+            policy_input.own_hand.concealed_tiles, tuple(a.tile for a in discards)
+        )
+        self.assertEqual(structures.shanten, -1)
+        chosen = _choose(policy_input, discards)
+        self.assertEqual(structures.shanten_after(chosen.tile), 0)
+        self.assertTrue(_allows_riichi_discard(policy_input, chosen, structures))
+        self.assertEqual(
+            Kobalab0004ReferencePolicy().choose_action(
+                DecisionContext(input=policy_input, legal_actions=discards + (riichi,))
+            ),
+            riichi,
         )
 
     def test_riichi_check_reuses_structures_with_same_result(self) -> None:

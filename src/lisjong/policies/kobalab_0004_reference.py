@@ -73,7 +73,7 @@ from lisjong.belief.conditional_uniform_hand_belief import (
     _estimate_from_conservation,
 )
 from lisjong.hand_evaluation import calculate_shanten
-from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
+from lisjong.hand_evaluation.shanten import evaluate_discards_from_canonical_counts
 from lisjong.policy_contract.action import (
     AnkanAction,
     DiscardAction,
@@ -372,21 +372,37 @@ class _DiscardStructures:
     依存し、公開枚数・ドラ・Beliefには依存しない（それらはukeire / paijia側で
     適用する）。instanceはdecision-localで、snapshot間で共有しない。
 
-    打牌前の手牌を`calculate_shanten()`で1度だけ検証し、以降は34牌種countの
-    -1（打牌）/ +1（仮想ツモ）だけでcount-native hot pathを呼ぶ。改善牌は
-    `_improving_tile_types()`と同じ「手中4枚でなく向聴数を下げる牌種」で、
+    打牌前の手牌を`calculate_shanten()`で1度だけ検証し、打牌後の向聴数と改善牌は
+    34牌種countから`evaluate_discards_from_canonical_counts()`（Issue #224）で
+    求める。最初の問い合わせで、構築時に渡された打牌候補（手中にある牌の基礎牌種）
+    をまとめて1回評価し、改善牌は打牌後向聴数が現在の向聴数以下の候補だけ求める
+    （`_choose_discard()`が改善牌を使うのはその候補だけ）。それ以外の候補の改善牌
+    （和了形からの立直判定等）や、候補に含まれなかった牌種は、問い合わせ時に
+    その牌種だけ評価する。未評価（`None`）を空集合として扱わない。
+
+    改善牌は`_improving_tile_types()`と同じ「手中4枚でなく向聴数を下げる牌種」で、
     未見枚数0の牌種も含む（形としての改善牌。立直の和了牌判定にも使う）。
-    改善牌はcanonical index昇順・重複なしで構築し、`lisjong.belief.tile_type_set`の
+    改善牌はcanonical index昇順・重複なしで、`lisjong.belief.tile_type_set`の
     牌種集合の契約を満たす（Issue #221。集約時に再検証しない）。
     """
 
-    def __init__(self, concealed: Sequence[Tile]) -> None:
+    def __init__(
+        self, concealed: Sequence[Tile], discard_tiles: Sequence[Tile] = ()
+    ) -> None:
         self.shanten = calculate_shanten(concealed)
         self._held = Counter(concealed)
         counts = [0] * len(_ALL_TILE_TYPES)
         for tile in concealed:
             counts[tile_type_index(tile.tile_type)] += 1
         self._counts = counts
+        # 手中にない牌の候補は含めず、問い合わせ時に`_discard_index()`が拒否する。
+        self._pending = tuple(
+            {
+                tile_type_index(tile.tile_type): None
+                for tile in discard_tiles
+                if self._held[tile] > 0
+            }
+        )
         self._shanten_after: dict[int, int] = {}
         self._improving_after: dict[int, tuple[int, ...]] = {}
 
@@ -397,18 +413,35 @@ class _DiscardStructures:
             )
         return tile_type_index(tile.tile_type)
 
+    def _evaluate(
+        self, indexes: tuple[int, ...], improving_max_shanten: int | None
+    ) -> None:
+        shanten_after, improving_after = evaluate_discards_from_canonical_counts(
+            self._counts, indexes, improving_max_shanten
+        )
+        for index, shanten, improving in zip(
+            indexes, shanten_after, improving_after, strict=True
+        ):
+            self._shanten_after[index] = shanten
+            if improving is not None:
+                self._improving_after[index] = improving
+
+    def _evaluate_pending(self) -> None:
+        pending = self._pending
+        if pending:
+            self._pending = ()
+            self._evaluate(pending, self.shanten)
+
     def shanten_after(self, tile: Tile) -> int:
         """`tile`を捨てた後の向聴数。"""
         index = self._discard_index(tile)
         shanten = self._shanten_after.get(index)
         if shanten is None:
-            counts = self._counts
-            counts[index] -= 1
-            try:
-                shanten = calculate_shanten_from_canonical_counts(counts)
-            finally:
-                counts[index] += 1
-            self._shanten_after[index] = shanten
+            self._evaluate_pending()
+            shanten = self._shanten_after.get(index)
+            if shanten is None:
+                self._evaluate((index,), self.shanten)
+                shanten = self._shanten_after[index]
         return shanten
 
     def improving_after(self, tile: Tile) -> tuple[int, ...]:
@@ -416,22 +449,11 @@ class _DiscardStructures:
         index = self._discard_index(tile)
         improving = self._improving_after.get(index)
         if improving is None:
-            current = self.shanten_after(tile)
-            counts = self._counts
-            counts[index] -= 1
-            try:
-                found = []
-                for drawn in range(len(counts)):
-                    if counts[drawn] >= _MAX_COPIES_PER_TILE_TYPE:
-                        continue
-                    counts[drawn] += 1
-                    shanten = calculate_shanten_from_canonical_counts(counts)
-                    counts[drawn] -= 1
-                    if shanten < current:
-                        found.append(drawn)
-            finally:
-                counts[index] += 1
-            improving = self._improving_after[index] = tuple(found)
+            self._evaluate_pending()
+            improving = self._improving_after.get(index)
+            if improving is None:
+                self._evaluate((index,), None)
+                improving = self._improving_after[index]
         return improving
 
 
@@ -597,7 +619,10 @@ class Kobalab0004ReferencePolicy:
                     return action
 
         if discards:
-            structures = _DiscardStructures(policy_input.own_hand.concealed_tiles)
+            structures = _DiscardStructures(
+                policy_input.own_hand.concealed_tiles,
+                tuple(action.tile for action in discards),
+            )
             chosen = _choose_discard(
                 policy_input,
                 discards,

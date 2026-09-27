@@ -81,7 +81,7 @@ native core（`_shanten_from_valid_counts`、PyO3呼び出しを含む）は約0
 | 打牌後向聴数・改善牌を立直判定で再利用 | **採用** | 同じ構造評価instanceを渡すだけで追加の複雑さがない（立直可のdecisionは少なく効果は小さい） |
 | paijiaの式を34-index配列上で計算（ドラweightを1回だけ集計） | **採用** | Belief対応の入力分離と同時に行い、`TileType`生成を除いた |
 | 未見枚数0の牌種への仮想ツモ評価を省く | **見送り** | 全仮想ツモ89,624件のうち該当は2.6%。改善牌は立直の和了牌判定にも使うため（形としての改善牌）、分離の複雑さと立直判定への流用リスクに見合わない |
-| 候補評価をまとめてRust側へ渡す / paijiaのRust化 | **見送り** | 最適化後のnative core呼び出しは判断全体の約3割で、残りはPythonの軽いloop・未見枚数再構成・paijia。Rust境界を広げる根拠がない |
+| 候補評価をまとめてRust側へ渡す / paijiaのRust化 | **見送り**（候補評価の一括化は#224で再計測のうえ採用、§8） | 最適化後のnative core呼び出しは判断全体の約3割で、残りはPythonの軽いloop・未見枚数再構成・paijia。Rust境界を広げる根拠がない |
 | 未見枚数再構成の高速化 | **見送り（本Issue外）** | 最適化後に約2割を占めるが、共有のbelief基盤（`derive_remaining_tile_inventory`）の変更になり他Policyへ影響する |
 
 保持した条件：exact shantenの定義（5枚目を要する分解を数えない）、赤牌・手出し・ツモ切りの区別
@@ -377,3 +377,143 @@ Rust backendは§1と同じlocal build（`SOURCE_REVISION = 2553c1b…`）、CPy
 
 raw JSON・補助script・基準sourceのcopyはlocal artifact root
 `C:\Dev\lisjong-artifacts\issue-221-tile-type-set\`（`results/`、`scripts/`、`baseline-fafa6c7/`）にある。
+
+## 8. 構造評価のRust一括化（Issue #224）
+
+Issue: [lisbun/lisjong#224](https://github.com/lisbun/lisjong/issues/224)
+
+§3で見送った「候補評価をまとめてRust側へ渡す」を、#220・#221で共有経路と牌種集合の契約が整理されたことを受けて
+測り直した。§3の判断を撤回する新しい事実があったわけではなく、Pythonループを含む移行対象全体の負担を
+事前に固定した基準で評価した結果、採用した。
+
+### 8.1 条件
+
+| 項目 | 値 |
+| --- | --- |
+| 基準（B） | `main` `873862f2d150323af14f80515ea103db15abe9b7`（#223を含む）。sourceをlocal artifactへcopyして別processで実行 |
+| 変更後（N） | 本PR branch |
+| 入力 | §1の固定decision列（計測は0004入力630 decision、同値性は3入力計2,022 decision） |
+| 現状測定のnative | 既存local build（`SOURCE_REVISION = 2553c1b…`。`native/`は`2553c1b..873862f`で未変更） |
+| 比較のnative | 本branchの`native/`をlocal source build（`.pyd` SHA-256 `8ca87921…446e1c`、`API_VERSION = 2`）。B・Nとも同じbuildを使う（Bは既存入口だけを使う） |
+| 環境 | §1と同じ（CPython 3.14.7、Windows 11、8 logical CPU、1 process） |
+| 手順 | §6.3と同じ`timing`（1 process 7 pass、warm pass合計の中央値、各版3 process、組1 `B N N B B N` / 組2 `N B B N N B`、Pythonは組1のみ）。cross-decision cacheはどちらにもない |
+
+判断条件は2段階で、どちらも該当する計測の前にlocal artifactへ記録した（事前記録1: 13:27、現状測定: 13:28–13:29、
+事前記録2: 13:29、試作の計測: 13:45以降。いずれも2026-09-27 JST）。
+
+### 8.2 現状測定と試作前の判断（事前記録1）
+
+`_DiscardStructures`の計数（1 passあたり、参照版・Belief版とも同じ）：
+
+| 項目 | 回数 |
+| --- | ---: |
+| 打牌decision（構造評価instance） | 502 |
+| `shanten_after`呼び出し / 実計算（牌種単位のcache miss） | 7,894 / 5,105 |
+| `improving_after`呼び出し / 実計算 | 2,730 / 2,636 |
+| count入口の向聴数計算（打牌後 + 仮想ツモ） | 94,729 |
+| native core呼び出し（= 境界呼び出し = 実計算） | 95,233 |
+
+対象時間T = 初期評価（`calculate_shanten(concealed)`とcount構築）+ `shanten_after` / `improving_after`
+（入れ子を二重加算しない最外側だけ）。判断の閾値は**X = 15%**（開発費用に対する判断基準）とし、
+両Policyで上限が15%未満なら試作を見送ると事前に決めた。
+
+| 測定 | 参照版（Rust） | Belief版（Rust） |
+| --- | --- | --- |
+| M1: wrap計測でのT / Policy全体（wrap overhead込み） | 102.1 / 182.7 ms = 56% | 101.2 / 269.1 ms = 38% |
+| M2: 構造評価を事前計算の辞書参照に置き換えた版（profilerなし）との比較 | 129.1 → 66.8 ms、上限 **48%** | 216.4 → 148.8 ms、上限 **31%** |
+
+M2は同じ値を返すstub（手中にない牌の拒否は維持）で、一括版でも残る費用（Rust内の計算自体）を0とみなす
+短縮の上限である。両測定とも閾値を大きく超えたため試作に進んだ。Python backendではM1のTが94% / 89%
+（向聴数計算そのものが支配的）。§2の約95k × 0.36 µs ≈ 34 msはRust計算を含む呼び出し区間の参考値で、
+Pythonループの削減余地を含まないため上限には使っていない。
+
+### 8.3 API契約
+
+入口は`lisjong.hand_evaluation.shanten.evaluate_discards_from_canonical_counts(counts, discard_indexes,
+improving_max_shanten=None)`（package-internal。`__all__`へは追加しない）。Python実装と、rust選択時だけ差し替わる
+native実装（`StandardShantenTable.evaluate_discards`）を持ち、dispatchは`_shanten_backend`だけが行う。
+0004 Policyは`_lisjong_native`をimportしない。
+
+| 項目 | 契約 |
+| --- | --- |
+| 入力 | canonical 34牌種count（各0..4、打牌できる純手牌枚数2 / 5 / 8 / 11 / 14）、打牌牌種index（`int`、`bool`不可、0..33、重複不可、手中に1枚以上）、`improving_max_shanten`（`None`または`int`） |
+| 出力 | `(shanten_after, improving_after)`。どちらも`discard_indexes`と同じ順序・長さのtuple。候補が空なら`((), ())` |
+| 改善牌 | 打牌後に手中4枚の牌種を除き、引くと向聴数が下がる牌種の昇順tuple。未見枚数は参照しない（未見0も含む） |
+| 段階評価 | 改善牌は`improving_max_shanten`が`None`なら全候補、`int`なら打牌後向聴数がその値以下の候補だけ求め、それ以外は`None`（未評価）。評価済みの空集合`()`と区別する |
+| 不正入力 | 評価前に`ValueError`（長さ・値域・手牌枚数・index範囲・重複・保有なし・thresholdの64-bit範囲外）/ `TypeError`（index・thresholdが`int`以外または`bool`、countが整数以外）。両実装で同じ例外型。入力は変更しない。panic・process終了はしない |
+| 打牌戦略 | 持たない。候補の選別・受入集計・paijia・評価順・赤 / 通常と手出し / ツモ切りの対応・立直判定はPython（0004）に残す |
+
+0004の`_DiscardStructures(concealed, discard_tiles)`は、現在の向聴数とTile境界の検証を従来どおり
+`calculate_shanten(concealed)`で行い、最初の問い合わせで手中にある候補牌種をまとめて1回評価する
+（threshold = 現在の向聴数。`_choose_discard()`が改善牌を使うのは非悪化候補だけ）。対象外だった候補の改善牌
+（和了形で和了actionがない場合の立直判定等）や、候補に含まれない牌種はその牌種だけ後から評価する。
+手中にない牌の候補は一括評価に含めず、従来と同じ問い合わせ時点で`Kobalab0004ReferencePolicyError`（同じmessage）になる。
+
+**計数器**：`standard_shanten_call_count()`はnative numeric coreの実計算回数（成功分）として意味を維持し、
+一括呼び出しは内部で行った計算回数を加算する。境界呼び出しは新しい`discard_evaluation_call_count()`で別に数える。
+`tools/profile_kobalab_0004.py timing`は両方を`native_standard_shanten_calls` / `native_discard_batch_calls`として出力する。
+
+**wheel互換性**：native拡張は`API_VERSION = 2`を持ち、rust選択時は`_shanten_backend`のimport時に一致を確認する
+（[配布記録§3](rust-backend-distribution.md#3-本体との組み合わせと同一性)）。#224以前のwheel（属性なし）や不一致は
+`ShantenBackendError`でfail closedし、Pythonへ切り替えない。python選択時はnativeをimportしないので旧wheelの影響を受けない。
+
+### 8.4 同値性
+
+**Policy経路**：B（固定基準のsource）とN × Rust / Python backendの4通りで、固定decision 3入力と合成入力について、
+両Policyの最終行動（`legal_actions`を逆順にした場合も）、評価順、候補ごとの打牌後向聴数・改善牌・立直可否、
+`_choose_discard()`が比較したukeire列（`sum_tile_type_values`のspy）・選択結果、例外（型とmessage）を記録し、
+内容のSHA-256が一致した（`c5b865b591bbce433bf2ee3385c41b5a4a9782b5906b812f7589057450b3d686`）。
+合成入力：赤5、待ちの未見0での立直、聴牌立直、和了形で和了actionがない立直（全候補が改善牌評価の対象外になり、
+立直判定が選択候補の改善牌を後から要求する経路）、同じ手で和了actionがある早期return、応答（Pass）、4枚持ち、
+4枚持ちと暗槓候補、暗槓後の11枚、同点候補、手中にない赤5の打牌（fail closed）、未見枚数の不整合。
+Belief版の量子化による同点崩れ（記録済み行動との差14件）もBと同じである。
+
+**契約外入力の差（1件）**：打牌decisionで純手牌が打牌できない枚数（13枚）の場合、BはRustで`ValueError`、
+Pythonでは12枚のcountをそのまま評価して行動を返していた。Nは両backendで同じ`ValueError`になる
+（`counts must hold a concealed hand size that allows a discard ...`）。上記SHA-256の対象外として別に記録した。
+
+**単体test**（`tests/test_evaluate_discards.py`）：期待値はTile入口の`calculate_shanten()`だけから作り、Python実装と
+native実装を照合する（打牌可能な全枚数の乱択手、七対子・国士・4枚持ち・赤5、候補の部分集合・空集合・入力順、
+未評価と評価済みの区別、不正入力の例外型と入力の不変、backend dispatch、計数器、旧wheel / 不一致versionのfail closed）。
+`tests/test_kobalab_0004_reference_policy.py`では構造評価の同値性を一括・牌種単位の両経路で確認し、
+打牌decisionで一括評価が1回だけ行われること、和了形の立直経路を追加した。
+
+完全な手牌では、exact shanten（5枚目を要する形を数えない）の下で評価済みの改善牌が空になる候補は現れなかった
+（手中4枚の牌種だけを待つ形は聴牌と数えないため）。空集合`()`と未評価`None`の区別はAPI単体で固定している。
+
+### 8.5 性能と採用判断（事前記録2）
+
+採用条件（試作前に記録）：1. 上記同値性、2. Rust参照版が両組で15%以上短縮、3. Rust Belief版が両組で10%以上短縮、
+4. Python backendで両Policyとも5%を超えて遅くならない、5. rust選択時のimport時間増加が20 ms未満。
+
+| 版（Rust） | 組1 `B N N B B N` [ms] | 組2 `N B B N N B` [ms] |
+| --- | --- | --- |
+| 参照版 B | **131.8**（128.5 / 131.9 / 131.8） | **135.9**（146.1 / 135.4 / 135.9） |
+| 参照版 N | **101.0**（98.8 / 101.0 / 101.1）−23.4% | **103.6**（111.2 / 103.6 / 102.7）−23.8% |
+| Belief版 B | **221.6**（221.6 / 222.8 / 221.5） | **229.2**（229.2 / 222.4 / 239.0） |
+| Belief版 N | **194.5**（194.5 / 199.8 / 189.6）−12.2% | **194.9**（197.0 / 194.9 / 191.1）−15.0% |
+
+| 版（Python、組1） | B [ms] | N [ms] |
+| --- | --- | --- |
+| 参照版 | 1,516.0（1,826.6 / 1,516.0 / 1,500.1） | 1,457.1（1,760.1 / 1,433.6 / 1,457.1） |
+| Belief版 | 2,011.3（2,026.4 / 2,011.3 / 1,994.9） | 2,000.6（2,046.6 / 2,000.6 / 1,895.1） |
+
+- 実計算回数：B・Nとも1 passあたり95,233回（7 passで666,631回）で増えていない。Python→Rustの境界呼び出しは
+  約95,233回から約1,006回（一括502回 + 現在手牌の`calculate_shanten` 502回 + 槓・九種判定の数回）になった。
+  固定入力では後からの牌種単位の評価は発生しなかった（一括呼び出し502回 = 打牌decision数）。
+- 一括API単体（Nのtree、Policyが実際に行った502呼び出し・5,105候補を再生、入力変換・検証・戻り値生成を含む）：
+  Rustで繰り返し中央値24.6 ms（初回30.8 ms）、#224以前の1評価1呼び出しのloopを同じ入力で再生すると63.9 ms（初回76.1 ms）。
+  Pythonでは1,468 ms / 1,561 msで差は変動の範囲。
+- import時間（rust、`import lisjong.policies`、5回の中央値）：B 102.5 ms、N 103.7 ms（+1.2 ms）。
+  peak working set（3 pass後）はB・Nとも約38–39 MBで、nativeは呼び出し間で状態を持たない。
+- 短縮はM2の参考値（48% / 31%）の約半分だった。一括版にもRust内の向聴数計算、Python側の処理、
+  入力・戻り値の生成等が残るため、M2との差を特定の処理だけに帰属させることはできない。
+
+**判断：採用**（条件1–5をすべて満たした）。Policy計算の短縮であり、対局全体の短縮率とは扱わない。
+compilerなしのAL2023でのwheel検証はCIの`native-backend` job（新しいtestを含むrust選択下のfull suite）で行う。
+AWS実機計測、Arenaのpin・wheel更新は後続作業とする。
+
+raw JSON・計測script・事前記録・基準sourceのcopyはlocal artifact root
+`C:\Dev\lisjong-artifacts\issue-224-batch-structural-eval\`（`pre-registration*.md`、`results/`、`scripts/`、
+`baseline-873862f/`）にある。再現は`scripts/run_counts.sh`・`run_oracle.sh`（現状測定、`LISJONG_SHANTEN_BACKEND`は
+scriptが設定）、`run_fixture.sh`（同値性）、`run_timing.sh`（性能比較）、`api_micro.py`・`import_time.sh`・`peak_memory.py`。
