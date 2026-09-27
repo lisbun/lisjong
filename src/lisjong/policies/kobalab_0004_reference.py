@@ -127,26 +127,106 @@ def _dora_tile_type(indicator: TileType) -> TileType:
     return TileType(indicator.category, indicator.rank % _SUITED_MAXIMUM_RANK + 1)
 
 
-class _PublicCounts:
-    """判断時点の実残り枚数とpaijia計算に必要な公開情報のsnapshot。
+class _PaijiaInput:
+    """sourceの`SuanPai.paijia()`（牌の評価値）の式と、その入力snapshot。
 
-    全discard候補で同じ判断時点の値を共有する。仮に捨てる牌を未知牌へ
-    戻さない（sourceの`SuanPai`は自己のツモ牌・打牌を既知として扱う）。
+    式は入力の導出から分離している。`tile_counts`（canonical 34牌種index、
+    赤5を含む）と`red_five_counts`（萬子・筒子・索子の赤5）は、同じ非負整数の
+    尺度で表した未見量である。参照版は実残り枚数（尺度1）を、Belief対応版は
+    fixed-point raw（尺度`SCALE`）の残余期待枚数を渡す（Issue #218）。
+
+    式はmin / max / 加算 / 正の整数倍だけで構成され、除算・正規化・整数枚数への
+    丸め戻しを行わない。そのため入力全体を共通の正の倍率で拡大するとpaijiaも
+    同じ倍率になり、候補間の順位・同点は保たれる。ドラ・場風・自風は入力の
+    尺度に依存しない整数倍率として扱う。
     """
 
-    def __init__(self, policy_input: PolicyInput) -> None:
-        conservation = derive_remaining_tile_inventory(policy_input)
-        self._remaining = conservation.remaining_tile_counts
-        self._remaining_red = conservation.remaining_red_five_counts
-        self._dora_types = tuple(
-            _dora_tile_type(indicator.tile_type)
-            for indicator in policy_input.round.dora_indicators
-        )
+    def __init__(
+        self,
+        tile_counts: Sequence[int],
+        red_five_counts: Sequence[int],
+        policy_input: PolicyInput,
+    ) -> None:
+        self._counts = tuple(tile_counts)
+        self._red = tuple(red_five_counts)
+        weights = [1] * len(_ALL_TILE_TYPES)
+        for indicator in policy_input.round.dora_indicators:
+            weights[tile_type_index(_dora_tile_type(indicator.tile_type))] *= 2
+        self._weights = weights
         self._round_wind = wind_index(policy_input.round.round_wind)
         self._seat_wind = wind_index(
             wind_for_seat(policy_input.self_seat, policy_input.round.dealer_seat)
         )
-        self._paijia_cache: dict[Tile, int] = {}
+        self._cache: dict[Tile, int] = {}
+
+    def paijia(self, tile: Tile) -> int:
+        cached = self._cache.get(tile)
+        if cached is None:
+            cached = self._cache[tile] = self._compute_paijia(tile)
+        return cached
+
+    def _compute_paijia(self, tile: Tile) -> int:
+        tile_type = tile.tile_type
+        index = tile_type_index(tile_type)
+        n = tile_type.rank
+        weights = self._weights
+
+        if tile_type.category is TileCategory.HONOR:
+            value = self._counts[index] * weights[index]
+            if n == self._round_wind + 1:
+                value *= 2
+            if n == self._seat_wind + 1:
+                value *= 2
+            if _DRAGON_START_RANK <= n <= 7:
+                value *= 2
+        else:
+            # rank r（1..9）の値は`num[r - 1]` / `weight[r - 1]`。範囲外rankは0。
+            base = index - (n - 1)
+            num = self._counts[base : base + _SUITED_MAXIMUM_RANK]
+            weight = weights[base : base + _SUITED_MAXIMUM_RANK]
+            left = min(num[n - 3], num[n - 2]) if n - 2 >= 1 else 0
+            center = min(num[n - 2], num[n]) if n - 1 >= 1 and n + 1 <= 9 else 0
+            right = min(num[n], num[n + 1]) if n + 2 <= 9 else 0
+            n_pai = (
+                left,
+                max(left, center),
+                num[n - 1],
+                max(center, right),
+                right,
+            )
+            value = sum(
+                n_pai[offset + 2] * weight[n + offset - 1]
+                for offset in range(-2, 3)
+                if 1 <= n + offset <= 9
+            )
+            red = self._red[red_five_index(tile_type.category)]
+            if red:
+                bonus_index = {7: 0, 6: 1, 5: 2, 4: 3, 3: 4}.get(n)
+                if bonus_index is not None:
+                    value += min(red, n_pai[bonus_index]) * weight[n + bonus_index - 3]
+            if tile.is_red:
+                value *= 2
+        return value * weights[index]
+
+
+class _PublicCounts:
+    """判断時点の実残り枚数とpaijia入力のsnapshot。
+
+    全discard候補で同じ判断時点の値を共有する。仮に捨てる牌を未知牌へ
+    戻さない（sourceの`SuanPai`は自己のツモ牌・打牌を既知として扱う）。
+    ukeireは常に実残り枚数を使う。paijiaの入力は参照版では同じ実残り枚数
+    （sourceの`_paishu`）である。
+    """
+
+    def __init__(self, policy_input: PolicyInput) -> None:
+        conservation = derive_remaining_tile_inventory(policy_input)
+        self.conservation = conservation
+        self._remaining = conservation.remaining_tile_counts
+        self.paijia_input = _PaijiaInput(
+            conservation.remaining_tile_counts,
+            conservation.remaining_red_five_counts,
+            policy_input,
+        )
 
     @property
     def remaining_tile_counts(self) -> tuple[int, ...]:
@@ -157,69 +237,9 @@ class _PublicCounts:
         """sourceの`_paishu[s][n]`（赤5を含む基礎牌種の未見枚数）。"""
         return self._remaining[tile_type_index(tile_type)]
 
-    def _num(self, category: TileCategory, rank: int) -> int:
-        return self.remaining(TileType(category, rank))
-
-    def _weight(self, category: TileCategory, rank: int) -> int:
-        if rank < 1 or rank > 9:
-            return 0
-        weight = 1
-        tile_type = TileType(category, rank)
-        for dora_type in self._dora_types:
-            if dora_type == tile_type:
-                weight *= 2
-        return weight
-
     def paijia(self, tile: Tile) -> int:
         """sourceの`SuanPai.paijia()`（牌の評価値）。"""
-        cached = self._paijia_cache.get(tile)
-        if cached is None:
-            cached = self._paijia_cache[tile] = self._compute_paijia(tile)
-        return cached
-
-    def _compute_paijia(self, tile: Tile) -> int:
-        category = tile.tile_type.category
-        n = tile.tile_type.rank
-        weight = self._weight
-
-        if category is TileCategory.HONOR:
-            value = self._num(category, n) * weight(category, n)
-            if n == self._round_wind + 1:
-                value *= 2
-            if n == self._seat_wind + 1:
-                value *= 2
-            if _DRAGON_START_RANK <= n <= 7:
-                value *= 2
-        else:
-            num = self._num
-            left = min(num(category, n - 2), num(category, n - 1)) if n - 2 >= 1 else 0
-            center = (
-                min(num(category, n - 1), num(category, n + 1))
-                if n - 1 >= 1 and n + 1 <= 9
-                else 0
-            )
-            right = min(num(category, n + 1), num(category, n + 2)) if n + 2 <= 9 else 0
-            n_pai = (
-                left,
-                max(left, center),
-                num(category, n),
-                max(center, right),
-                right,
-            )
-            value = sum(
-                n_pai[offset + 2] * weight(category, n + offset)
-                for offset in range(-2, 3)
-            )
-            red = self._remaining_red[red_five_index(category)]
-            if red:
-                bonus_index = {7: 0, 6: 1, 5: 2, 4: 3, 3: 4}.get(n)
-                if bonus_index is not None:
-                    value += min(red, n_pai[bonus_index]) * weight(
-                        category, n + bonus_index - 2
-                    )
-            if tile.is_red:
-                value *= 2
-        return value * weight(category, n)
+        return self.paijia_input.paijia(tile)
 
 
 def _remove_exact(tiles: Sequence[Tile], removed: Sequence[Tile]) -> list[Tile]:
