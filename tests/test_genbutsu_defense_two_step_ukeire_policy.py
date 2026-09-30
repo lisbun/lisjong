@@ -525,6 +525,7 @@ class PublicGenerationAndScopeTest(unittest.TestCase):
                 "Kobalab0004ReferencePolicy",
                 "MechanismRiichiDefenseYakuhaiCallPolicy",
                 "MinimalPolicy",
+                "OneShantenDefensePlacementAwareSpeedCallPolicy",
                 "OpenHandYakuAwareCallPolicy",
                 "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
                 "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
