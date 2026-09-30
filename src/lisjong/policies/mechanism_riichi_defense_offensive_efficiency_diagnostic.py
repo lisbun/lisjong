@@ -50,8 +50,9 @@ mutable working stateをuniverse間で共有・再利用しない。
 
 `include_terminal_progression=True`のexplicit opt-inのときだけ、Issue #169 /
 PR #170のexact adaptive expected-terminal-shanten evaluator
-（`terminal_shanten_progression_mechanism_riichi_defense._TerminalShantenProgressionEvaluator`）
-を起動する。R1/R4と同じくfull-legal universeとbaseline-eligible universeを
+（`terminal_shanten_progression_mechanism_riichi_defense`のPython oracle
+`_TerminalShantenProgressionEvaluator`、またはrust指定時は同じsemanticのnative evaluator。
+生成は`_new_progression_evaluator()`）を起動する。R1/R4と同じくfull-legal universeとbaseline-eligible universeを
 分離し、それぞれ`full_legal_terminal_progression_summary` /
 `baseline_eligible_terminal_progression_summary`として別々に保持する。
 
@@ -101,7 +102,7 @@ from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
 from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense import (
     TERMINAL_SHANTEN_AXIS,
     _evaluate_progression_candidates,
-    _TerminalShantenProgressionEvaluator,
+    _new_progression_evaluator,
 )
 from lisjong.policies.two_step_ukeire import (
     TwoStepUkeireCandidateEvaluation,
@@ -693,7 +694,7 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
                 full_legal_completion_evaluations,
                 remaining_counts,
                 DEFAULT_HORIZON,
-                _TerminalShantenProgressionEvaluator(),
+                _new_progression_evaluator(),
             )
             terminal_by_action = {
                 candidate.action: (
@@ -718,7 +719,7 @@ def analyze_mechanism_riichi_defense_offensive_efficiency(
                 baseline_eligible_completion_evaluations,
                 remaining_counts,
                 DEFAULT_HORIZON,
-                _TerminalShantenProgressionEvaluator(),
+                _new_progression_evaluator(),
             )
             terminal_by_action = {
                 candidate.action: (

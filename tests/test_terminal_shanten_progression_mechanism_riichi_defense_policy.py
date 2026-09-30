@@ -946,7 +946,8 @@ class InformationBoundaryTest(unittest.TestCase):
             recorded.append(evaluator)
             return evaluator
 
-        with patch.object(progression, "_TerminalShantenProgressionEvaluator", build):
+        # 本番配線はfactory経由である。oracleの遷移観測にはfactoryへ注入する。
+        with patch.object(progression, "_new_progression_evaluator", build):
             progression._evaluate_and_choose_discard(policy_input, actions)
         self.assertEqual(len(recorded), 1)
         self.assertEqual(len(recorded[0].root_queries), len(actions))

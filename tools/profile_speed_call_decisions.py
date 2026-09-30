@@ -21,12 +21,18 @@ repositoryからArenaへ依存しない）。
   private instrumentationを、decisionごとに数回しか呼ばれない
   `_evaluate_completion_masses` / `_evaluate_progression_candidates`の
   戻り時点で読むだけであり、hot loopへwrapperを入れない。
+  rust指定のprocessではR5はnative evaluatorが実行し、同じ4 counterをnativeが
+  実測してevaluatorへ保持する（Issue #232。未計測は`None`で、0で埋めない）。
   `--export`は閾値以上のdecisionだけを同じ形式のpickleへ書き出す（local専用。
   repositoryへcommitしない）。
 - `breakdown`: stage関数とshanten primitiveをmodule / class属性の差し替えで
   wrapし、選んだdecisionごとに呼び出し回数・inclusive・self時間を出す。
   wrap自体のoverhead（特にshanten primitive）を含むため、速度の絶対値は
-  `scan`を使う。
+  `scan`を使う。rust指定のprocessでは、R5探索本体はnative内で完結するため
+  Python関数wrapではnative内部のshanten時間・call数を測れない。その場合は
+  R5一括呼出しの時間（`r5_progression_dp`のinclusive）とnativeの実測counterだけを
+  報告し、native内部のshanten時間・Python DP overheadは`null` / `not_measured`と
+  理由を出す（0秒・0回やPython DP overheadとは表示しない）。
 
 shanten backendはprocess起動時の`LISJONG_SHANTEN_BACKEND`で決まるため、
 backend比較は別processで行う。
@@ -51,6 +57,9 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from lisjong.hand_evaluation import _shanten_backend, calculate_shanten  # noqa: E402
 from lisjong.policies import PlacementAwareSpeedCallPolicy  # noqa: E402
+from lisjong.policies import (  # noqa: E402
+    terminal_shanten_progression_mechanism_riichi_defense as _progression,
+)
 from lisjong.policies.genbutsu_defense_two_step_ukeire import (  # noqa: E402
     _opponent_riichi_players,
 )
@@ -87,10 +96,24 @@ _DP_COUNTER_TARGETS = (
 )
 _DP_COUNTER_FIELDS = (
     "visited_states",
+    "cache_hits",
     "cache_misses",
     "shanten_evaluations",
     "completion_predicate_evaluations",
     "tenpai_predicate_evaluations",
+)
+
+_NATIVE_EVALUATOR = _progression._NativeTerminalShantenProgressionEvaluator
+_R5_COUNTER_FIELDS = (
+    "visited_states",
+    "cache_hits",
+    "cache_misses",
+    "shanten_evaluations",
+)
+_NATIVE_NOT_MEASURED_REASON = (
+    "the R5 search runs inside the native extension, so Python function wrappers "
+    "cannot time or count its internal shanten evaluations; only the whole native "
+    "batch call and the native instrumentation counters are measured"
 )
 
 _CLASS_TARGETS = (
@@ -240,6 +263,8 @@ class _DpCounters:
                 evaluator = args[4] if len(args) > 4 else kwargs.get("evaluator")
                 row = self.current.setdefault(label, {"calls": 0})
                 row["calls"] += 1
+                if isinstance(evaluator, _NATIVE_EVALUATOR):
+                    row["evaluator"] = "native"
                 for field in _DP_COUNTER_FIELDS:
                     value = getattr(evaluator, field, None)
                     if value is not None:
@@ -381,6 +406,71 @@ class _Accumulator:
         }
 
 
+class _R5Recorder:
+    """1 decisionが生成したR5 evaluatorを、factory経由で記録する。"""
+
+    def __init__(self) -> None:
+        self.evaluators: list = []
+
+    def wrap(self, factory):
+        def wrapped(*args, **kwargs):
+            evaluator = factory(*args, **kwargs)
+            self.evaluators.append(evaluator)
+            return evaluator
+
+        return wrapped
+
+
+def _r5_report(evaluators: list, rows: dict[str, dict]) -> dict[str, object] | None:
+    """R5 evaluatorごとの実測counterと、native時の未計測値の明示。
+
+    native evaluatorではnative内部のshanten時間とPython DP overheadを測れないので、
+    `r5_progression_dp`行の`self_ms`（Python oracleではDP overhead）を`null`にして
+    理由を添える。nativeのshanten call数は`shanten_evaluations` counterとして
+    実測済みである。
+    """
+    if not evaluators:
+        return None
+    native = [item for item in evaluators if isinstance(item, _NATIVE_EVALUATOR)]
+    counters = {
+        name: sum(
+            value
+            for item in evaluators
+            if (value := getattr(item, name, None)) is not None
+        )
+        for name in _R5_COUNTER_FIELDS
+    }
+    if not native:
+        return {
+            "backend": "python",
+            "evaluators": len(evaluators),
+            "counters": counters,
+        }
+    if len(native) != len(evaluators):
+        raise RuntimeError("a decision mixed native and Python R5 evaluators")
+    if any(
+        getattr(item, name) is None for item in native for name in _R5_COUNTER_FIELDS
+    ):
+        counters = {name: None for name in _R5_COUNTER_FIELDS}
+    row = rows.get("r5_progression_dp")
+    if row is not None:
+        row["self_ms"] = None
+        row["self_ms_status"] = (
+            "not_measured: includes the native search, not Python DP overhead"
+        )
+    return {
+        "backend": "rust-native",
+        "evaluators": len(evaluators),
+        "counters": counters,
+        "native_shanten_ms": None,
+        "native_shanten_status": "not_measured",
+        "native_shanten_reason": _NATIVE_NOT_MEASURED_REASON,
+        "python_dp_overhead_ms": None,
+        "python_dp_overhead_status": "not_applicable: no Python DP runs",
+        "r5_batch_ms": None if row is None else row["inclusive_ms"],
+    }
+
+
 def _run_breakdown(arguments: argparse.Namespace) -> dict[str, object]:
     records, digest = _load_decisions(arguments.decisions)
     accumulator = _Accumulator()
@@ -400,6 +490,15 @@ def _run_breakdown(arguments: argparse.Namespace) -> dict[str, object]:
             continue
         _patch(module, attribute, accumulator.wrap(label, original), patched)
 
+    recorder = _R5Recorder()
+    thr_module = importlib.import_module(_THR)
+    _patch(
+        thr_module,
+        "_new_progression_evaluator",
+        recorder.wrap(thr_module._new_progression_evaluator),
+        patched,
+    )
+
     if arguments.indices:
         indices = arguments.indices
     else:
@@ -413,18 +512,22 @@ def _run_breakdown(arguments: argparse.Namespace) -> dict[str, object]:
             decision, _recorded = records[index]
             gc.collect()
             accumulator.reset()
+            recorder.evaluators = []
             choose(decision)
             total_ms = accumulator.inclusive[root] * 1000.0
             if total_ms < arguments.min_ms:
                 continue
-            per_decision.append(
-                {
-                    "index": index,
-                    "total_ms_with_wrappers": round(total_ms, 3),
-                    **input_features(decision),
-                    "rows": accumulator.rows(root),
-                }
-            )
+            rows = accumulator.rows(root)
+            entry = {
+                "index": index,
+                "total_ms_with_wrappers": round(total_ms, 3),
+                **input_features(decision),
+                "rows": rows,
+            }
+            r5 = _r5_report(recorder.evaluators, rows)
+            if r5 is not None:
+                entry["r5"] = r5
+            per_decision.append(entry)
     finally:
         _restore(patched)
 

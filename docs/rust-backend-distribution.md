@@ -54,12 +54,14 @@ native拡張は、Python側の`_shanten_table.bin`、resource state combine tabl
 
 利用側（Arena）は、導入前に2を照合し、導入後に3が1と一致することを確認する。一致しなければ対局開始前に失敗させる。
 
-**native API version（Issue #224）**：上記とは別に、native拡張は提供する入口の組を`_lisjong_native.API_VERSION`で示す
+**native API version（Issue #224 / #232）**：上記とは別に、native拡張は提供する入口の組を`_lisjong_native.API_VERSION`で示す
 （1 = `standard_shanten` / `shanten_from_valid_counts`、#224以前のwheelは属性なしで1とみなす。
-2 = 打牌候補の一括構造評価`evaluate_discards`を追加）。`LISJONG_SHANTEN_BACKEND=rust`のprocessは
-`_shanten_backend`のimport時に`API_VERSION`が本体の`REQUIRED_NATIVE_API_VERSION`と一致することを確認し、
-不一致なら`ShantenBackendError`で失敗する（一部の入口だけPythonへ切り替えない）。python選択時はnative拡張をimportしないため、
-旧wheelがinstallされていても影響しない。これは古いwheelの取り違えを起動時に検出する最低限の検査であり、
+2 = 打牌候補の一括構造評価`evaluate_discards`を追加。
+3 = R5（expected terminal shanten progression）探索本体`evaluate_progression`を追加、Issue #232）。
+`LISJONG_SHANTEN_BACKEND=rust`のprocessは
+`_shanten_backend`のimport時に`API_VERSION`が本体の`REQUIRED_NATIVE_API_VERSION`（現在3）と一致することを確認し、
+不一致なら`ShantenBackendError`で失敗する（一部の入口だけPythonへ切り替えない。API_VERSION 2以前のwheelでR5だけPythonへ黙って戻ることもない）。
+python選択時はnative拡張をimportしないため、旧wheelがinstallされていても影響しない。これは古いwheelの取り違えを起動時に検出する最低限の検査であり、
 §3の3値による組み合わせ固定（SHA-256・`SOURCE_REVISION`照合）を置き換えない。
 
 ## 4. CI
@@ -69,6 +71,10 @@ native拡張は、Python側の`_shanten_table.bin`、resource state combine tabl
 - `native-wheel`：manylinux_2_28 container内でrustfmt check、wheel build、wheel tagの検査、
   `SHA256SUMS`と`BUILD-INFO.txt`（wheel名、SHA-256、lisjong revision、event / ref、run URL、Python・rustc・maturin version）を作成し、
   artifact `lisjong-native-wheel-<commit>`としてuploadする（保持90日）。
+- Issue #232のR5探索は`native/src/progression.rs`に追加した。wheel build手順・CI job・ArenaのAWS wheel構築 / 取得 / SHA-256照合の手順は変わらない
+  （追加の依存crateはなく、manylinux_2_28 wheelのtagも同じ）。ただしAPI_VERSIONが3になったため、**Arenaが取得するwheelは
+  #232以降のrevisionでbuildしたものでなければrust指定のprocessが起動時に失敗する**。Arena側の`pyproject.toml`のlisjong revision pinと
+  wheel SHA-256 / `SOURCE_REVISION`は、#232を含むrevisionへ揃えて更新する必要がある（連携事項。Arena側の変更はこのPRの対象外）。
 - `native-backend`：`amazonlinux:2023` containerで`dnf`の`python3.14`だけを入れ、`cc` / `gcc` / `g++` / `clang` / `rustc` / `cargo`が
   存在しないことを確認してから、artifactのSHA-256を照合し、wheelを`--only-binary=:all: --no-index --no-deps`でinstallする。
   `SOURCE_REVISION`がcheckout中のcommitと一致することを確認し、native同値性test（`tests.test_native_shanten_backend`）と、

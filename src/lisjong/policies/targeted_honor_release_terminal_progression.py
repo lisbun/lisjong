@@ -52,8 +52,8 @@ from lisjong.policies.mechanism_riichi_defense_yakuhai_call import (
 from lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense import (
     ProgressionCandidateEvaluation,
     _evaluate_progression_candidates,
+    _new_progression_evaluator,
     _select_from_completion_masses,
-    _TerminalShantenProgressionEvaluator,
 )
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.analysis_trace import AnalysisTrace
@@ -547,7 +547,7 @@ def _evaluate_all_zero_targeted_honor_release(
         target_completion_evaluations,
         remaining_counts,
         DEFAULT_HORIZON,
-        _TerminalShantenProgressionEvaluator(),
+        _new_progression_evaluator(),
     )
     minimum_terminal_mass = min(
         evaluation.terminal_shanten_mass for evaluation in progression_evaluations

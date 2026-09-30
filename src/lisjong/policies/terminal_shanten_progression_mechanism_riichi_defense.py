@@ -153,9 +153,11 @@ public `PolicyDecision.analysis` contractは広げず、打牌decisionの`analys
 parentと同じく`None`のままにする。
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from lisjong.belief.tile_inventory import TILE_TYPE_COUNT
+from lisjong.hand_evaluation import _shanten_backend
 from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
@@ -389,6 +391,25 @@ class _TerminalShantenProgressionEvaluator:
         self.cache_misses = 0
         self.shanten_evaluations = 0
 
+    def evaluate_roots(
+        self,
+        root_hand_counts: Sequence[tuple[int, ...]],
+        remaining_counts: tuple[int, ...],
+        horizon: int,
+    ) -> tuple[tuple[int, tuple[int, ...]], ...]:
+        """root手牌ごとの`(root_post_discard_shanten, terminal distribution)`。
+
+        native evaluatorと同じ一括入口である。全rootで同じcacheを共有し、
+        rootごとにdistribution、続いてroot向聴数の順で評価する。
+        """
+        results: list[tuple[int, tuple[int, ...]]] = []
+        for hand_counts in root_hand_counts:
+            distribution = self.terminal_shanten_distribution(
+                hand_counts, remaining_counts, horizon
+            )
+            results.append((self.shanten(hand_counts), distribution))
+        return tuple(results)
+
     def shanten(self, hand_counts: tuple[int, ...]) -> int:
         """`hand_evaluation`のcount-native contractによるcache付き向聴数。
 
@@ -566,12 +587,93 @@ class _TerminalShantenProgressionEvaluator:
         return best_distribution
 
 
+class _NativeTerminalShantenProgressionEvaluator:
+    """R5探索本体をnative（`_lisjong_native`）で実行するevaluator（Issue #232）。
+
+    Python oracle（`_TerminalShantenProgressionEvaluator`）とは別の型である。
+    root候補群を1回の`evaluate_roots()`でまとめてnativeへ渡し、同一decision内の
+    cacheをnative側で共有する。探索中のPython往復はなく、native側はGILを解放して
+    実行する。nativeはRustが所有するデータだけを探索し、Python objectを
+    借用しない。
+
+    cacheは1回の`evaluate_roots()`呼び出しの中だけで生きる。decision間・対局間へ
+    持ち越さないため、1 instanceにつき`evaluate_roots()`は1回だけ呼べる。
+
+    `visited_states` / `cache_hits` / `cache_misses` / `shanten_evaluations`は
+    Python oracleと同じ定義でnativeが数えた、root群を共有評価したdecision全体の
+    実測値である。`evaluate_roots()`前は`None`（未計測を0で埋めない）。
+    """
+
+    __slots__ = (
+        "_evaluate",
+        "_evaluated",
+        "cache_hits",
+        "cache_misses",
+        "shanten_evaluations",
+        "visited_states",
+    )
+
+    def __init__(self, native_evaluate_progression) -> None:
+        self._evaluate = native_evaluate_progression
+        self._evaluated = False
+        self.visited_states: int | None = None
+        self.cache_hits: int | None = None
+        self.cache_misses: int | None = None
+        self.shanten_evaluations: int | None = None
+
+    def evaluate_roots(
+        self,
+        root_hand_counts: Sequence[tuple[int, ...]],
+        remaining_counts: tuple[int, ...],
+        horizon: int,
+    ) -> tuple[tuple[int, tuple[int, ...]], ...]:
+        """root手牌ごとの`(root_post_discard_shanten, terminal distribution)`。"""
+        if self._evaluated:
+            raise RuntimeError(
+                "a native progression evaluator evaluates one root batch per "
+                "decision; create a new evaluator"
+            )
+        self._evaluated = True
+        roots, counters = self._evaluate(
+            tuple(root_hand_counts),
+            remaining_counts,
+            horizon,
+            TerminalShantenProgressionPolicyError,
+        )
+        (
+            self.visited_states,
+            self.cache_hits,
+            self.cache_misses,
+            self.shanten_evaluations,
+        ) = counters
+        return roots
+
+
+def _new_progression_evaluator() -> (
+    _TerminalShantenProgressionEvaluator | _NativeTerminalShantenProgressionEvaluator
+):
+    """本番3呼出し元が共通で使うR5 evaluatorのfactory（Issue #232）。
+
+    process単位のshanten backend選択（`LISJONG_SHANTEN_BACKEND`）に従う。rust指定
+    ならnative evaluator、それ以外はPython oracleを返す。rust指定でnativeを使え
+    ない場合は`_shanten_backend`がimport時にfail closedしているため、ここでPython
+    へ黙って戻ることはない。
+    """
+    native_evaluate = _shanten_backend.native_evaluate_progression
+    if native_evaluate is not None:
+        return _NativeTerminalShantenProgressionEvaluator(native_evaluate)
+    return _TerminalShantenProgressionEvaluator()
+
+
 def _evaluate_progression_candidates(
     policy_input: PolicyInput,
     evaluations: tuple[FiniteHorizonCandidateEvaluation, ...],
     remaining_counts: tuple[int, ...],
     horizon: int,
-    evaluator: _TerminalShantenProgressionEvaluator,
+    evaluator: (
+        _TerminalShantenProgressionEvaluator
+        | _NativeTerminalShantenProgressionEvaluator
+    ),
 ) -> tuple[ProgressionCandidateEvaluation, ...]:
     """canonical順のroot candidateごとにexact terminal shanten massを評価する。
 
@@ -581,24 +683,25 @@ def _evaluate_progression_candidates(
     場合、共有transposition cacheがそのまま再利用される。
     """
     concealed_tiles = policy_input.own_hand.concealed_tiles
-    candidates: list[ProgressionCandidateEvaluation] = []
-    for evaluation in evaluations:
-        hand_counts = _tile_type_counts(
+    root_hand_counts = tuple(
+        _tile_type_counts(
             post_discard_concealed_hand(concealed_tiles, evaluation.action.tile)
         )
-        distribution = evaluator.terminal_shanten_distribution(
-            hand_counts, remaining_counts, horizon
+        for evaluation in evaluations
+    )
+    root_results = evaluator.evaluate_roots(root_hand_counts, remaining_counts, horizon)
+    return tuple(
+        ProgressionCandidateEvaluation(
+            action=evaluation.action,
+            completion_mass=evaluation.completion_mass,
+            root_post_discard_shanten=root_shanten,
+            terminal_shanten_mass=_distribution_mass(distribution),
+            terminal_shanten_counts=distribution,
         )
-        candidates.append(
-            ProgressionCandidateEvaluation(
-                action=evaluation.action,
-                completion_mass=evaluation.completion_mass,
-                root_post_discard_shanten=evaluator.shanten(hand_counts),
-                terminal_shanten_mass=_distribution_mass(distribution),
-                terminal_shanten_counts=distribution,
-            )
+        for evaluation, (root_shanten, distribution) in zip(
+            evaluations, root_results, strict=True
         )
-    return tuple(candidates)
+    )
 
 
 def _select_from_completion_masses(
@@ -700,7 +803,7 @@ def _evaluate_and_choose_discard(
         completion_evaluations,
         remaining_counts,
         DEFAULT_HORIZON,
-        _TerminalShantenProgressionEvaluator(),
+        _new_progression_evaluator(),
     )
     selected = _select_from_progression(policy_input, candidates, fallback_action)
     return selected, ProgressionDecisionAnalysis(
