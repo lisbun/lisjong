@@ -35,11 +35,16 @@
 //! `read_counts()` (each count 0..=4, exactly 34 counts, `fixed_meld_count`
 //! 0..=4).  Artifact dimensions are checked with `u64` arithmetic.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+mod progression;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyInt, PyList, PyTuple, PyType};
+
+use progression::{Counts, SearchError};
 
 const MAGIC: &[u8; 8] = b"LISJSHT\x01";
 const FORMAT_VERSION: u32 = 1;
@@ -48,7 +53,7 @@ const HEADER_SIZE: usize = 28; // struct "<8sIIIII"
 const SUIT_KEY_SPACE: usize = 1_953_125; // 5**9
 const HONOR_KEY_SPACE: usize = 78_125; // 5**7
 
-const TILE_KIND_COUNT: usize = 34;
+pub(crate) const TILE_KIND_COUNT: usize = 34;
 const MAX_COPIES: i64 = 4;
 const MAX_FIXED_MELDS: i64 = 4;
 
@@ -63,8 +68,9 @@ const STANDARD_SHANTEN_BASE: i32 = 8;
 ///
 /// 1 = `standard_shanten` / `shanten_from_valid_counts` (Issue #213; wheels
 /// built before Issue #224 have no `API_VERSION` attribute),
-/// 2 = additionally `evaluate_discards` (Issue #224).
-const API_VERSION: u32 = 2;
+/// 2 = additionally `evaluate_discards` (Issue #224),
+/// 3 = additionally `evaluate_progression` (Issue #232).
+const API_VERSION: u32 = 3;
 
 /// Number of successful native shanten evaluations in this process.
 ///
@@ -77,6 +83,10 @@ static STANDARD_SHANTEN_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Number of successful `evaluate_discards()` calls (Python-to-Rust boundary
 /// crossings of the batched entry) in this process.  Diagnostic only.
 static DISCARD_EVALUATION_CALLS: AtomicU64 = AtomicU64::new(0);
+
+/// Number of successful `evaluate_progression()` calls in this process.
+/// Diagnostic only: tests use it to prove that the native R5 search ran.
+static PROGRESSION_EVALUATION_CALLS: AtomicU64 = AtomicU64::new(0);
 
 /// Concealed hand sizes from which a discard leaves a valid concealed size.
 const DISCARD_HAND_SIZES: [usize; 5] = [2, 5, 8, 11, 14];
@@ -323,19 +333,27 @@ fn group_key(counts: &[u8]) -> usize {
         .fold(0usize, |key, &count| key * 5 + count as usize)
 }
 
+/// Immutable numeric shanten data shared with native searches.
+///
+/// It owns no Python object, so a reference to it (or an `Arc` clone) can cross
+/// into a section where the GIL is released.
+struct ShantenCore {
+    suit: FrontierGroup,
+    honor: FrontierGroup,
+    combine: Vec<u16>,
+    penalties: Vec<i8>,
+}
+
 /// Exact standard-form shanten from the frontier table.
 ///
 /// Mirrors `_lookup_shanten.calculate_standard_shanten()` step by step.
 #[pyclass(frozen, module = "_lisjong_native")]
 struct StandardShantenTable {
-    suit: FrontierGroup,
-    honor: FrontierGroup,
-    combine: Vec<u16>,
-    penalties: Vec<i8>,
+    core: Arc<ShantenCore>,
     error_type: Py<PyType>,
 }
 
-impl StandardShantenTable {
+impl ShantenCore {
     fn compute(
         &self,
         counts: &[u8; TILE_KIND_COUNT],
@@ -422,7 +440,9 @@ impl StandardShantenTable {
             }
         }
     }
+}
 
+impl StandardShantenTable {
     fn table_error(&self, py: Python<'_>, message: String) -> PyErr {
         PyErr::from_type(self.error_type.bind(py).clone(), message)
     }
@@ -448,10 +468,12 @@ impl StandardShantenTable {
         let combine = parse_combine(combine.as_bytes()).map_err(raise)?;
         let penalties = parse_penalties(penalties.as_bytes()).map_err(raise)?;
         Ok(Self {
-            suit,
-            honor,
-            combine,
-            penalties,
+            core: Arc::new(ShantenCore {
+                suit,
+                honor,
+                combine,
+                penalties,
+            }),
             error_type: error_type.clone().unbind(),
         })
     }
@@ -470,6 +492,7 @@ impl StandardShantenTable {
             ));
         }
         let value = self
+            .core
             .compute(&counts, fixed_meld_count as usize)
             .map_err(|message| self.table_error(py, message))?;
         STANDARD_SHANTEN_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -497,6 +520,7 @@ impl StandardShantenTable {
             ));
         }
         let shanten = self
+            .core
             .numeric_shanten(&counts, total as usize)
             .map_err(|message| self.table_error(py, message))?;
         STANDARD_SHANTEN_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -551,6 +575,7 @@ impl StandardShantenTable {
             counts[index] -= 1;
             evaluations += 1;
             let after = self
+                .core
                 .numeric_shanten(&counts, total - 1)
                 .map_err(table_error)?;
             let evaluate_improving =
@@ -563,7 +588,7 @@ impl StandardShantenTable {
                     }
                     counts[drawn] += 1;
                     evaluations += 1;
-                    let shanten = self.numeric_shanten(&counts, total);
+                    let shanten = self.core.numeric_shanten(&counts, total);
                     counts[drawn] -= 1;
                     if shanten.map_err(table_error)? < after {
                         found.push(drawn as i64);
@@ -593,9 +618,107 @@ impl StandardShantenTable {
         DISCARD_EVALUATION_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(result)
     }
+
+    /// Exact terminal-shanten progression search for a batch of root hands
+    /// (Issue #232).
+    ///
+    /// `root_hands` is a sequence of canonical 34-count post-discard hands,
+    /// `remaining_counts` the canonical 34-count remaining inventory and
+    /// `horizon` an `int` (not `bool`) from 1 to 3.  `policy_error_type` is the
+    /// exception raised for semantic failures (terminal shanten outside the
+    /// 0..=8 axis, `u64` range, a draw hand without a discard).
+    ///
+    /// Returns `(roots, counters)`: `roots[i]` is
+    /// `(root_post_discard_shanten, terminal_shanten_counts)` in the order of
+    /// `root_hands`, `counters` is `(visited_states, cache_hits, cache_misses,
+    /// shanten_evaluations)` for the whole call.  All roots share one cache that
+    /// lives only for this call.
+    ///
+    /// Input is fully converted to Rust-owned arrays and validated before the
+    /// search; the search then runs with the GIL released and touches no Python
+    /// object.  The GIL release does not make the search cancellable.
+    #[pyo3(signature = (root_hands, remaining_counts, horizon, policy_error_type))]
+    fn evaluate_progression<'py>(
+        &self,
+        py: Python<'py>,
+        root_hands: &Bound<'py, PyAny>,
+        remaining_counts: &Bound<'py, PyAny>,
+        horizon: &Bound<'py, PyAny>,
+        policy_error_type: &Bound<'py, PyType>,
+    ) -> PyResult<(Bound<'py, PyTuple>, Bound<'py, PyTuple>)> {
+        if horizon.is_instance_of::<PyBool>() || !horizon.is_instance_of::<PyInt>() {
+            return Err(PyTypeError::new_err("horizon must be an int"));
+        }
+        let horizon = match horizon.extract::<i64>() {
+            Ok(value) if (1..=3).contains(&value) => value as u8,
+            _ => return Err(PyValueError::new_err("horizon must be from 1 to 3")),
+        };
+        let remaining = read_counts(remaining_counts)?;
+        let remaining_total: u64 = remaining.iter().map(|&count| u64::from(count)).sum();
+        if remaining_total < u64::from(horizon) {
+            return Err(PyValueError::new_err(
+                "remaining_counts must hold at least horizon tiles",
+            ));
+        }
+        let mut roots: Vec<Counts> = Vec::new();
+        for item in root_hands.try_iter()? {
+            let hand = read_counts(&item?)?;
+            let total: usize = hand.iter().map(|&count| usize::from(count)).sum();
+            if !VALID_CONCEALED_TILE_COUNTS.contains(&(total as i64)) {
+                return Err(PyValueError::new_err(
+                    "root hands must hold a valid concealed hand size",
+                ));
+            }
+            roots.push(hand);
+        }
+
+        // Rust-owned inputs and the shared immutable table only: no Python
+        // object or borrow enters the detached section.
+        let core = Arc::clone(&self.core);
+        let outcome =
+            py.detach(move || progression::search_roots(&core, &roots, &remaining, horizon));
+
+        let output = outcome.map_err(|error| match error {
+            SearchError::Table(message) => self.table_error(py, message),
+            SearchError::Policy(message) => PyErr::from_type(policy_error_type.clone(), message),
+            SearchError::Value(message) => PyValueError::new_err(message),
+        })?;
+
+        let root_objects = output
+            .roots
+            .iter()
+            .map(|root| {
+                let distribution = PyTuple::new(py, root.distribution)?;
+                PyTuple::new(
+                    py,
+                    [
+                        root.root_post_discard_shanten.into_pyobject(py)?.into_any(),
+                        distribution.into_any(),
+                    ],
+                )
+                .map(Bound::into_any)
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let counters = output.counters;
+        let result = (
+            PyTuple::new(py, root_objects)?,
+            PyTuple::new(
+                py,
+                [
+                    counters.visited_states,
+                    counters.cache_hits,
+                    counters.cache_misses,
+                    counters.shanten_evaluations,
+                ],
+            )?,
+        );
+        STANDARD_SHANTEN_CALLS.fetch_add(counters.shanten_evaluations, Ordering::Relaxed);
+        PROGRESSION_EVALUATION_CALLS.fetch_add(1, Ordering::Relaxed);
+        Ok(result)
+    }
 }
 
-impl StandardShantenTable {
+impl ShantenCore {
     /// Same dispatch as `shanten._shanten_from_valid_counts()`; `total` must
     /// equal the sum of `counts` and be a valid concealed hand size.
     fn numeric_shanten(&self, counts: &[u8; TILE_KIND_COUNT], total: usize) -> Result<i32, String> {
@@ -664,7 +787,7 @@ fn read_discard_indexes(
     Ok(values)
 }
 
-const VALID_CONCEALED_TILE_COUNTS: [i64; 10] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14];
+pub(crate) const VALID_CONCEALED_TILE_COUNTS: [i64; 10] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14];
 const TERMINAL_OR_HONOR_INDICES: [usize; 13] = [0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
 
 /// Same definition as `_python_shanten.calculate_seven_pairs_shanten()`.
@@ -702,6 +825,12 @@ fn discard_evaluation_call_count() -> u64 {
     DISCARD_EVALUATION_CALLS.load(Ordering::Relaxed)
 }
 
+/// Number of successful `evaluate_progression()` calls in this process.
+#[pyfunction]
+fn progression_evaluation_call_count() -> u64 {
+    PROGRESSION_EVALUATION_CALLS.load(Ordering::Relaxed)
+}
+
 /// Full lisjong commit this extension was built from (Issue #216).
 ///
 /// The extension shares `_shanten_table.bin` and the helper tables with the
@@ -722,5 +851,6 @@ fn _lisjong_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<StandardShantenTable>()?;
     module.add_function(wrap_pyfunction!(standard_shanten_call_count, module)?)?;
     module.add_function(wrap_pyfunction!(discard_evaluation_call_count, module)?)?;
+    module.add_function(wrap_pyfunction!(progression_evaluation_call_count, module)?)?;
     Ok(())
 }

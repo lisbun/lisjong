@@ -43,6 +43,11 @@ Issue #224で、打牌候補の構造評価を一括で行う
 不一致なwheelは`ShantenBackendError`でfail closedし、一部の入口だけPythonへ
 切り替えることはしない。python選択時はnative拡張をimportしないため、旧wheelが
 installされていても影響しない。
+
+Issue #232でAPI_VERSION 3として、R5（expected terminal shanten progression）の
+探索本体`StandardShantenTable.evaluate_progression`を追加した。rust選択時は
+R5もnativeで実行し、R5だけPythonへ黙って戻ることはない（環境変数名は向聴専用に
+見えるが、適用範囲はnumeric shanten core・打牌一括評価・R5探索である）。
 """
 
 import os
@@ -53,8 +58,8 @@ from lisjong.hand_evaluation import _lookup_shanten
 BACKEND_ENVIRONMENT_VARIABLE = "LISJONG_SHANTEN_BACKEND"
 PYTHON_BACKEND = "python"
 RUST_BACKEND = "rust"
-REQUIRED_NATIVE_API_VERSION = 2
-"""rust選択時に要求する`_lisjong_native.API_VERSION`（Issue #224）。"""
+REQUIRED_NATIVE_API_VERSION = 3
+"""rust選択時に要求する`_lisjong_native.API_VERSION`（Issue #224 / #232）。"""
 
 
 class ShantenBackendError(Exception):
@@ -127,6 +132,13 @@ native_evaluate_discards = None
 native実装（Issue #224）。python選択時はNoneで、Python実装をそのまま使う。
 """
 
+native_evaluate_progression = None
+"""rust選択時だけ設定される、R5 progression探索のnative実装（Issue #232）。
+
+policy側の`_new_progression_evaluator()`だけが使う。python選択時はNoneで、
+Python oracle（`_TerminalShantenProgressionEvaluator`）を使う。
+"""
+
 if BACKEND_NAME == RUST_BACKEND:
     # rustを明示した場合はimport時にnative API versionの確認とnative table構築まで
     # 行う。artifactやnative拡張の問題を最初のdecisionではなく起動時にfail closedで
@@ -135,5 +147,6 @@ if BACKEND_NAME == RUST_BACKEND:
     calculate_standard_shanten = _NATIVE_TABLE.standard_shanten
     native_shanten_from_valid_counts = _NATIVE_TABLE.shanten_from_valid_counts
     native_evaluate_discards = _NATIVE_TABLE.evaluate_discards
+    native_evaluate_progression = _NATIVE_TABLE.evaluate_progression
 else:
     calculate_standard_shanten = _lookup_shanten.calculate_standard_shanten

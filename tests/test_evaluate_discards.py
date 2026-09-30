@@ -229,10 +229,17 @@ class NativeApiVersionSelectionTest(unittest.TestCase):
         result = self._run_with_fake_native("pass", "rust")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ShantenBackendError", result.stderr)
-        self.assertIn("API_VERSION 2, got 1", result.stderr)
+        self.assertIn("API_VERSION 3, got 1", result.stderr)
+
+    def test_pre_progression_wheel_fails_closed_under_rust(self) -> None:
+        # Issue #232: API_VERSION 2 wheels have no `evaluate_progression`.
+        result = self._run_with_fake_native("fake.API_VERSION = 2", "rust")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ShantenBackendError", result.stderr)
+        self.assertIn("API_VERSION 3, got 2", result.stderr)
 
     def test_mismatched_api_version_fails_closed_under_rust(self) -> None:
-        result = self._run_with_fake_native("fake.API_VERSION = 3", "rust")
+        result = self._run_with_fake_native("fake.API_VERSION = 4", "rust")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ShantenBackendError", result.stderr)
 

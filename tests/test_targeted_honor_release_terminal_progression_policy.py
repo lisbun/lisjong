@@ -152,8 +152,8 @@ class PolicyBoundaryTest(unittest.TestCase):
             progression._evaluate_progression_candidates,
         )
         self.assertIs(
-            targeted._TerminalShantenProgressionEvaluator,
-            progression._TerminalShantenProgressionEvaluator,
+            targeted._new_progression_evaluator,
+            progression._new_progression_evaluator,
         )
 
     def test_discard_analysis_uses_standard_trace_contract(self) -> None:
