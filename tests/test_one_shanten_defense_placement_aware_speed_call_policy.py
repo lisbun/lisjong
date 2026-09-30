@@ -38,6 +38,19 @@ class OneShantenDefenseTest(unittest.TestCase):
             tuple(a for a in actions if a.tile == _tile("7z")),
         )
 
+    def test_actual_policy_can_break_pair_to_fold_instead_of_keeping_one_shanten(self):
+        context = _input("34m678p68p234s55z9s1m", riichi_discards="3z4z")
+        decision = DecisionContext(input=context, legal_actions=_discards(context))
+        self.assertEqual(
+            PlacementAwareSpeedCallPolicy().choose_action(decision).tile, _tile("1m")
+        )
+        self.assertEqual(
+            OneShantenDefensePlacementAwareSpeedCallPolicy()
+            .choose_action(decision)
+            .tile,
+            _tile("5z"),
+        )
+
     def test_no_riichi_common_genbutsu_tenpai_and_two_shanten_are_unchanged(self):
         cases = (
             _input(self.HAND),
