@@ -42,6 +42,11 @@ Issue #221で、有効牌等の牌種集合をcanonical index tupleで表し、�
 fixed-point期待枚数の34牌種配列へmask適用・合計する共通処理
 （`tile_type_set.py`）を追加した。
 
+Issue #245（待ち確率の推定）で、待ち形の成立可能性を枚数制約と河との関係に分けて導出する
+`wait_shape_support`（Championの古典的危険度scoreから切り出した形判定）を追加した。
+推定器・評価は`lisjong.learning.riichi_wait_estimator` / `riichi_wait_evaluation`にあり、
+このpackageのestimatorは待ちを未提供のままとする。
+
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
 exact count）であり、同じ34牌種 / red-five axisを共有するがsemanticは
