@@ -131,6 +131,15 @@ testの結果（選択を固定して1回だけ評価。推定器は`riichi-deal
 - validでの選択の経緯: 離散特徴だけ（v1）→ scoreの区分を追加（v2）→ scoreの数値を追加（v3）。
   validの判断内AUCは0.681 / 0.683 / 0.684（ベースライン2は0.697）。L2はvalid log lossがほぼ一定
 
+### データの再現性
+
+Arenaの生成スクリプトの公式コマンド（`ca92451`、`LISJONG_SHANTEN_BACKEND=rust`、4 workers）で
+200半荘を最初から生成し直し、`decisions.jsonl`（`d0805dbe…c0be5`）・`label_facts.jsonl`
+（`84a324da…d52303`）・`manifest.json`（`e1a6f65e…d05b`）がbyte単位で一致することを
+2026-10-03に確認した（約77分）。比較に使ったデータは、同じ生成関数を半荘ごとに途中保存する
+一時wrapperで作ったもの。うち最初の4半荘はPython版のshanten backendで生成し、seed 931203を
+Rust版で再生成して一致を確認した。
+
 ### 事後分析（testを見た後。選択済みのモデルは変えていない）
 
 `posthoc`コマンドで、比較条件をそろえたベースライン2（構造的に安全な牌=0、残りをvalidの非安全牌で
