@@ -85,6 +85,16 @@ bulk code movementは行わず、concrete use caseごとに必要なcapability�
 
 # Long-term AI architecture
 
+## Implementation language direction
+
+2026-10-03に、対局・判断基盤をRustへ段階移行し、学習・分析はPythonを継続する方針を
+ユーザー承認で確定した。横断作業は[lisjong-project #87](https://github.com/lisbun/lisjong-project/issues/87)、
+lisjong側の移行原則と現在地は[Rustへの段階移行](rust-migration.md)を正本とする。
+これは到達目標であり、現時点のPython Policyやopt-in native backendを即時廃止するものではない。
+ルール・game state transitionはengine、external executionはArenaというownerを維持する。
+
+## Decision architecture
+
 `lisjong` は、不完全情報ゲームである立直麻雀において、観測可能な情報からhidden stateに対するbeliefを構築し、その不確実性とstructural / value evaluationを組み合わせて意思決定へ利用するAIを長期的に目指す。
 
 ```text
@@ -712,7 +722,7 @@ privileged ground truthをoffline label / validationへ利用する場合も、o
 - omniscient stateを使うonline Policy
 - project-wide canonical GameRecord / replay format
 - 3人麻雀対応
-- profiling evidenceなしのnative rewrite
+- 承認された[Rust段階移行](rust-migration.md)の範囲外での、profiling evidenceなしのnative rewrite
 - Arena historical Learning codeの一括移動 / 一括削除
 - long-term training / rollout hosting ownerの先行固定
 

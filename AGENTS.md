@@ -134,6 +134,10 @@ paid usage / creditの不要な消費を避ける。
 - 調査前に将来の構造を過剰設計せず、concrete requirementや複数の実例がないgeneric abstractionを
   先行導入しない
 - Rust等の高速化はprofilingで必要性が確認され、Issueで合意されるまで導入しない
+  - 本repositoryでは、2026-10-03にユーザー承認されたRust段階移行
+    （`lisjong-project#87`、`docs/rust-migration.md`）をarchitecture目的の例外とする。
+    各段階をboundedなIssueで定義し、同値性・情報境界・配布の検証を行う。
+    速度・棋力の改善主張には引き続き実測を必要とする。言語移行でrepository ownershipを変えない
 - 外部libraryを追加する場合は、必要性、license、version、保守状況を確認する
 
 ### テストと品質確認

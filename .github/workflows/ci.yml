@@ -119,6 +119,19 @@ jobs:
         working-directory: native
         run: cargo fmt --check
 
+      - name: Test Rust core without Python bindings
+        working-directory: native
+        env:
+          PYO3_PYTHON: /no-python-for-rust-core
+        run: |
+          cargo tree --locked --no-default-features --edges normal,build > /tmp/lisjong-core-dependencies.txt
+          cat /tmp/lisjong-core-dependencies.txt
+          if grep -q pyo3 /tmp/lisjong-core-dependencies.txt; then
+            echo "Rust core unexpectedly depends on PyO3" >&2
+            exit 1
+          fi
+          cargo test --locked --no-default-features
+
       - name: Build wheel
         working-directory: native
         run: |
