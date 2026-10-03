@@ -24,7 +24,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from math import comb, log
+from math import log
 from pathlib import Path
 from random import Random
 from typing import Protocol, Sequence
@@ -369,40 +369,77 @@ def bootstrap_difference(
     }
 
 
-def _expected_pick(predictions: dict[TileType, float], labels) -> float:
+def _lowest_risk_pick(
+    predictions: dict[TileType, float], labels: dict[TileType, bool]
+) -> tuple[frozenset[TileType], float]:
+    """最も安全と推定した牌の集合（同点を含む）と、そのロン牌率（同点は平均）。"""
     lowest = min(predictions.values())
-    tied = [t for t, p in predictions.items() if p == lowest]
-    return sum(labels[t] for t in tied) / len(tied)
+    tied = frozenset(t for t, p in predictions.items() if p == lowest)
+    return tied, sum(labels[t] for t in tied) / len(tied)
 
 
 def paired_lowest_risk(
     first: Model, second: Model, decisions: Sequence[LabelledDecision]
 ) -> dict[str, object]:
-    """同じ判断で、2モデルが最も安全と推定した牌（同点は平均）のロン牌率を対にして比べる。"""
-    differ = first_worse = second_worse = 0
+    """同じ判断で、2モデルが最も安全と推定した牌を対にして比べる。
+
+    選んだ牌（同点の集合）が異なる判断をすべて数え、結果で分類する。差のばらつきは
+    半荘を単位にしたpaired bootstrapで示す（判断を独立な標本と扱わない）。
+    """
+    outcome = dict.fromkeys(
+        ("both_safe", "both_ron", "first_worse", "second_worse", "equal_partial"), 0
+    )
+    different_pick = 0
     first_total = second_total = 0.0
+    per_game: dict[int, list[float]] = defaultdict(lambda: [0, 0.0])
     for decision in decisions:
         policy_input = decision.decision.policy_input
         candidates = _candidates(decision)
         labels = {c.tile_type: c.label_a for c in decision.candidates}
-        a = _expected_pick(first.predict(policy_input, candidates), labels)
-        b = _expected_pick(second.predict(policy_input, candidates), labels)
+        pick_a, a = _lowest_risk_pick(first.predict(policy_input, candidates), labels)
+        pick_b, b = _lowest_risk_pick(second.predict(policy_input, candidates), labels)
         first_total += a
         second_total += b
-        if a != b:
-            differ += 1
-            first_worse += a > b
-            second_worse += b > a
-    decided = first_worse + second_worse
-    tail = sum(comb(decided, k) for k in range(min(first_worse, second_worse) + 1))
+        game = per_game[decision.decision.key.seed]
+        game[0] += 1
+        game[1] += a - b
+        if pick_a == pick_b:
+            continue
+        different_pick += 1
+        if a > b:
+            outcome["first_worse"] += 1
+        elif b > a:
+            outcome["second_worse"] += 1
+        elif a == 0.0:
+            outcome["both_safe"] += 1
+        elif a == 1.0:
+            outcome["both_ron"] += 1
+        else:
+            outcome["equal_partial"] += 1
+    games = sorted(per_game)
+
+    def difference(sample: list[int]) -> float:
+        count = sum(per_game[g][0] for g in sample)
+        return sum(per_game[g][1] for g in sample) / count
+
+    random = Random(BOOTSTRAP_SEED)
+    draws = sorted(
+        difference([random.choice(games) for _ in games])
+        for _ in range(BOOTSTRAP_RESAMPLES)
+    )
     return {
         "decisions": len(decisions),
         "first_expected_ron_picks": first_total,
         "second_expected_ron_picks": second_total,
-        "decisions_with_different_outcome": differ,
-        "first_worse": first_worse,
-        "second_worse": second_worse,
-        "sign_test_two_sided_p": min(1.0, 2 * tail / 2**decided) if decided else None,
+        "decisions_with_different_pick": different_pick,
+        "different_pick_outcomes": outcome,
+        "first_minus_second_ron_pick_rate": {
+            "point": difference(games),
+            "low_2.5": draws[int(0.025 * BOOTSTRAP_RESAMPLES)],
+            "high_97.5": draws[int(0.975 * BOOTSTRAP_RESAMPLES) - 1],
+            "games": len(games),
+            "resamples": BOOTSTRAP_RESAMPLES,
+        },
     }
 
 
@@ -527,7 +564,7 @@ def test(source: Path, selection: Path, output: Path) -> dict[str, object]:
     return document
 
 
-POSTHOC_SCHEMA = "lisjong-riichi-deal-in-posthoc-v1"
+POSTHOC_SCHEMA = "lisjong-riichi-deal-in-posthoc-v2"
 
 
 def posthoc(source: Path, selection: Path, output: Path) -> dict[str, object]:

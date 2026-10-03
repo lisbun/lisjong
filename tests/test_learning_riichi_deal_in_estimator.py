@@ -243,18 +243,46 @@ class AlignedComparisonTest(unittest.TestCase):
             evaluate(Fixed(values), only_safe, exclude_safe=True)["decisions"], 0
         )
 
-    def test_paired_lowest_risk_counts_disagreements(self):
-        labelled = label_decisions([make_decision()], [make_facts()])
-        safe_pick = Fixed({tt("1m"): 0.5, tt("4m"): 0.5, tt("5z"): 0.1})
-        ron_pick = Fixed({tt("1m"): 0.1, tt("4m"): 0.5, tt("5z"): 0.5})
-        result = paired_lowest_risk(ron_pick, safe_pick, labelled)
-        self.assertEqual(result["first_worse"], 1)
-        self.assertEqual(result["second_worse"], 0)
-        self.assertEqual(result["first_expected_ron_picks"], 1.0)
-        self.assertEqual(result["sign_test_two_sided_p"], 1.0)
-        same = paired_lowest_risk(safe_pick, safe_pick, labelled)
-        self.assertEqual(same["decisions_with_different_outcome"], 0)
-        self.assertIsNone(same["sign_test_two_sided_p"])
+    def test_paired_lowest_risk_counts_different_picks(self):
+        # 判断1: 1m・4mが待ち、5zは安全。判断2（別の半荘）: 5z単騎
+        labelled = label_decisions(
+            [
+                make_decision(),
+                make_decision(key=DecisionKey(seed=931001, sequence=20, seat=0)),
+            ],
+            [
+                make_facts(),
+                make_facts(
+                    key=DecisionKey(seed=931001, sequence=20, seat=0),
+                    concealed=TANKI_5Z,
+                    ron_offered=True,
+                ),
+            ],
+        )
+        picks_5z = Fixed({tt("1m"): 0.5, tt("4m"): 0.5, tt("5z"): 0.1})
+        picks_1m = Fixed({tt("1m"): 0.1, tt("4m"): 0.5, tt("5z"): 0.5})
+        picks_1m_4m = Fixed({tt("1m"): 0.1, tt("4m"): 0.1, tt("5z"): 0.5})
+        result = paired_lowest_risk(picks_1m, picks_5z, labelled)
+        # 判断1: 1m（ロン）対 5z（安全）、判断2: 1m（安全）対 5z（ロン）
+        self.assertEqual(result["decisions_with_different_pick"], 2)
+        self.assertEqual(
+            result["different_pick_outcomes"],
+            {
+                "both_safe": 0,
+                "both_ron": 0,
+                "first_worse": 1,
+                "second_worse": 1,
+                "equal_partial": 0,
+            },
+        )
+        self.assertEqual(result["first_minus_second_ron_pick_rate"]["point"], 0.0)
+        self.assertEqual(result["first_minus_second_ron_pick_rate"]["games"], 2)
+        # 選んだ牌が違っても結果が同じ判断（1m対1m・4mの同点、どちらもロン）
+        both = paired_lowest_risk(picks_1m, picks_1m_4m, labelled[:1])
+        self.assertEqual(both["decisions_with_different_pick"], 1)
+        self.assertEqual(both["different_pick_outcomes"]["both_ron"], 1)
+        same = paired_lowest_risk(picks_5z, picks_5z, labelled)
+        self.assertEqual(same["decisions_with_different_pick"], 0)
 
 
 class MetricsTest(unittest.TestCase):
