@@ -87,6 +87,7 @@ _LEARNING_MODULES = (
     "lisjong.learning.policy",
     "lisjong.learning.residual_baseline",
     "lisjong.learning.residual_exploration",
+    "lisjong.learning.riichi_deal_in_source",
     "lisjong.learning.source_record",
     "lisjong.learning.training",
     "lisjong.learning.__main__",
