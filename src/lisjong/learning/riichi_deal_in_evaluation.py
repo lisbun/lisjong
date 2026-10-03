@@ -13,14 +13,18 @@ ML runtimeには依存しない（離散特徴を集約したIRLS）。
 ```text
 python -m lisjong.learning.riichi_deal_in_evaluation select SOURCE SELECTION.json
 python -m lisjong.learning.riichi_deal_in_evaluation test SOURCE SELECTION.json RESULT.json
+python -m lisjong.learning.riichi_deal_in_evaluation posthoc SOURCE SELECTION.json OUT.json
 ```
+
+``posthoc``はtestを見た後の事後分析（比較条件をそろえたベースライン2、安全が確定していない
+牌だけの評価、最安全牌の対比較）で、選択済みのモデルを変えない。
 """
 
 import argparse
 import json
 import sys
 from collections import defaultdict
-from math import log
+from math import comb, log
 from pathlib import Path
 from random import Random
 from typing import Protocol, Sequence
@@ -137,7 +141,10 @@ def fit_constant(decisions: Sequence[LabelledDecision]) -> ConstantModel:
     return ConstantModel(probability=positives / count)
 
 
-def fit_classical(decisions: Sequence[LabelledDecision]) -> ClassicalScoreModel:
+def fit_classical(
+    decisions: Sequence[LabelledDecision], *, safe_zero: bool = False
+) -> ClassicalScoreModel:
+    """``safe_zero``なら構造的に安全な牌を除いて校正し、予測でも0にする。"""
     patterns: dict[tuple[tuple[int, float], ...], list[int]] = defaultdict(
         lambda: [0, 0]
     )
@@ -145,6 +152,8 @@ def fit_classical(decisions: Sequence[LabelledDecision]) -> ClassicalScoreModel:
         policy_input = decision.decision.policy_input
         view = riichi_view(policy_input)
         for candidate in decision.candidates:
+            if safe_zero and candidate.tile_type in view.structurally_safe:
+                continue
             score = classical_score(policy_input, view, candidate.tile_type)
             entry = patterns[((0, 1.0), (1, float(score)))]
             entry[0] += 1
@@ -155,7 +164,7 @@ def fit_classical(decisions: Sequence[LabelledDecision]) -> ClassicalScoreModel:
         0.0,
         unpenalized=frozenset({0, 1}),
     )
-    return ClassicalScoreModel(intercept=intercept, slope=slope)
+    return ClassicalScoreModel(intercept=intercept, slope=slope, safe_zero=safe_zero)
 
 
 def fit_estimator(decisions: Sequence[LabelledDecision], l2: float) -> LogisticModel:
@@ -232,8 +241,18 @@ class _Accumulator:
         }
 
 
-def evaluate(model: Model, decisions: Sequence[LabelledDecision]) -> dict[str, object]:
-    """候補単位の指標・校正・判断内の順位付けを、半荘別の合計とともに返す。"""
+def evaluate(
+    model: Model,
+    decisions: Sequence[LabelledDecision],
+    *,
+    exclude_safe: bool = False,
+) -> dict[str, object]:
+    """候補単位の指標・校正・判断内の順位付けを、半荘別の合計とともに返す。
+
+    ``exclude_safe``なら構造的に安全な牌を候補から除き、安全が確定していない牌だけで
+    評価する（候補が残らない判断は数えない）。
+    """
+    evaluated = 0
     overall = _Accumulator()
     groups: dict[str, dict[str, _Accumulator]] = defaultdict(
         lambda: defaultdict(_Accumulator)
@@ -246,8 +265,15 @@ def evaluate(model: Model, decisions: Sequence[LabelledDecision]) -> dict[str, o
     for decision in decisions:
         policy_input = decision.decision.policy_input
         view = riichi_view(policy_input)
-        predictions = model.predict(policy_input, _candidates(decision))
-        labels = {c.tile_type: c.label_a for c in decision.candidates}
+        labels = {
+            c.tile_type: c.label_a
+            for c in decision.candidates
+            if not (exclude_safe and c.tile_type in view.structurally_safe)
+        }
+        if not labels:
+            continue
+        evaluated += 1
+        predictions = model.predict(policy_input, tuple(labels))
         if set(predictions) != set(labels):
             raise ValueError("the model did not score every candidate")
         for tile, label in labels.items():
@@ -283,7 +309,8 @@ def evaluate(model: Model, decisions: Sequence[LabelledDecision]) -> dict[str, o
         tied = [t for t, p in predictions.items() if p == lowest]
         pick_hits += sum(labels[t] for t in tied) / len(tied)
     return {
-        "decisions": len(decisions),
+        "decisions": evaluated,
+        "excluded_structurally_safe": exclude_safe,
         "overall": overall.summary(),
         "groups": {
             name: {key: value.summary() for key, value in sorted(members.items())}
@@ -301,9 +328,7 @@ def evaluate(model: Model, decisions: Sequence[LabelledDecision]) -> dict[str, o
         "ranking": {
             "within_decision_auc": auc_sum / auc_decisions if auc_decisions else None,
             "decisions_with_both_labels": auc_decisions,
-            "lowest_risk_pick_ron_rate": pick_hits / len(decisions)
-            if decisions
-            else None,
+            "lowest_risk_pick_ron_rate": pick_hits / evaluated if evaluated else None,
         },
         "per_game": {
             str(seed): {
@@ -341,6 +366,43 @@ def bootstrap_difference(
         "high_97.5": draws[int(0.975 * BOOTSTRAP_RESAMPLES) - 1],
         "games": len(games),
         "resamples": BOOTSTRAP_RESAMPLES,
+    }
+
+
+def _expected_pick(predictions: dict[TileType, float], labels) -> float:
+    lowest = min(predictions.values())
+    tied = [t for t, p in predictions.items() if p == lowest]
+    return sum(labels[t] for t in tied) / len(tied)
+
+
+def paired_lowest_risk(
+    first: Model, second: Model, decisions: Sequence[LabelledDecision]
+) -> dict[str, object]:
+    """同じ判断で、2モデルが最も安全と推定した牌（同点は平均）のロン牌率を対にして比べる。"""
+    differ = first_worse = second_worse = 0
+    first_total = second_total = 0.0
+    for decision in decisions:
+        policy_input = decision.decision.policy_input
+        candidates = _candidates(decision)
+        labels = {c.tile_type: c.label_a for c in decision.candidates}
+        a = _expected_pick(first.predict(policy_input, candidates), labels)
+        b = _expected_pick(second.predict(policy_input, candidates), labels)
+        first_total += a
+        second_total += b
+        if a != b:
+            differ += 1
+            first_worse += a > b
+            second_worse += b > a
+    decided = first_worse + second_worse
+    tail = sum(comb(decided, k) for k in range(min(first_worse, second_worse) + 1))
+    return {
+        "decisions": len(decisions),
+        "first_expected_ron_picks": first_total,
+        "second_expected_ron_picks": second_total,
+        "decisions_with_different_outcome": differ,
+        "first_worse": first_worse,
+        "second_worse": second_worse,
+        "sign_test_two_sided_p": min(1.0, 2 * tail / 2**decided) if decided else None,
     }
 
 
@@ -465,6 +527,73 @@ def test(source: Path, selection: Path, output: Path) -> dict[str, object]:
     return document
 
 
+POSTHOC_SCHEMA = "lisjong-riichi-deal-in-posthoc-v1"
+
+
+def posthoc(source: Path, selection: Path, output: Path) -> dict[str, object]:
+    """事後分析: 選択を変えずに、比較条件をそろえたベースラインと非安全牌だけの評価を行う。
+
+    ベースライン2の変種（構造的に安全な牌=0、残りをvalidで校正）を加える。選択済みの
+    モデルは変更しない。testを見た後の分析であり、ここから改良したモデルの最終評価には
+    新しい保留データが必要。
+    """
+    chosen = json.loads(selection.read_text(encoding="utf-8"))
+    if chosen.get("schema") != SELECTION_SCHEMA:
+        raise ValueError("not a selection document")
+    if chosen["source_manifest"] != _source_identity(source):
+        raise ValueError("the selection was made on a different source")
+    manifest, decisions = read_labelled_source(source)
+    valid = _split(manifest, decisions, "valid")
+    _, classical, estimator = _models_from_value(chosen["models"])
+    aligned = fit_classical(valid, safe_zero=True)
+    models = {
+        "baseline2_classical_platt": classical,
+        "baseline2_safe_zero": aligned,
+        "estimator_logistic": estimator,
+    }
+    document: dict[str, object] = {
+        "schema": POSTHOC_SCHEMA,
+        "posthoc": True,
+        "source_manifest": chosen["source_manifest"],
+        "selection": file_digest(selection),
+        "baseline2_safe_zero": {
+            "intercept": aligned.intercept,
+            "slope": aligned.slope,
+            "fitted_on": "valid, non-structurally-safe candidates",
+        },
+    }
+    for split in ("valid", "test"):
+        rows = _split(manifest, decisions, split)
+        result: dict[str, object] = {}
+        for scope, exclude in (("all", False), ("non_safe", True)):
+            evaluations = {
+                name: evaluate(model, rows, exclude_safe=exclude)
+                for name, model in models.items()
+            }
+            reference = evaluations["baseline2_safe_zero"]
+            result[scope] = {
+                "summary": {
+                    name: evaluation["overall"] | evaluation["ranking"]
+                    for name, evaluation in evaluations.items()
+                },
+                "estimator_minus_baseline2_safe_zero": {
+                    metric: bootstrap_difference(
+                        evaluations["estimator_logistic"], reference, metric
+                    )
+                    for metric in ("log_loss", "brier")
+                },
+            }
+        result["paired_lowest_risk"] = {
+            "estimator_vs_baseline2_safe_zero": paired_lowest_risk(
+                estimator, aligned, rows
+            ),
+            "estimator_vs_baseline2": paired_lowest_risk(estimator, classical, rows),
+        }
+        document[split] = result
+    _write_new(output, document)
+    return document
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=__name__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -475,7 +604,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     test_parser.add_argument("source", type=Path)
     test_parser.add_argument("selection", type=Path)
     test_parser.add_argument("output", type=Path)
+    posthoc_parser = commands.add_parser("posthoc")
+    posthoc_parser.add_argument("source", type=Path)
+    posthoc_parser.add_argument("selection", type=Path)
+    posthoc_parser.add_argument("output", type=Path)
     arguments = parser.parse_args(argv)
+    if arguments.command == "posthoc":
+        document = posthoc(arguments.source, arguments.selection, arguments.output)
+        json.dump(
+            {split: document[split] for split in ("valid", "test")},
+            sys.stdout,
+            ensure_ascii=False,
+            indent=2,
+        )
+        print()
+        return 0
     if arguments.command == "select":
         document = select(arguments.source, arguments.output)
         summary = {"chosen_l2": document["chosen_l2"], "split": "valid"}

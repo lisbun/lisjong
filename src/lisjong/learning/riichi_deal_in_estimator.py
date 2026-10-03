@@ -202,17 +202,23 @@ class ConstantModel:
 
 @dataclass(frozen=True, slots=True)
 class ClassicalScoreModel:
-    """ベースライン2: 古典的危険度scoreをlogisticで確率へ校正したもの。"""
+    """ベースライン2: 古典的危険度scoreをlogisticで確率へ校正したもの。
+
+    ``safe_zero``なら、推定器と同じく構造的に安全な牌を0にする（比較条件をそろえる変種）。
+    """
 
     intercept: float
     slope: float
+    safe_zero: bool = False
 
     def predict(
         self, policy_input: PolicyInput, candidates: tuple[TileType, ...]
     ) -> dict[TileType, float]:
         view = riichi_view(policy_input)
         return {
-            tile: _sigmoid(
+            tile: 0.0
+            if self.safe_zero and tile in view.structurally_safe
+            else _sigmoid(
                 self.intercept + self.slope * classical_score(policy_input, view, tile)
             )
             for tile in candidates

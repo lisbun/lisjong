@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import test_learning_riichi_deal_in_source as source_fixtures
 from test_learning_riichi_deal_in_source import (
@@ -18,6 +19,7 @@ from test_learning_riichi_deal_in_source import (
 )
 
 from lisjong.learning import riichi_deal_in_estimator as estimator_module
+from lisjong.learning import riichi_deal_in_evaluation as evaluation_module
 from lisjong.learning.riichi_deal_in_estimator import (
     ClassicalScoreModel,
     ConstantModel,
@@ -28,9 +30,11 @@ from lisjong.learning.riichi_deal_in_estimator import (
 from lisjong.learning.riichi_deal_in_evaluation import (
     bootstrap_difference,
     evaluate,
+    fit_classical,
     fit_constant,
     fit_logistic,
     main,
+    paired_lowest_risk,
 )
 from lisjong.learning.riichi_deal_in_source import DecisionKey, label_decisions
 from lisjong.policy_contract.discard import Discard
@@ -182,19 +186,83 @@ class FittingTest(unittest.TestCase):
         self.assertEqual(fit_constant(labelled).probability, 1.0)
 
 
+class Fixed:
+    def __init__(self, values):
+        self.values = values
+
+    def predict(self, policy_input, candidates):
+        return {tile: self.values[tile] for tile in candidates}
+
+
+class AlignedComparisonTest(unittest.TestCase):
+    """事後分析: 比較条件をそろえたベースライン2と、非安全牌だけの評価。"""
+
+    def test_safe_zero_baseline_zeroes_and_skips_safe_tiles(self):
+        pi = policy_input({1: [(1, "9p"), (5, "2s")], 2: [(6, "4m")]})
+        model = ClassicalScoreModel(intercept=-1.0, slope=0.0, safe_zero=True)
+        self.assertEqual(
+            model.predict(pi, (tt("4m"), tt("2s"), tt("1m"))),
+            {
+                tt("4m"): 0.0,
+                tt("2s"): 0.0,
+                tt("1m"): model.predict(pi, (tt("1m"),))[tt("1m")],
+            },
+        )
+        self.assertGreater(model.predict(pi, (tt("1m"),))[tt("1m")], 0.0)
+        plain = ClassicalScoreModel(intercept=-1.0, slope=0.0)
+        self.assertGreater(plain.predict(pi, (tt("4m"),))[tt("4m")], 0.0)
+
+    def test_safe_zero_calibration_ignores_safe_candidates(self):
+        # 5zは現物（構造的に安全）。校正に使う候補は1m・4mの2つだけになる
+        labelled = label_decisions([make_decision(r_discards="9p5z")], [make_facts()])
+        seen = []
+
+        def capture(patterns, size, l2, **kwargs):
+            seen.append(sum(count for count, _ in patterns.values()))
+            return [0.0, 0.0]
+
+        with patch.object(evaluation_module, "fit_logistic", capture):
+            self.assertTrue(fit_classical(labelled, safe_zero=True).safe_zero)
+            self.assertFalse(fit_classical(labelled).safe_zero)
+        self.assertEqual(seen, [2, 3])
+
+    def test_evaluation_can_exclude_safe_tiles(self):
+        (labelled,) = label_decisions(
+            [make_decision(r_discards="9p5z")], [make_facts()]
+        )
+        values = {tt("1m"): 0.4, tt("4m"): 0.3, tt("5z"): 0.0}
+        full = evaluate(Fixed(values), [labelled])
+        non_safe = evaluate(Fixed(values), [labelled], exclude_safe=True)
+        self.assertEqual(full["overall"]["candidates"], 3)
+        self.assertEqual(non_safe["overall"]["candidates"], 2)
+        self.assertTrue(non_safe["excluded_structurally_safe"])
+        only_safe = label_decisions(
+            [make_decision(r_discards="9p5z1m4m")], [make_facts()]
+        )
+        self.assertEqual(
+            evaluate(Fixed(values), only_safe, exclude_safe=True)["decisions"], 0
+        )
+
+    def test_paired_lowest_risk_counts_disagreements(self):
+        labelled = label_decisions([make_decision()], [make_facts()])
+        safe_pick = Fixed({tt("1m"): 0.5, tt("4m"): 0.5, tt("5z"): 0.1})
+        ron_pick = Fixed({tt("1m"): 0.1, tt("4m"): 0.5, tt("5z"): 0.5})
+        result = paired_lowest_risk(ron_pick, safe_pick, labelled)
+        self.assertEqual(result["first_worse"], 1)
+        self.assertEqual(result["second_worse"], 0)
+        self.assertEqual(result["first_expected_ron_picks"], 1.0)
+        self.assertEqual(result["sign_test_two_sided_p"], 1.0)
+        same = paired_lowest_risk(safe_pick, safe_pick, labelled)
+        self.assertEqual(same["decisions_with_different_outcome"], 0)
+        self.assertIsNone(same["sign_test_two_sided_p"])
+
+
 class MetricsTest(unittest.TestCase):
     def setUp(self):
         self.labelled = label_decisions([make_decision()], [make_facts()])
 
     def test_ranking_and_reliability(self):
         # 1m・4mが待ち、5zは安全
-        class Fixed:
-            def __init__(self, values):
-                self.values = values
-
-            def predict(self, policy_input, candidates):
-                return {tile: self.values[tile] for tile in candidates}
-
         perfect = evaluate(
             Fixed({tt("1m"): 0.9, tt("4m"): 0.8, tt("5z"): 0.1}), self.labelled
         )
@@ -274,6 +342,23 @@ class PhasesTest(unittest.TestCase):
             main(["test", str(self.source), str(selection), str(result)])
         with self.assertRaises(FileExistsError):
             main(["select", str(self.source), str(selection)])
+
+    def test_posthoc_keeps_the_selection_and_is_labelled(self):
+        selection = self.root / "selection.json"
+        main(["select", str(self.source), str(selection)])
+        before = selection.read_bytes()
+        output = self.root / "posthoc.json"
+        self.assertEqual(
+            main(["posthoc", str(self.source), str(selection), str(output)]), 0
+        )
+        document = json.loads(output.read_text(encoding="utf-8"))
+        self.assertTrue(document["posthoc"])
+        self.assertEqual(selection.read_bytes(), before)
+        self.assertEqual(
+            set(document["test"]), {"all", "non_safe", "paired_lowest_risk"}
+        )
+        with self.assertRaises(FileExistsError):
+            main(["posthoc", str(self.source), str(selection), str(output)])
 
     def test_selection_must_match_the_source(self):
         selection = self.root / "selection.json"
