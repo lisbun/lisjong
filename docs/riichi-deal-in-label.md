@@ -16,6 +16,11 @@ lisbun/lisjong#237（親: lisbun/lisjong-project#84 R1800ロードマップ、H/
 - 他家の**単独**リーチ（リーチ成立後）
 - 対象外: 複数リーチ、リーチしていない聴牌者（ダマ・副露）
 
+学習・評価データの対象範囲（`SCOPE`、2026-10-03に固定）はさらに狭く、
+**他家1人がリーチ中（宣言済みを含む）・自分は非リーチ・候補牌種2以上の打牌判断**とする。
+H1/H2向けの初期データとして合理的だが、上記「他家単独リーチ」全体より狭いことを
+学習・評価結果の記載でも明記する。
+
 ## 推定器の入力
 
 - そのプレイヤーが判断時点で観測できる情報に限る。**自分の手牌を含む**
@@ -56,9 +61,31 @@ ron_tile_types = wait_tile_types   if not furiten
 - ラベルA/Bはtraining-only truthであり、推定器・Policyの推論入力へ渡さない
 - 推論時の入力に隠し情報が入らないことは、推定器を実装する段階でtestで固定する
 
+## データの入力契約（`lisjong.learning.riichi_deal_in_source`）
+
+lisjong-arenaが対局を実行して**観測事実**を記録し、lisjongがこの契約で読み込んでラベルを計算する。
+lisjongはArenaのmoduleをimportしない。
+
+| file | schema | 内容 | 読む経路 |
+|---|---|---|---|
+| `manifest.json` | `lisjong-riichi-deal-in-source-manifest-v1` | 対象範囲、producerのrevision、seedの分割、各fileのbytes・SHA-256・行数 | 両方 |
+| `decisions.jsonl` | `lisjong-riichi-deal-in-decision-record-v1` | player-safeな判断（`PolicyInput`・合法手・選んだ打牌） | `read_decisions()`（推論入力の経路。ラベルのfileを開かない） |
+| `label_facts.jsonl` | `lisjong-riichi-deal-in-label-fact-record-v1` | 学習専用の観測事実（リーチ者の13枚相当の手牌、リーチ宣言打牌の時点、和了の選択肢が提示された時点・対象牌・選んだ行動、選んだ打牌への提示・放銃） | `read_labelled_source()`（学習専用） |
+
+- 2つの記録は`DecisionKey`（seed、半荘内の判断の通し番号、席）で結合する。キーの欠落・重複・不一致はエラー
+- フリテンとラベルAは、記録された事実からlisjongが計算する（河は判断記録の`PolicyInput`から取る）
+- 時点の検査: リーチ者の手牌はリーチ宣言打牌以後かつ対象判断より前、和了の選択肢はリーチ宣言打牌より後かつ対象判断より前でなければエラー
+- engineとの照合: 選んだ打牌について、ラベルAとリーチ者へのRonActionの提示が一致しなければエラー。選ばなかった候補には照合値を持たせない
+- 各行は正準JSONで、`PolicyInput`・行動の射影は`lisjong.learning._typed_values`と一致しなければエラー
+
+## データ分割と評価の使い方（2026-10-03に固定）
+
+- seed（半荘）単位で train / valid / test に分け、manifestに明示する（同じseedを複数の分割に入れない）
+- 最初の比較規模は合計200半荘（新しい開発用seedで 160 / 20 / 20）
+- trainで学習し、validで確率の校正とモデル選択を行い、testは選択後に1回だけ使う
+- 候補（判断 × 候補牌種）を独立な標本とは扱わず、半荘単位でもばらつきを確認する
+- 生成経路の検査に使った40半荘（seeds 931100..931139）は、評価に使わない
+
 ## 未決事項（#237で続けて決める）
 
-- ラベル付きデータの生成経路とownership境界（Arenaのsource record ＋ 別に保持するlabel、
-  またはlisjong-engineの完全情報）
-- データ分割（半荘・seed単位）、ベースライン（現物=0 / 古典的危険度scoreの校正）、
-  推定器、評価指標の実装
+- ベースライン（現物=0 / 古典的危険度scoreの校正）、推定器、評価指標の実装
