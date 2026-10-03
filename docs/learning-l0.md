@@ -74,6 +74,35 @@ record）だけを受け付ける。historical v1 source recordはallocation
 provenanceを持たないため、推測で補完せず`DatasetError`でfail closedする。
 v1は historical readback（`read_source_record()`単体の呼び出し）にのみ使う。
 
+### 教師を指定できるpolicy source record（lisjong-arena#442）
+
+```text
+schema      arena-policy-source-record-v1
+```
+
+Arenaが`TwoStepUkeirePolicy`以外の教師（まずChampionの
+`PlacementAwareSpeedCallPolicy`）でself-play生成するsource recordである。
+rowの形と検証はv2と同じで、manifestだけが異なる（Arena側の正本は
+lisjong-arenaの`docs/policy-source-record.md`）。
+
+- #331 protocol lock / scientific corpusへは結び付かないため、
+  `lock_identity` / `scientific_corpus_identity`は`None`になる
+- manifestの`populations`（split順はTRAIN / SELECT / OFFLINE-EVAL）とgame順の
+  一致を検証する
+- `purpose`が`SCIENTIFIC`ならsplitごとのallocation bindingを必須とし、v2と
+  同じ検証を行う。`DEVELOPMENT`（接続・費用計測用）はbindingを持たないことを
+  要求する
+- 教師identityはArenaの記述から`catalog_identity` / `policy_class` /
+  `configuration_digest`だけを`teacher`として保持し、意味を再解釈しない。
+  Arenaの`source_contract`全体は従来どおりdigestとしてのみ保持する
+
+`provenance()`はv1 / v2と別の形（`lock_identity` /
+`scientific_corpus_identity`の代わりに`purpose` / `teacher`）を返し、v1 / v2の
+形と既存dataset / artifact identityは変えない。BC datasetと候補scorer
+datasetは、v2に加えてこのschemaを受け付ける（`DEVELOPMENT`はbindingなしで可）。
+datasetとartifactの`source`に`purpose`が残るため、`DEVELOPMENT`由来の
+modelを正式評価の入力と取り違えない。
+
 ## Canonical player-safe feature representation
 
 ```text

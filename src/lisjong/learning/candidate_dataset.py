@@ -93,6 +93,7 @@ from lisjong.learning.errors import (
 )
 from lisjong.learning.features import FEATURE_DIMENSION, build_player_safe_feature
 from lisjong.learning.source_record import (
+    DEVELOPMENT_PURPOSE,
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
 )
@@ -340,7 +341,7 @@ def materialize_candidate_dataset(
         raise DatasetError("source must be a PlayerSafeSourceRecord")
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
-    if source.allocation_bindings is None:
+    if source.allocation_bindings is None and source.purpose != DEVELOPMENT_PURPOSE:
         raise DatasetError(
             "candidate dataset materialization requires a source record with "
             f"Arena allocation provenance (schema {SOURCE_RECORD_SCHEMA_V2!r}); "
