@@ -8,6 +8,7 @@ import unittest
 from dataclasses import replace
 from math import log
 from pathlib import Path
+from unittest.mock import patch
 
 import test_learning_riichi_deal_in_source as source_fixtures
 from test_learning_riichi_deal_in_estimator import TANKI_5Z, policy_input
@@ -544,6 +545,70 @@ class PhasesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             main(["test", str(overlapping), str(selection), str(self.root / "b.json")])
         self.assertFalse((self.root / "b.json").exists())
+
+    def test_test_refuses_tampered_selection_conditions_before_reading_labels(self):
+        selection = self.root / "selection.json"
+        main(["select", str(self.source), str(selection)])
+        original = json.loads(selection.read_text(encoding="utf-8"))
+        new_source = self._new_test_source([940000], "s5")
+
+        def without(document, key):
+            return {k: v for k, v in document.items() if k != key}
+
+        def with_estimator(document, **changes):
+            models = json.loads(json.dumps(document["models"]))
+            models["estimator_logistic"].update(changes)
+            return {**document, "models": models}
+
+        tampered = {
+            "clip_epsilon differs": {**original, "clip_epsilon": 0.1},
+            "clip_epsilon missing": without(original, "clip_epsilon"),
+            "feature_set differs": {**original, "feature_set": "other"},
+            "feature_set missing": without(original, "feature_set"),
+            "estimator feature_set differs": with_estimator(
+                original, feature_set="other"
+            ),
+            "bootstrap differs": {
+                **original,
+                "bootstrap": {"resamples": 10, "seed": 245},
+            },
+            "l2 grid differs": {
+                **original,
+                "l2_grid": [{"l2": 0.5, "valid_log_loss": 1.0}],
+            },
+            "chosen l2 outside the grid": {**original, "chosen_l2": 0.5},
+            "models missing": without(original, "models"),
+            "used seeds missing": without(original, "used_seeds"),
+        }
+        for name, document in tampered.items():
+            path = self.root / "tampered.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            result = self.root / "result.json"
+            with (
+                self.subTest(name),
+                patch.object(
+                    evaluation_module,
+                    "read_wait_labelled_source",
+                    side_effect=AssertionError("labels were read"),
+                ),
+                self.assertRaises(ValueError),
+            ):
+                main(["test", str(new_source), str(path), str(result)])
+            self.assertFalse(result.exists(), name)
+
+    def test_test_checks_the_seeds_before_reading_labels(self):
+        selection = self.root / "selection.json"
+        main(["select", str(self.source), str(selection)])
+        overlapping = self._new_test_source([931003], "s6")
+        with (
+            patch.object(
+                evaluation_module,
+                "read_wait_labelled_source",
+                side_effect=AssertionError("labels were read"),
+            ),
+            self.assertRaises(ValueError),
+        ):
+            main(["test", str(overlapping), str(selection), str(self.root / "x.json")])
 
     def test_test_refuses_a_non_selection_document(self):
         other = self.root / "other.json"

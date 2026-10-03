@@ -52,6 +52,7 @@ from lisjong.learning.riichi_deal_in_source import (
     RiichiDealInManifest,
     RiichiEpisodeKey,
     WaitLabelledDecision,
+    read_manifest,
     read_wait_labelled_source,
 )
 from lisjong.learning.riichi_wait_estimator import (
@@ -448,6 +449,7 @@ def select(source: Path, output: Path) -> dict[str, object]:
         "source_manifest": _source_identity(source),
         "feature_set": FEATURE_SET,
         "clip_epsilon": CLIP_EPSILON,
+        "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED},
         "fitted_on": {
             "baselines": "train",
             "estimator": "train",
@@ -468,23 +470,60 @@ def select(source: Path, output: Path) -> dict[str, object]:
     return document
 
 
-def test(source: Path, selection: Path, output: Path) -> dict[str, object]:
-    chosen = json.loads(selection.read_text(encoding="utf-8"))
+def _check_selection(chosen: dict[str, object]) -> None:
+    """選択が、このコードの固定条件と一致することを、ラベルを読む前に検査する。
+
+    評価条件（特徴量セット・clip幅・L2格子・bootstrap）が選択時と違うまま正式評価を
+    作らないよう、不一致・欠落は結果を作らずに拒否する。
+    """
     if chosen.get("schema") != SELECTION_SCHEMA:
         raise ValueError("not a selection document")
+    expected = {
+        "feature_set": FEATURE_SET,
+        "clip_epsilon": CLIP_EPSILON,
+        "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED},
+    }
+    for name, value in expected.items():
+        if chosen.get(name) != value:
+            raise ValueError(f"the selection's {name} differs from this code's")
+    models = chosen.get("models")
+    if not isinstance(models, dict) or set(models) != set(MODEL_NAMES):
+        raise ValueError("the selection does not hold exactly the compared models")
+    estimator = models["estimator_logistic"]
+    if not isinstance(estimator, dict) or estimator.get("feature_set") != FEATURE_SET:
+        raise ValueError(
+            "the selected estimator's feature set differs from this code's"
+        )
+    grid = chosen.get("l2_grid")
+    if not isinstance(grid, list) or [
+        item.get("l2") if isinstance(item, dict) else None for item in grid
+    ] != list(L2_GRID):
+        raise ValueError("the selection's L2 grid differs from this code's")
+    if chosen.get("chosen_l2") not in L2_GRID:
+        raise ValueError("the selection's chosen L2 is not in the grid")
+    if not isinstance(chosen.get("used_seeds"), dict) or not isinstance(
+        chosen.get("source_manifest"), dict
+    ):
+        raise ValueError("the selection lacks its source identity or used seeds")
+
+
+def test(source: Path, selection: Path, output: Path) -> dict[str, object]:
+    chosen = json.loads(selection.read_text(encoding="utf-8"))
+    _check_selection(chosen)
     if chosen["source_manifest"] == _source_identity(source):
         raise ValueError("the test source must differ from the selection source")
-    manifest, decisions = read_wait_labelled_source(source)
+    # ラベルを読む前に、manifestだけでseedを検査する
+    test_seeds = set(read_manifest(source).splits["test"])
     used = {seed for seeds in chosen["used_seeds"].values() for seed in seeds}
-    test_seeds = set(manifest.splits["test"])
     if not test_seeds:
         raise ValueError("the test source has no test seed")
     if test_seeds & used:
         raise ValueError("the test seeds overlap the seeds used for the selection")
+    models = _models_from_value(chosen["models"])
+    manifest, decisions = read_wait_labelled_source(source)
     rows = _split(manifest, decisions, "test")
     evaluations = {
-        name: evaluate(model, rows)
-        for name, model in zip(MODEL_NAMES, _models_from_value(chosen["models"]))
+        name: evaluate(model, rows) for name, model in zip(MODEL_NAMES, models)
     }
     document = {
         "schema": RESULT_SCHEMA,
