@@ -1,0 +1,102 @@
+# 単独リーチ者の構造的待ち確率の推定 — 定義と評価手順（#245）
+
+lisbun/lisjong#245（親: lisbun/lisjong-project#84 R1800ロードマップ）の仕様と評価手順を記録する。
+現時点ではどのPolicyにも組み込んでいない。推定精度の主張であり、判断の質・強さの主張ではない。
+
+## 位置付け
+
+他家1人がリーチ中の局面で、リーチ者の34牌種ごとの**構造的待ち**（`HandBelief.wait_probability`の意味。
+その牌を1枚加えると手牌が完成形になる確率）を、公開情報だけから推定する。出力は
+`HandBelief`のLevel 1（`wait_probability`あり、形別テーブルなし）である。形別テーブル（Level 2）は対象外。
+
+構造的な待ちは、フリテン・ロンの可否と分ける。現物や河由来の特徴があっても確率を0に固定しない
+（フリテンのまま待つこともある）。ロンの可否は[S1](riichi-deal-in-label.md)の範囲である。
+
+対象局面はS1の`SCOPE`と同じ（他家1人がリーチ中・宣言済みを含む、自分は非リーチ、候補牌種2以上の打牌判断）。
+評価対象は**全34牌種**で、判断者が切れる牌に限定しない。
+
+## 形判定の3層（`lisjong.belief.wait_shape_support`）
+
+Championの古典的危険度score（`_classical_riichi_danger_score`）の形判定を、意味の異なる3層に分けた。
+Championの出力は変えない（固定入力・乱択入力で切り出し前の実装と一致することをtestで固定）。
+
+| 層 | 内容 | 使う側 |
+|---|---|---|
+| 1. 枚数制約による形の成立可能性 | 観測者から見た残り枚数だけで、単騎・シャンポン・辺張・嵌張・両面（低い側/高い側）がリーチ者の手牌として成り立ち得るか | 推定器・Champion |
+| 2. 河との関係 | 現物、両面の反対側の牌が河にあるか | 推定器（特徴）・Champion |
+| 3. 固定weight・安全牌処理 | 現物なら0、スジなら両面0、weight 1〜10 | Championだけ（`policies`側） |
+
+「構造的な不可能性」と呼べるのは第1層だけである（リーチ者の手牌に必要な牌は、観測者から見て未見でなければならない）。
+第2層はロンの安全度の話であり、手牌の構造としてその形が成立しないことを意味しない。推定器は第2層を特徴として使い、
+除外には使わない。国士無双の待ち（手牌に待ち牌を持たない形）は扱わない。
+
+## ラベルと時点
+
+- 正解は、S1のデータ契約（`lisjong.learning.riichi_deal_in_source`）の学習専用ファイルにある、リーチ者の手牌
+  （`hand_sequence`時点の門前牌と副露）から、`exact_hand_belief_with_waits()`で求める。待ちの判定は再実装しない
+  （`label_waits()` / `read_wait_labelled_source()`）
+- ラベルは各判断行に結合された手牌から作り、行をまたいで使い回さない。リーチ宣言中・成立後・ツモ前後・暗槓がある場合も
+  同じ規則（その行に結合された手牌）である。時点の検査はS1のラベルAと共通（`_paired_with_facts()`）
+- リーチ1回は`RiichiEpisodeKey`（seed、リーチ者の席、リーチ宣言の通し番号）で識別する。通し番号は半荘内で一意
+
+## 特徴（`lisjong.learning.riichi_wait_estimator`、`riichi-wait-features-v1`）
+
+特徴は`PolicyInput`だけから作り、学習時も推論時も同じ関数（`wait_feature_table()`）を使う。ラベルは別経路で結合する。
+
+- 第1層: 形別の成立可否、成立可能な形の数、構成牌の残り枚数の積（壁の度合い、連続値）、牌自身の残り枚数
+- 第2層: 現物、リーチ者の最後の打牌より後に他家が切った牌、スジ、両面の反対側が河にないか
+- 牌の分類（字牌の役牌/客風、数牌の数字）、ドラ、リーチ宣言後の巡目
+
+`Discard.tsumogiri`は`PolicyInput`の契約上つねに記録されているが、v1では使わない。リーチ宣言牌は
+`PolicyInput`から特定できないため、宣言牌との関係（またぎ等）も特徴にしない。
+
+## モデルと出力
+
+- 推定器: 上記特徴のロジスティック回帰1本（`LogisticWaitModel`）。ML runtimeには依存しない。探索するのはL2強度
+  （`L2_GRID = 0.01, 0.1, 1, 10, 100`）だけ。切片は正則化しない
+- ベースライン1（`PrevalenceWaitModel`）: 牌種ごとの待ち率（重み付き、Jeffreys平滑化）
+- ベースライン2（`ClassicalScoreWaitModel`）: Championの古典的危険度score（固定weightの合計）をPlatt校正で待ち確率へ。
+  Championは手牌にある牌（残り3枚以下）だけを評価するため、手牌にない牌種で残り4枚のときだけ、同一牌のweightに
+  残り3枚の値を使う。それ以外はChampionと同じ値
+- 確率はすべて`CLIP_EPSILON = 1e-6`でclipする
+- `estimate_riichi_wait_belief(policy_input, model)`が、リーチ者の`HandBelief`（Level 1）を返す。牌のmarginalは
+  既存の条件付き一様推定器の値のまま、待ち確率だけを予測で置き換える
+
+## 重みと集約
+
+リーチは重み付けの単位、半荘は再標本化の単位とする（同じ半荘内のリーチは相関し得るため、リーチ同士を独立とは扱わない）。
+
+- 同じリーチを見た判断行（観測者が複数でも）は、そのリーチの重み1を等分する
+- 損失は、1判断の34牌種で平均 → 同一リーチ内の行で平均 → リーチ間で平均する
+- ベースライン1の待ち率、ベースライン2の校正、推定器の学習にも同じ重みを使う
+  （学習の目的関数は34牌種の平均ではなく和。係数が定数倍違うだけで、L2強度の格子は事前に固定する）
+
+## 評価手順（`lisjong.learning.riichi_wait_evaluation`）
+
+```text
+python -m lisjong.learning.riichi_wait_evaluation select SOURCE SELECTION.json
+python -m lisjong.learning.riichi_wait_evaluation test SOURCE_NEW SELECTION.json RESULT.json
+```
+
+| 段階 | 内容 |
+|---|---|
+| `select` | S1のsourceのtrainで、ベースライン1・2と推定器の係数を当てはめ、推定器のL2強度をvalidのlossで選ぶ。選択結果・validの指標・使ったseedを書き出す |
+| `test` | **新しいseed**のsourceの`test`分割で、選択を固定したまま1回だけ評価する。選択に使ったsourceのseed（train/valid/test）と重なるseed、選択と同じsourceは拒否する。出力は上書きしない |
+
+- 主指標: 上の重みで集約したlog loss。`Δ = 推定器のloss − ベースラインのloss`（負なら推定器が良い）
+- 半荘を単位に復元抽出するpaired bootstrap（2,000回、seed 245）で、ベースライン1・2それぞれとのΔの95%区間を求める。
+  再標本化した後も、リーチ間の平均を計算し直す
+- **合格: ベースライン1・2の両方とのΔで、95%区間の上端が0未満**。区間が0をまたぐ場合は「改善を確認できなかった」と
+  記録する（「効果がない」とは限らない）
+- 副指標: Brier、校正表、判断ごとの順位付け（AUC。正例・負例が揃わない判断は除外して数を記録。リーチ単位で平均してから
+  リーチ間で平均）、`Σp(t)`（待ち牌種数の期待値）と実際の待ち牌種数、牌の分類・巡目別
+- testは選択を固定してから1回だけ使う。結果を見てから特徴・欠損処理・clip幅・閾値・データを変えない
+
+実行前に、評価手順・分割・test規模・合格基準をIssue（#245）へ記録する。test規模の案は新規seedの100半荘。
+生成経路の検査に使った40半荘（seeds 931100..931139）は評価に使わない。
+
+## 情報境界
+
+- 推論側（`riichi_wait_estimator`）は`PolicyInput`だけを入力にし、`riichi_deal_in_source`・`exact_wait_ground_truth`・
+  `riichi_ron_label`をimportしない（testで固定）
+- 正解の待ちは学習専用で、`riichi_wait_evaluation`と`riichi_deal_in_source`だけが扱う

@@ -13,6 +13,7 @@ from enum import Enum, auto
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
+from lisjong.belief.wait_shape_support import river_relation, wait_shape_support
 from lisjong.policies.genbutsu_defense_finite_horizon_hand_value_aware import (
     _evaluate_and_choose_discard as _parent_offensive_evaluate_and_choose_discard,
 )
@@ -77,15 +78,15 @@ def _classical_riichi_danger_score(
     opponent: PlayerPublicState,
     remaining_tile_counts: tuple[int, ...],
 ) -> _ClassicalRiichiDangerBreakdown:
-    """公開河とremaining inventoryから固定v1 relative scoreを返す。"""
-    opponent_river = frozenset(discard.tile.tile_type for discard in opponent.discards)
-    if candidate in opponent_river:
-        return _ZERO_DANGER
+    """公開河とremaining inventoryから固定v1 relative scoreを返す。
 
-    def remaining(rank: int) -> int:
-        return remaining_tile_counts[
-            tile_type_index(TileType(candidate.category, rank))
-        ]
+    形の成立可能性（残り枚数）と河との関係は`lisjong.belief.wait_shape_support`が
+    返し、ここでは固定weightと現物の0扱いだけを持つ。
+    """
+    opponent_river = frozenset(discard.tile.tile_type for discard in opponent.discards)
+    relation = river_relation(candidate, opponent_river)
+    if relation.in_river:
+        return _ZERO_DANGER
 
     same_tile = _same_tile_contribution(
         candidate, remaining_tile_counts[tile_type_index(candidate)]
@@ -93,40 +94,21 @@ def _classical_riichi_danger_score(
     if candidate.category is TileCategory.HONOR:
         return _ClassicalRiichiDangerBreakdown(same_tile, 0, 0, 0, 0)
 
-    rank = candidate.rank
-    penchan = 0
-    if rank == 3 and remaining(1) > 0 and remaining(2) > 0:
-        penchan = 3
-    elif rank == 7 and remaining(8) > 0 and remaining(9) > 0:
-        penchan = 3
-
-    kanchan = (
-        3
-        if 2 <= rank <= 8 and remaining(rank - 1) > 0 and remaining(rank + 1) > 0
-        else 0
-    )
-    ryanmen_low_side = (
-        10
-        if 1 <= rank <= 6
-        and remaining(rank + 1) > 0
-        and remaining(rank + 2) > 0
-        and TileType(candidate.category, rank + 3) not in opponent_river
-        else 0
-    )
-    ryanmen_high_side = (
-        10
-        if 4 <= rank <= 9
-        and remaining(rank - 2) > 0
-        and remaining(rank - 1) > 0
-        and TileType(candidate.category, rank - 3) not in opponent_river
-        else 0
-    )
+    support = wait_shape_support(candidate, remaining_tile_counts)
     return _ClassicalRiichiDangerBreakdown(
         same_tile,
-        penchan,
-        kanchan,
-        ryanmen_low_side,
-        ryanmen_high_side,
+        penchan=3 if support.penchan else 0,
+        kanchan=3 if support.kanchan else 0,
+        ryanmen_low_side=(
+            10
+            if support.ryanmen_low_side and not relation.ryanmen_low_far_end_in_river
+            else 0
+        ),
+        ryanmen_high_side=(
+            10
+            if support.ryanmen_high_side and not relation.ryanmen_high_far_end_in_river
+            else 0
+        ),
     )
 
 

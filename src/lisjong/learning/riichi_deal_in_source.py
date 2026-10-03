@@ -24,6 +24,10 @@ lisjong-arenaが対局を実行して**観測事実**を記録し、lisjongが�
 - engineとの照合（リーチ者へRonActionが提示されたか）は**選んだ打牌だけ**に適用する。
   選ばなかった候補には照合値を持たせない
 
+同じ記録を、構造的な待ち（lisbun/lisjong#245）のラベルにも使う（``read_wait_labelled_source()``）。
+待ちは各行に結合されたリーチ者の手牌から``exact_hand_belief_with_waits()``で求め、フリテン・
+ロン可否は含まない。判断記録との結合と時点の検査はラベルAと共通である。
+
 対象範囲（``SCOPE``）: 他家1人がリーチ中（宣言済みを含む）・自分は非リーチ・
 候補牌種2以上の打牌判断。#237の「他家単独リーチ」全体より狭い。
 """
@@ -32,6 +36,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from lisjong.belief.canonical_axes import tile_type_from_index
+from lisjong.belief.exact_wait_ground_truth import exact_hand_belief_with_waits
 from lisjong.belief.riichi_ron_label import RiichiFuritenReason, riichi_ron_label
 from lisjong.learning._canonical import (
     canonical_json_line,
@@ -173,6 +179,25 @@ class LabelledDecision:
     selected_tile_type: TileType
     selected_ron_offered: bool
     selected_dealt_in: bool
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class RiichiEpisodeKey:
+    """リーチ1回を指すキー。リーチ宣言の通し番号は半荘内で一意なので、seedと合わせて一意。"""
+
+    seed: int
+    riichi_seat: int
+    declared_sequence: int
+
+
+@dataclass(frozen=True, slots=True)
+class WaitLabelledDecision:
+    """構造的な待ちのラベル付き判断。``wait_tile_types``は学習専用の正解。"""
+
+    decision: RiichiDealInDecision
+    riichi_seat: int
+    episode: RiichiEpisodeKey
+    wait_tile_types: frozenset[TileType]
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,16 +484,19 @@ def read_decisions(
     return manifest, decisions
 
 
-def label_decisions(
+def _paired_with_facts(
     decisions: Sequence[RiichiDealInDecision],
     facts: Sequence[RiichiDealInLabelFacts],
-) -> tuple[LabelledDecision, ...]:
-    """観測事実からラベルAを計算し、判断記録と結合する（学習専用）。"""
+) -> list[tuple[RiichiDealInDecision, RiichiDealInLabelFacts, int]]:
+    """判断記録と観測事実を`DecisionKey`で結合し、時点の整合を検査する。
+
+    戻り値の各要素は（判断、事実、リーチ者の席）で、キー順に並ぶ。
+    """
     by_decision = _unique_by_key(decisions, "decision")
     by_facts = _unique_by_key(facts, "label fact")
     if set(by_decision) != set(by_facts):
         raise _E("decision and label fact keys do not match")
-    labelled = []
+    paired = []
     for key in sorted(by_decision):
         decision, fact = by_decision[key], by_facts[key]
         context = f"decision {key}"
@@ -483,6 +511,19 @@ def label_decisions(
             for sequence in sequences
         ):
             raise _E(f"{context}: win options are outside the riichi..decision window")
+        paired.append((decision, fact, riichi))
+    return paired
+
+
+def label_decisions(
+    decisions: Sequence[RiichiDealInDecision],
+    facts: Sequence[RiichiDealInLabelFacts],
+) -> tuple[LabelledDecision, ...]:
+    """観測事実からラベルAを計算し、判断記録と結合する（学習専用）。"""
+    labelled = []
+    for decision, fact, riichi in _paired_with_facts(decisions, facts):
+        key = decision.key
+        context = f"decision {key}"
         label = riichi_ron_label(
             fact.concealed_tiles,
             fact.melds,
@@ -523,6 +564,41 @@ def label_decisions(
     return tuple(labelled)
 
 
+def label_waits(
+    decisions: Sequence[RiichiDealInDecision],
+    facts: Sequence[RiichiDealInLabelFacts],
+) -> tuple[WaitLabelledDecision, ...]:
+    """観測事実から構造的な待ち（lisjong#245のラベル）を計算し、判断記録と結合する。
+
+    待ちは、各行に結合されたリーチ者の手牌（`hand_sequence`時点の門前牌と副露）から
+    `exact_hand_belief_with_waits()`で求める。ラベルはその行の手牌から作り、行をまたいで
+    使い回さない。フリテン・ロン可否は含まない（構造的な待ち）。学習専用。
+    """
+    labelled = []
+    for decision, fact, riichi in _paired_with_facts(decisions, facts):
+        belief = exact_hand_belief_with_waits(fact.concealed_tiles, fact.melds)
+        waits = frozenset(
+            tile_type_from_index(index)
+            for index in range(34)
+            if (belief.wait_probability(tile_type_from_index(index)) or 0) > 0
+        )
+        if not waits:
+            raise _E(f"decision {decision.key}: the riichi hand is not tenpai")
+        labelled.append(
+            WaitLabelledDecision(
+                decision=decision,
+                riichi_seat=riichi,
+                episode=RiichiEpisodeKey(
+                    seed=decision.key.seed,
+                    riichi_seat=riichi,
+                    declared_sequence=fact.riichi_declared_sequence,
+                ),
+                wait_tile_types=waits,
+            )
+        )
+    return tuple(labelled)
+
+
 def read_labelled_source(
     directory: str | Path,
 ) -> tuple[RiichiDealInManifest, tuple[LabelledDecision, ...]]:
@@ -537,6 +613,22 @@ def read_labelled_source(
     if len(facts) != manifest.files["label_facts"]["rows"]:
         raise _E("label fact row count does not match the manifest")
     return manifest, label_decisions(decisions, facts)
+
+
+def read_wait_labelled_source(
+    directory: str | Path,
+) -> tuple[RiichiDealInManifest, tuple[WaitLabelledDecision, ...]]:
+    """判断記録とラベルの記録を読み、構造的な待ちのラベル付き判断を返す（学習専用の経路）。"""
+    root = Path(directory)
+    manifest, decisions = read_decisions(root)
+    _check_file(root, LABEL_FACTS_FILENAME, manifest.files["label_facts"])
+    facts = tuple(
+        _parse_facts(value, f"{LABEL_FACTS_FILENAME}:{number}")
+        for number, value in _read_lines(root / LABEL_FACTS_FILENAME)
+    )
+    if len(facts) != manifest.files["label_facts"]["rows"]:
+        raise _E("label fact row count does not match the manifest")
+    return manifest, label_waits(decisions, facts)
 
 
 def manifest_text(
@@ -573,12 +665,16 @@ __all__ = [
     "RiichiDealInLabelFacts",
     "RiichiDealInManifest",
     "RiichiDealInSourceError",
+    "RiichiEpisodeKey",
+    "WaitLabelledDecision",
     "WinOption",
     "decision_to_value",
     "label_decisions",
+    "label_waits",
     "label_facts_to_value",
     "manifest_text",
     "read_decisions",
     "read_labelled_source",
     "read_manifest",
+    "read_wait_labelled_source",
 ]
