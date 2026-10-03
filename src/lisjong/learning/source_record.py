@@ -87,12 +87,26 @@ v1へ`allocation_bindings`（Arena-owned seed allocation ledgerのper-split
 binding）を追加したものであり、v1 identityの意味は変更しない。
 """
 
+POLICY_SOURCE_RECORD_SCHEMA_V1 = "arena-policy-source-record-v1"
+"""教師Policyを指定できるArena-owned source contract（lisjong-arena#442）。
+
+rowの形はv2と同じだが、manifestは#331 protocol lock / scientific corpusでは
+なく、明示的なpopulationと教師・runtime bindingへ結び付く。`purpose`が
+`DEVELOPMENT`のpopulationはallocation bindingを持たない（接続・費用計測用）。
+教師identityはArenaの記述をそのまま保持し、lisjongが再解釈しない。
+"""
+
 SUPPORTED_SOURCE_RECORD_SCHEMAS = frozenset(
-    {SOURCE_RECORD_SCHEMA_V1, SOURCE_RECORD_SCHEMA_V2}
+    {SOURCE_RECORD_SCHEMA_V1, SOURCE_RECORD_SCHEMA_V2, POLICY_SOURCE_RECORD_SCHEMA_V1}
 )
 """対応schemaの集合。ここに無いschemaはfail closedとする。"""
 
 SOURCE_RECORD_KIND = "player-safe-source-record"
+POLICY_SOURCE_RECORD_KIND = "policy-source-record"
+DEVELOPMENT_PURPOSE = "DEVELOPMENT"
+SCIENTIFIC_PURPOSE = "SCIENTIFIC"
+POLICY_SOURCE_SPLITS = ("TRAIN", "SELECT", "OFFLINE-EVAL")
+"""policy source recordのsplit集合とgame順（Arena-owned contract）。"""
 MANIFEST_FILENAME = "manifest.json"
 GAME_PAYLOAD_FILENAME = "source-record.jsonl"
 
@@ -127,6 +141,26 @@ _MANIFEST_FIELDS_V1 = frozenset(
     }
 )
 _MANIFEST_FIELDS_V2 = _MANIFEST_FIELDS_V1 | {"allocation_bindings"}
+_POLICY_MANIFEST_FIELDS = frozenset(
+    {
+        "schema",
+        "kind",
+        "purpose",
+        "game_mode",
+        "source_contract",
+        "populations",
+        "allocation_bindings",
+        "games",
+    }
+)
+_POLICY_GAME_FIELDS = frozenset(
+    {"game_ordinal", "seed", "split", "game_mode", "decision_count", "steps", "files"}
+)
+_TEACHER_PROVENANCE_FIELDS = (
+    "catalog_identity",
+    "policy_class",
+    "configuration_digest",
+)
 _GAME_FIELDS = frozenset(
     {
         "game_ordinal",
@@ -285,12 +319,16 @@ class PlayerSafeSourceRecord:
 
     schema: str
     identity: str
-    lock_identity: str
-    scientific_corpus_identity: str
+    lock_identity: str | None
+    scientific_corpus_identity: str | None
     game_mode: str
     source_contract_digest: str
     allocation_bindings: Mapping[str, Mapping[str, str]] | None
     games: tuple[SourceGame, ...]
+    purpose: str | None = None
+    """policy source recordだけが持つpopulation purpose。v1 / v2は`None`。"""
+    teacher: Mapping[str, str] | None = None
+    """policy source recordだけが持つ、Arenaが記録した教師identityの要約。"""
 
     @property
     def decision_count(self) -> int:
@@ -319,7 +357,28 @@ class PlayerSafeSourceRecord:
         `allocation_bindings`はv2なら`{split: binding}`のJSON化可能なdict、
         v1なら`None`である。呼び出し側（`materialize_dataset()`）が
         `None`をどう扱うかを決め、この関数自体は値を補完しない。
+
+        policy source recordは#331 lock / scientific corpusを持たないため、
+        それらのfieldの代わりに`purpose`と`teacher`を持つ別の形を返す。
+        v1 / v2の形と既存dataset / artifact identityは変更しない。
         """
+        if self.schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
+            return {
+                "allocation_bindings": None
+                if self.allocation_bindings is None
+                else {
+                    split: dict(binding)
+                    for split, binding in self.allocation_bindings.items()
+                },
+                "decision_count": self.decision_count,
+                "game_mode": self.game_mode,
+                "identity": self.identity,
+                "population": list(self.population()),
+                "purpose": self.purpose,
+                "schema": self.schema,
+                "source_contract_digest": self.source_contract_digest,
+                "teacher": dict(self.teacher),
+            }
         return {
             "allocation_bindings": None
             if self.allocation_bindings is None
@@ -357,6 +416,8 @@ def _read_manifest(path: Path) -> dict[str, object]:
             f"unsupported source record schema: {schema!r}; "
             f"this implementation consumes {sorted(SUPPORTED_SOURCE_RECORD_SCHEMAS)}"
         )
+    if schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
+        return _read_policy_manifest(manifest, body)
     expected_fields = (
         _MANIFEST_FIELDS_V2
         if schema == SOURCE_RECORD_SCHEMA_V2
@@ -381,20 +442,63 @@ def _read_manifest(path: Path) -> dict[str, object]:
     return manifest
 
 
+def _read_policy_manifest(
+    manifest: dict[str, object], body: dict[str, object]
+) -> dict[str, object]:
+    expect_object(
+        body, _POLICY_MANIFEST_FIELDS, SourceRecordError, "source record manifest"
+    )
+    if body["kind"] != POLICY_SOURCE_RECORD_KIND:
+        raise SourceRecordError("source record kind mismatch")
+    if body["purpose"] not in (DEVELOPMENT_PURPOSE, SCIENTIFIC_PURPOSE):
+        raise SourceRecordError("manifest.purpose must be DEVELOPMENT or SCIENTIFIC")
+    expect_str(body["game_mode"], SourceRecordError, "manifest.game_mode")
+    contract = body["source_contract"]
+    if type(contract) is not dict or type(contract.get("teacher")) is not dict:
+        raise SourceRecordError("manifest.source_contract.teacher must be an object")
+    for field in _TEACHER_PROVENANCE_FIELDS:
+        expect_str(
+            contract["teacher"].get(field),
+            SourceRecordError,
+            f"manifest.source_contract.teacher.{field}",
+        )
+    populations = body["populations"]
+    if type(populations) is not dict or not populations:
+        raise SourceRecordError("manifest.populations must be a nonempty object")
+    if set(populations) - set(POLICY_SOURCE_SPLITS):
+        raise SourceRecordError("manifest.populations has an unsupported split")
+    for split, seeds in populations.items():
+        expect_list(seeds, SourceRecordError, f"manifest.populations[{split}]")
+    games = expect_list(body["games"], SourceRecordError, "manifest.games")
+    if not games:
+        raise SourceRecordError("source record must contain at least one hanchan")
+    return manifest
+
+
+def _policy_teacher(manifest: dict[str, object]) -> dict[str, str]:
+    teacher = manifest["source_contract"]["teacher"]
+    return {field: teacher[field] for field in _TEACHER_PROVENANCE_FIELDS}
+
+
 def _read_game_summary(
     value: object, *, game_ordinal: int, manifest: dict[str, object]
 ) -> dict[str, object]:
     context = f"manifest.games[{game_ordinal}]"
     body = unseal(value, SourceRecordError, context)
-    expect_object(body, _GAME_FIELDS, SourceRecordError, context)
+    policy = manifest["schema"] == POLICY_SOURCE_RECORD_SCHEMA_V1
+    expect_object(
+        body,
+        _POLICY_GAME_FIELDS if policy else _GAME_FIELDS,
+        SourceRecordError,
+        context,
+    )
     for field in ("game_ordinal", "seed", "decision_count", "steps"):
         expect_non_negative_int(body[field], SourceRecordError, f"{context}.{field}")
     expect_str(body["split"], SourceRecordError, f"{context}.split")
     if body["game_ordinal"] != game_ordinal:
         raise SourceRecordError(f"{context} game ordinal is not contiguous")
-    if (
-        body["lock_identity"] != manifest["lock_identity"]
-        or body["game_mode"] != manifest["game_mode"]
+    if body["game_mode"] != manifest["game_mode"] or (
+        not policy and body["lock_identity"] != manifest["lock_identity"]
     ):
         raise SourceRecordError(f"{context} provenance does not match the manifest")
     files = expect_object(
@@ -590,6 +694,9 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
         seeds_by_split.setdefault(summary["split"], []).append(summary["seed"])
         games.append(_read_game(root / f"game-{summary['game_ordinal']:03d}", summary))
 
+    if manifest["schema"] == POLICY_SOURCE_RECORD_SCHEMA_V1:
+        return _policy_source_record(manifest, summaries, seeds_by_split, games)
+
     allocation_bindings: dict[str, dict[str, str]] | None = None
     if manifest["schema"] == SOURCE_RECORD_SCHEMA_V2:
         allocation_bindings = validate_allocation_bindings(
@@ -610,8 +717,63 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
     )
 
 
+def _policy_source_record(
+    manifest: dict[str, object],
+    summaries: list[dict[str, object]],
+    seeds_by_split: dict[str, list[int]],
+    games: list[SourceGame],
+) -> PlayerSafeSourceRecord:
+    """policy source recordのpopulation / purpose / bindingを検証して返す。
+
+    game順はsplit順（`POLICY_SOURCE_SPLITS`）、split内はpopulationの列挙順である。
+    `DEVELOPMENT`はallocation bindingを持たず、`SCIENTIFIC`はsplitごとの
+    bindingを必須とする。liveなledgerへは照会しない。
+    """
+    populations = manifest["populations"]
+    expected_order = [
+        (split, seed)
+        for split in POLICY_SOURCE_SPLITS
+        if split in populations
+        for seed in populations[split]
+    ]
+    if [(summary["split"], summary["seed"]) for summary in summaries] != (
+        expected_order
+    ):
+        raise SourceRecordError("source games do not follow the manifest populations")
+    bindings = manifest["allocation_bindings"]
+    if manifest["purpose"] == DEVELOPMENT_PURPOSE:
+        if bindings is not None:
+            raise SourceRecordError(
+                "DEVELOPMENT source record must not claim allocation bindings"
+            )
+        allocation_bindings = None
+    else:
+        allocation_bindings = validate_allocation_bindings(
+            bindings,
+            populations=seeds_by_split,
+            context="manifest.allocation_bindings",
+        )
+    return PlayerSafeSourceRecord(
+        schema=manifest["schema"],
+        identity=manifest["identity"],
+        lock_identity=None,
+        scientific_corpus_identity=None,
+        game_mode=manifest["game_mode"],
+        source_contract_digest=value_digest(manifest["source_contract"]),
+        allocation_bindings=allocation_bindings,
+        games=tuple(games),
+        purpose=manifest["purpose"],
+        teacher=_policy_teacher(manifest),
+    )
+
+
 __all__ = [
+    "DEVELOPMENT_PURPOSE",
     "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
+    "POLICY_SOURCE_RECORD_KIND",
+    "POLICY_SOURCE_RECORD_SCHEMA_V1",
+    "POLICY_SOURCE_SPLITS",
+    "SCIENTIFIC_PURPOSE",
     "GAME_PAYLOAD_FILENAME",
     "MANIFEST_FILENAME",
     "SOURCE_RECORD_KIND",

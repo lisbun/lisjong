@@ -309,6 +309,86 @@ def write_source_record(
     return root
 
 
+POLICY_TEACHER = {
+    "catalog_identity": "placement-aware-speed-call",
+    "configuration": {"arguments": {}, "factory": "example.create_teacher"},
+    "configuration_digest": "c" * 64,
+    "policy_class": "lisjong.policies.placement_aware_speed_call."
+    "PlacementAwareSpeedCallPolicy",
+}
+
+
+def write_policy_source_record(root, games=None, *, purpose="DEVELOPMENT", **overrides):
+    """Arena `arena-policy-source-record-v1`形のdirectoryを書き出す。
+
+    `games`は`(split, seed, rows)`のsequenceで、split順（TRAIN / SELECT /
+    OFFLINE-EVAL）・population順に並べる。`SCIENTIFIC`ではsplitごとの
+    allocation bindingを含め、`DEVELOPMENT`では`None`にする。
+    """
+    root = Path(root)
+    root.mkdir(parents=True)
+    if games is None:
+        games = (
+            ("TRAIN", 100, decision_rows(game_ordinal=0, seed=100, split="TRAIN")),
+            (
+                "SELECT",
+                200,
+                decision_rows(game_ordinal=1, seed=200, split="SELECT", count=2),
+            ),
+        )
+    summaries = []
+    populations = {}
+    for game_ordinal, (split, seed, rows) in enumerate(games):
+        game_root = root / f"game-{game_ordinal:03d}"
+        game_root.mkdir()
+        payload = game_root / GAME_PAYLOAD_FILENAME
+        payload.write_text(
+            "".join(canonical_json_line(row) for row in rows),
+            encoding="utf-8",
+            newline="\n",
+        )
+        summary = {
+            key: value
+            for key, value in unseal_fixture(
+                _game_summary(
+                    game_ordinal=game_ordinal,
+                    seed=seed,
+                    split=split,
+                    rows=rows,
+                    payload_path=payload,
+                )
+            ).items()
+            if key != "lock_identity"
+        }
+        summaries.append(seal(summary))
+        populations.setdefault(split, []).append(seed)
+    body = {
+        "allocation_bindings": None
+        if purpose == "DEVELOPMENT"
+        else {split: allocation_binding(seeds) for split, seeds in populations.items()},
+        "game_mode": GAME_MODE,
+        "games": summaries,
+        "kind": "policy-source-record",
+        "populations": populations,
+        "purpose": purpose,
+        "schema": "arena-policy-source-record-v1",
+        "source_contract": {
+            "game_mode": GAME_MODE,
+            "seat_policies": [POLICY_TEACHER["catalog_identity"]] * 4,
+            "teacher": dict(POLICY_TEACHER),
+        },
+    }
+    body.update(overrides)
+    (root / MANIFEST_FILENAME).write_text(
+        canonical_json_text(seal(body)), encoding="utf-8", newline="\n"
+    )
+    return root
+
+
+def unseal_fixture(value):
+    return {key: item for key, item in value.items() if key != "identity"}
+
+
 def read_manifest_body(root):
     manifest = json.loads((Path(root) / MANIFEST_FILENAME).read_text(encoding="utf-8"))
     return {key: value for key, value in manifest.items() if key != "identity"}

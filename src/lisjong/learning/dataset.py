@@ -78,6 +78,9 @@ from lisjong.learning.features import (
     feature_fingerprint,
 )
 from lisjong.learning.source_record import (
+    DEVELOPMENT_PURPOSE,
+    POLICY_SOURCE_RECORD_SCHEMA_V1,
+    SCIENTIFIC_PURPOSE,
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
     validate_allocation_bindings,
@@ -133,6 +136,22 @@ _SOURCE_FIELDS = frozenset(
         "scientific_corpus_identity",
         "source_contract_digest",
     }
+)
+_POLICY_SOURCE_FIELDS = frozenset(
+    {
+        "allocation_bindings",
+        "decision_count",
+        "game_mode",
+        "identity",
+        "population",
+        "purpose",
+        "schema",
+        "source_contract_digest",
+        "teacher",
+    }
+)
+_TEACHER_FIELDS = frozenset(
+    {"catalog_identity", "policy_class", "configuration_digest"}
 )
 _POPULATION_FIELDS = frozenset({"decision_count", "game_ordinal", "seed", "split"})
 _FEATURE_FIELDS = frozenset({"dimension", "fingerprint", "identity"})
@@ -268,15 +287,35 @@ def validate_source_block(
     `PlayerSafeSourceRecord.provenance()`が生成する記述の正本validationであり、
     datasetとmodel artifactの双方が同じ契約でこのblockを検証する。
     """
-    source = expect_object(value, _SOURCE_FIELDS, DatasetError, context)
+    policy = (
+        type(value) is dict and value.get("schema") == POLICY_SOURCE_RECORD_SCHEMA_V1
+    )
+    source = expect_object(
+        value,
+        _POLICY_SOURCE_FIELDS if policy else _SOURCE_FIELDS,
+        DatasetError,
+        context,
+    )
     for field in (
-        "schema",
-        "identity",
-        "lock_identity",
-        "game_mode",
-        "scientific_corpus_identity",
+        ("schema", "identity", "game_mode")
+        if policy
+        else (
+            "schema",
+            "identity",
+            "lock_identity",
+            "game_mode",
+            "scientific_corpus_identity",
+        )
     ):
         expect_str(source[field], DatasetError, f"{context}.{field}")
+    if policy:
+        if source["purpose"] not in (DEVELOPMENT_PURPOSE, SCIENTIFIC_PURPOSE):
+            raise DatasetError(f"{context}.purpose is not a supported purpose")
+        teacher = expect_object(
+            source["teacher"], _TEACHER_FIELDS, DatasetError, f"{context}.teacher"
+        )
+        for field in _TEACHER_FIELDS:
+            expect_str(teacher[field], DatasetError, f"{context}.teacher.{field}")
     expect_digest(
         source["source_contract_digest"],
         DatasetError,
@@ -315,7 +354,15 @@ def validate_source_block(
     # #347）のper-split provenanceである。datasetとartifactに到達する時点では
     # 常にschema v2由来（materialize_dataset()がv1を拒否する）なので、ここでは
     # Noneを許さず、populationのsplitと矛盾しないbindingを要求する。liveな
-    # ledgerへは一切照会しない。
+    # ledgerへは一切照会しない。唯一の例外はpolicy source recordの
+    # DEVELOPMENT populationで、bindingを持たないことを明示している
+    # （lisjong-arena#442の接続・費用計測用）。
+    if policy and source["purpose"] == DEVELOPMENT_PURPOSE:
+        if source["allocation_bindings"] is not None:
+            raise DatasetError(
+                f"{context} DEVELOPMENT source must not claim allocation bindings"
+            )
+        return source
     try:
         validate_allocation_bindings(
             source["allocation_bindings"],
@@ -345,7 +392,7 @@ def materialize_dataset(
         raise DatasetError("source must be a PlayerSafeSourceRecord")
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
-    if source.allocation_bindings is None:
+    if source.allocation_bindings is None and source.purpose != DEVELOPMENT_PURPOSE:
         raise DatasetError(
             "dataset materialization requires a source record with Arena "
             "allocation provenance (schema "
