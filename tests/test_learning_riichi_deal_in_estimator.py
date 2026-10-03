@@ -151,15 +151,19 @@ class InferenceBoundaryTest(unittest.TestCase):
             model.predict(b.decision.policy_input, candidates),
         )
 
-    def test_features_are_discrete_names(self):
+    def test_features_are_named_values(self):
         pi = policy_input({1: [(1, "1m"), (5, "7m")]}, concealed="14m4z5z")
         view = riichi_view(pi)
-        features = candidate_features(pi, view, tt("4m"))
+        features = dict(candidate_features(pi, view, tt("4m")))
         self.assertIn("number_456_suji_full", features)
-        self.assertIn("bias", features)
-        self.assertIn("honor_guest_remaining_3", candidate_features(pi, view, tt("4z")))
+        self.assertEqual(features["bias"], 1.0)
+        # 4m: 1m・7mが河にあり両面は両側ともなし。same-tile 3 + kanchan 3 = 6
+        self.assertAlmostEqual(features["classical_score"], 0.6)
         self.assertIn(
-            "honor_yakuhai_remaining_3", candidate_features(pi, view, tt("5z"))
+            "honor_guest_remaining_3", dict(candidate_features(pi, view, tt("4z")))
+        )
+        self.assertIn(
+            "honor_yakuhai_remaining_3", dict(candidate_features(pi, view, tt("5z")))
         )
 
 

@@ -48,7 +48,7 @@ from lisjong.policy_contract.tile import TileCategory, TileType
 
 SELECTION_SCHEMA = "lisjong-riichi-deal-in-selection-v1"
 RESULT_SCHEMA = "lisjong-riichi-deal-in-test-result-v1"
-L2_GRID = (0.1, 1.0, 10.0, 100.0)
+L2_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 237
 _EPSILON = 1e-15
@@ -159,7 +159,7 @@ def fit_classical(decisions: Sequence[LabelledDecision]) -> ClassicalScoreModel:
 
 
 def fit_estimator(decisions: Sequence[LabelledDecision], l2: float) -> LogisticModel:
-    counts: dict[frozenset[str], list[int]] = defaultdict(lambda: [0, 0])
+    counts: dict[tuple[tuple[str, float], ...], list[int]] = defaultdict(lambda: [0, 0])
     for decision in decisions:
         policy_input = decision.decision.policy_input
         view = riichi_view(policy_input)
@@ -169,10 +169,10 @@ def fit_estimator(decisions: Sequence[LabelledDecision], l2: float) -> LogisticM
             entry = counts[candidate_features(policy_input, view, candidate.tile_type)]
             entry[0] += 1
             entry[1] += candidate.label_a
-    names = sorted({name for features in counts for name in features} - {BIAS})
+    names = sorted({name for features in counts for name, _ in features} - {BIAS})
     index = {BIAS: 0} | {name: position + 1 for position, name in enumerate(names)}
     patterns = {
-        tuple(sorted((index[name], 1.0) for name in features)): tuple(value)
+        tuple(sorted((index[name], value) for name, value in features)): tuple(value)
         for features, value in counts.items()
     }
     weights = fit_logistic(patterns, len(index), l2)

@@ -10,7 +10,8 @@
 - リーチ者の最後の打牌より後に他家が切った牌種。最後の打牌はリーチ宣言打牌以後なので、
   その牌が待ちなら見逃しフリテンになり、待ちでなければロンできない
 
-推定器（`LogisticModel`）は、それ以外の候補を離散特徴のlogistic回帰で推定する。
+推定器（`LogisticModel`）は、それ以外の候補を特徴（古典的危険度scoreの数値と区分、
+牌の分類×筋、残り枚数、形の成立可能性、ドラ、リーチ者の巡目）のlogistic回帰で推定する。
 ベースライン1は現物=0・それ以外一定、ベースライン2は既存の古典的危険度scoreを
 logistic（Platt）で確率へ校正したもの。
 """
@@ -32,8 +33,9 @@ from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.tile import TileCategory, TileType
 
-FEATURE_SET = "riichi-deal-in-discrete-features-v1"
+FEATURE_SET = "riichi-deal-in-features-v3"
 BIAS = "bias"
+SCORE = "classical_score"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +132,13 @@ def _suji(tile: TileType, river: frozenset[TileType]) -> str:
     return "half" if hit else "none"
 
 
+def _score_bucket(score: int) -> str:
+    for upper, name in ((0, "0"), (3, "1-3"), (8, "4-8"), (13, "9-13"), (20, "14-20")):
+        if score <= upper:
+            return name
+    return "21+"
+
+
 def _turn_bucket(count: int) -> str:
     if count <= 6:
         return "early"
@@ -138,16 +147,21 @@ def _turn_bucket(count: int) -> str:
 
 def candidate_features(
     policy_input: PolicyInput, view: RiichiView, tile: TileType
-) -> frozenset[str]:
-    """構造的に安全でない候補の離散特徴（有効な特徴名の集合）。"""
+) -> tuple[tuple[str, float], ...]:
+    """構造的に安全でない候補の特徴（名前と値の組）。
+
+    古典的危険度score（10で割った数値）以外は、有効なら値1の離散特徴。
+    """
     remaining = view.remaining_counts[tile_type_index(tile)]
     names = {BIAS, f"turn_{_turn_bucket(view.riichi_discard_count)}"}
     if tile in view.dora:
         names.add("dora")
+    score = classical_score(policy_input, view, tile)
+    names.add(f"classical_{_score_bucket(score)}")
     if tile.category is TileCategory.HONOR:
         kind = "yakuhai" if tile in view.yakuhai else "guest"
         names.add(f"honor_{kind}_remaining_{remaining}")
-        return frozenset(names)
+        return _with_score(names, score)
     names.add(f"number_{_rank_class(tile.rank)}_suji_{_suji(tile, view.river)}")
     names.add(f"number_remaining_{remaining}")
     breakdown = _classical_riichi_danger_score(
@@ -156,7 +170,11 @@ def candidate_features(
     for name in ("penchan", "kanchan", "ryanmen_low_side", "ryanmen_high_side"):
         if getattr(breakdown, name):
             names.add(f"shape_{name}")
-    return frozenset(names)
+    return _with_score(names, score)
+
+
+def _with_score(names: set[str], score: int) -> tuple[tuple[str, float], ...]:
+    return tuple(sorted([(name, 1.0) for name in names] + [(SCORE, score / 10.0)]))
 
 
 def _sigmoid(value: float) -> float:
@@ -222,8 +240,8 @@ class LogisticModel:
             if tile in view.structurally_safe
             else _sigmoid(
                 sum(
-                    weights.get(name, 0.0)
-                    for name in candidate_features(policy_input, view, tile)
+                    weights.get(name, 0.0) * value
+                    for name, value in candidate_features(policy_input, view, tile)
                 )
             )
             for tile in candidates
@@ -237,6 +255,7 @@ __all__ = [
     "ConstantModel",
     "LogisticModel",
     "RiichiView",
+    "SCORE",
     "candidate_features",
     "classical_score",
     "riichi_view",
