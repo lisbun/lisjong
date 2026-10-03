@@ -131,7 +131,7 @@ testの結果（選択を固定して1回だけ評価。推定器は`riichi-deal
 - validでの選択の経緯: 離散特徴だけ（v1）→ scoreの区分を追加（v2）→ scoreの数値を追加（v3）。
   validの判断内AUCは0.681 / 0.683 / 0.684（ベースライン2は0.697）。L2はvalid log lossがほぼ一定
 
-### データの再現性
+### データの再現性（公式generatorによる再生成）
 
 Arenaの生成スクリプトの公式コマンド（`ca92451`、`LISJONG_SHANTEN_BACKEND=rust`、4 workers）で
 200半荘を最初から生成し直し、`decisions.jsonl`（`d0805dbe…c0be5`）・`label_facts.jsonl`
@@ -139,6 +139,30 @@ Arenaの生成スクリプトの公式コマンド（`ca92451`、`LISJONG_SHANTE
 2026-10-03に確認した（約77分）。比較に使ったデータは、同じ生成関数を半荘ごとに途中保存する
 一時wrapperで作ったもの。うち最初の4半荘はPython版のshanten backendで生成し、seed 931203を
 Rust版で再生成して一致を確認した。
+
+### データの保存（S3への保存と再ダウンロード検証）
+
+再生成の一致（上記）とは別に、データ・結果・再現手順をまとめたbundleを、Arenaの実行用バケット
+（`lisjong-ec2-*`、cleanupで削除される）とは別の専用バケットへ保存した。保存と再ダウンロード検証は
+2026-10-03にユーザーがAWS CloudShellで実行し、以下はその出力（ユーザー提供）に基づく。
+
+| 項目 | 値 |
+|---|---|
+| S3 URI | `s3://lisjong-research-data-507861384062-ap-northeast-1/lisjong/issue-237/s1-riichi-deal-in-200-v1/s1-riichi-deal-in-200-v1.tar.xz` |
+| SHA-256ファイル | 同じprefixの`s1-riichi-deal-in-200-v1.tar.xz.sha256` |
+| Version ID | `EOjFsLJIucLQeymgEbYFqVtrnrYXvaqR` |
+| サイズ | 1,837,412 bytes |
+| SHA-256 | `0986a4048110d4c113473403a8d16382623ea0c0a0d3138dc1d70387ee24702e` |
+| 検証日時 | 2026-10-03T16:15:15Z |
+| 検証結果 | 再ダウンロードしたbundleのSHA-256一致、SHA-256ファイル照合、bundle内`SHA256SUMS`の全件照合がいずれもPASS |
+| バケット設定 | versioning有効、public access blockの4項目すべて有効（出力で確認）。SSE-S3暗号化はscriptで設定したが、出力では確認していない |
+
+bundle（`s1-riichi-deal-in-200-v1/`）の内容: `source/`（`manifest.json`と、xz圧縮した`decisions.jsonl`・
+`label_facts.jsonl`。展開後のSHA-256はmanifestの値と一致）、`results/`（`select`・`test`・`posthoc`の出力）、
+`tools/`（生成に使った一時wrapperとbackend同値性の確認script）、依存一覧、Pythonの版、再現手順の
+`README.md`、全ファイルの`SHA256SUMS`。取得は
+`aws s3 cp <S3 URI> . && sha256sum -c s1-riichi-deal-in-200-v1.tar.xz.sha256`
+（SHA-256ファイルも同様に取得）で行う。
 
 ### 事後分析（testを見た後。選択済みのモデルは変えていない）
 
