@@ -1,5 +1,8 @@
 """lisjongの具体Policy実装。"""
 
+from lisjong.policies.attack_limited_mawashi_placement_aware_speed_call import (
+    ClassicalAttackLimitedMawashiPolicy,
+)
 from lisjong.policies.cheap_far_guard_open_hand_yaku_aware_call import (
     CheapFarGuardOpenHandYakuAwareCallPolicy,
 )
@@ -59,6 +62,7 @@ from lisjong.policies.yakuhai_call_genbutsu_defense_finite_horizon_hand_value_aw
 
 __all__ = [
     "CheapFarGuardOpenHandYakuAwareCallPolicy",
+    "ClassicalAttackLimitedMawashiPolicy",
     "FiniteHorizonCompletionPolicy",
     "GenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
     "GenbutsuDefenseFiniteHorizonValueAwarePolicy",
