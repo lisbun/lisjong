@@ -399,7 +399,7 @@ class StreamingSourceRecord:
     def games(self) -> Iterator[SourceGame]:
         """population順に1 gameずつstrict readして列挙する。"""
         for summary in self.summaries:
-            yield _read_game(self.root / f"game-{summary['game_ordinal']:03d}", summary)
+            yield read_source_game(self.root, summary)
 
     def decisions(self) -> Iterator[SourceDecision]:
         """population順（game順、game内はdecision_ordinal順）に列挙する。"""
@@ -782,6 +782,16 @@ def _open_validated(
     return summaries, header
 
 
+def read_source_game(root: Path, summary: Mapping[str, object]) -> SourceGame:
+    """`open_source_record()`で検証したgame summaryの1 gameをstrict readする。
+
+    `summary`は`StreamingSourceRecord.summaries`の要素である。payloadは
+    summaryのbyte長・SHA-256・decision数と照合する。worker processから
+    1 gameずつ読む用途（Issue #248）にも使う。
+    """
+    return _read_game(Path(root) / f"game-{summary['game_ordinal']:03d}", summary)
+
+
 def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
     """source record directoryをstrict readし、検証済みrecordを返す。
 
@@ -875,6 +885,7 @@ __all__ = [
     "SourceGame",
     "StreamingSourceRecord",
     "open_source_record",
+    "read_source_game",
     "read_source_record",
     "seed_membership_identity",
     "validate_allocation_binding",

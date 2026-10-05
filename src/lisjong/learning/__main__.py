@@ -98,6 +98,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     candidate_materialize.add_argument("--source-record", required=True)
     candidate_materialize.add_argument("--output", required=True)
+    candidate_materialize.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="convert games as shards in this many processes (output is identical)",
+    )
+    candidate_materialize.add_argument(
+        "--max-pending-shards",
+        type=int,
+        default=None,
+        help="bound on submitted, not yet concatenated shards (default 2 x workers)",
+    )
 
     candidate_train = commands.add_parser(
         "train-candidate-scorer",
@@ -183,7 +195,12 @@ def _verify(arguments) -> dict[str, object]:
 
 def _materialize_candidates(arguments) -> dict[str, object]:
     source = open_source_record(arguments.source_record)
-    manifest = publish_candidate_dataset(source, arguments.output)
+    manifest = publish_candidate_dataset(
+        source,
+        arguments.output,
+        workers=arguments.workers,
+        max_pending_shards=arguments.max_pending_shards,
+    )
     return {
         "dataset_identity": manifest["identity"],
         "output": str(arguments.output),

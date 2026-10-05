@@ -169,6 +169,16 @@ allocation_bindings`、上記参照）をbindする。既存destinationは上書
 学習側の読込み（`read_dataset()` / `read_candidate_dataset()`）は全件をメモリへ
 読む。
 
+候補datasetの変換は、`publish_candidate_dataset(..., workers=N)`（CLIは
+`materialize-candidate-dataset --workers N`）でgame単位のshardをprocess並列に
+計算できる（Issue #248）。各shardはstaging内の一時fileへ書き、親processが
+game順・判断順に連結してcandidate offsetを通し番号へ直すため、出力bytes・
+manifest・dataset identityはworker数によらず同一である。投入済みで未連結の
+shard数は`max_pending_shards`（CLIは`--max-pending-shards`、既定は2 x worker数）
+を超えず、先頭shardが遅い場合は次の投入を待つ。1 shardでも失敗したら残りを
+取り消してworkerを停止し、部分出力を残さない。並列変換には`open_source_record()`
+のrecordを使う。既定は1 worker（従来どおり）である。
+
 ## Bounded BC trainer
 
 `lisjong.learning.train_behavior_cloning(dataset, config, destination)`は、
@@ -919,7 +929,8 @@ python -m lisjong.learning train \
 python -m lisjong.learning verify-artifact --artifact <artifact>
 
 python -m lisjong.learning materialize-candidate-dataset \
-    --source-record <source-record> --output <candidate-dataset>
+    --source-record <source-record> --output <candidate-dataset> \
+    [--workers <N>] [--max-pending-shards <M>]
 
 python -m lisjong.learning train-candidate-scorer \
     --dataset <candidate-dataset> --output <candidate-artifact> \
