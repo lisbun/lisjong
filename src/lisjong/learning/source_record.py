@@ -362,39 +362,106 @@ class PlayerSafeSourceRecord:
         それらのfieldの代わりに`purpose`と`teacher`を持つ別の形を返す。
         v1 / v2の形と既存dataset / artifact identityは変更しない。
         """
-        if self.schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
-            return {
-                "allocation_bindings": None
-                if self.allocation_bindings is None
-                else {
-                    split: dict(binding)
-                    for split, binding in self.allocation_bindings.items()
-                },
-                "decision_count": self.decision_count,
-                "game_mode": self.game_mode,
-                "identity": self.identity,
-                "population": list(self.population()),
-                "purpose": self.purpose,
-                "schema": self.schema,
-                "source_contract_digest": self.source_contract_digest,
-                "teacher": dict(self.teacher),
+        return _provenance(self, self.population())
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingSourceRecord:
+    """game payloadを1 hanchanずつstrict readするsource record（Issue #247）。
+
+    `open_source_record()`が返す。manifest、game summary、file集合、seed重複、
+    allocation binding / policy populationは開く時点で`read_source_record()`と
+    同じ規則で検証する。game payloadは`decisions()`の列挙中にgameごとに
+    `read_source_record()`と同じ規則で検証し、検証済みの1 game分だけを保持する。
+    そのため保持するdecisionは半荘数に依存しない。
+
+    payloadの不整合は列挙の途中で`SourceRecordError`になる。下流のdataset
+    materializationはstaging上で列挙するため、その場合も部分出力を正式な
+    出力として残さない。identity / provenanceは`PlayerSafeSourceRecord`と同一である。
+    """
+
+    schema: str
+    identity: str
+    lock_identity: str | None
+    scientific_corpus_identity: str | None
+    game_mode: str
+    source_contract_digest: str
+    allocation_bindings: Mapping[str, Mapping[str, str]] | None
+    root: Path
+    summaries: tuple[Mapping[str, object], ...]
+    purpose: str | None = None
+    teacher: Mapping[str, str] | None = None
+
+    @property
+    def decision_count(self) -> int:
+        return sum(summary["decision_count"] for summary in self.summaries)
+
+    def games(self) -> Iterator[SourceGame]:
+        """population順に1 gameずつstrict readして列挙する。"""
+        for summary in self.summaries:
+            yield _read_game(self.root / f"game-{summary['game_ordinal']:03d}", summary)
+
+    def decisions(self) -> Iterator[SourceDecision]:
+        """population順（game順、game内はdecision_ordinal順）に列挙する。"""
+        for game in self.games():
+            yield from game.decisions
+
+    def population(self) -> tuple[dict[str, object], ...]:
+        """ordered source populationのcanonical記述を返す。
+
+        decision数はmanifestのgame summaryの値である。各gameのpayloadを
+        読む際に、実際のrow数がこの値と一致することを検証する。
+        """
+        return tuple(
+            {
+                "decision_count": summary["decision_count"],
+                "game_ordinal": summary["game_ordinal"],
+                "seed": summary["seed"],
+                "split": summary["split"],
             }
-        return {
-            "allocation_bindings": None
-            if self.allocation_bindings is None
-            else {
-                split: dict(binding)
-                for split, binding in self.allocation_bindings.items()
-            },
-            "decision_count": self.decision_count,
-            "game_mode": self.game_mode,
-            "identity": self.identity,
-            "lock_identity": self.lock_identity,
-            "population": list(self.population()),
-            "schema": self.schema,
-            "scientific_corpus_identity": self.scientific_corpus_identity,
-            "source_contract_digest": self.source_contract_digest,
+            for summary in self.summaries
+        )
+
+    def provenance(self) -> dict[str, object]:
+        """`PlayerSafeSourceRecord.provenance()`と同一の記述を返す。"""
+        return _provenance(self, self.population())
+
+
+def _provenance(
+    record: "PlayerSafeSourceRecord | StreamingSourceRecord",
+    population: tuple[dict[str, object], ...],
+) -> dict[str, object]:
+    allocation_bindings = (
+        None
+        if record.allocation_bindings is None
+        else {
+            split: dict(binding)
+            for split, binding in record.allocation_bindings.items()
         }
+    )
+    if record.schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
+        return {
+            "allocation_bindings": allocation_bindings,
+            "decision_count": record.decision_count,
+            "game_mode": record.game_mode,
+            "identity": record.identity,
+            "population": list(population),
+            "purpose": record.purpose,
+            "schema": record.schema,
+            "source_contract_digest": record.source_contract_digest,
+            "teacher": dict(record.teacher),
+        }
+    return {
+        "allocation_bindings": allocation_bindings,
+        "decision_count": record.decision_count,
+        "game_mode": record.game_mode,
+        "identity": record.identity,
+        "lock_identity": record.lock_identity,
+        "population": list(population),
+        "schema": record.schema,
+        "scientific_corpus_identity": record.scientific_corpus_identity,
+        "source_contract_digest": record.source_contract_digest,
+    }
 
 
 def _read_manifest(path: Path) -> dict[str, object]:
@@ -661,13 +728,14 @@ def _read_game(path: Path, summary: dict[str, object]) -> SourceGame:
     )
 
 
-def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
-    """source record directoryをstrict readし、検証済みrecordを返す。
+def _open_validated(
+    root: Path,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """manifest / game summary / file集合 / populationを検証する。
 
-    validationは全体としてfail closedである。1 rowでも不整合があれば、
-    成功分だけを返さず例外を送出する。
+    game payloadは読まない。戻り値はgame summaryと、record header
+    （`PlayerSafeSourceRecord`と`StreamingSourceRecord`に共通のfield）である。
     """
-    root = Path(path)
     if not root.is_dir():
         raise SourceRecordError(f"source record directory does not exist: {root}")
 
@@ -684,7 +752,6 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
 
     seeds: set[int] = set()
     seeds_by_split: dict[str, list[int]] = {}
-    games: list[SourceGame] = []
     for summary in summaries:
         if summary["seed"] in seeds:
             raise SourceRecordError(
@@ -692,37 +759,61 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
             )
         seeds.add(summary["seed"])
         seeds_by_split.setdefault(summary["split"], []).append(summary["seed"])
-        games.append(_read_game(root / f"game-{summary['game_ordinal']:03d}", summary))
 
     if manifest["schema"] == POLICY_SOURCE_RECORD_SCHEMA_V1:
-        return _policy_source_record(manifest, summaries, seeds_by_split, games)
+        header = _policy_header(manifest, summaries, seeds_by_split)
+    else:
+        allocation_bindings: dict[str, dict[str, str]] | None = None
+        if manifest["schema"] == SOURCE_RECORD_SCHEMA_V2:
+            allocation_bindings = validate_allocation_bindings(
+                manifest["allocation_bindings"],
+                populations=seeds_by_split,
+                context="manifest.allocation_bindings",
+            )
+        header = {
+            "schema": manifest["schema"],
+            "identity": manifest["identity"],
+            "lock_identity": manifest["lock_identity"],
+            "scientific_corpus_identity": manifest["scientific_corpus_identity"],
+            "game_mode": manifest["game_mode"],
+            "source_contract_digest": value_digest(manifest["source_contract"]),
+            "allocation_bindings": allocation_bindings,
+        }
+    return summaries, header
 
-    allocation_bindings: dict[str, dict[str, str]] | None = None
-    if manifest["schema"] == SOURCE_RECORD_SCHEMA_V2:
-        allocation_bindings = validate_allocation_bindings(
-            manifest["allocation_bindings"],
-            populations=seeds_by_split,
-            context="manifest.allocation_bindings",
-        )
 
-    return PlayerSafeSourceRecord(
-        schema=manifest["schema"],
-        identity=manifest["identity"],
-        lock_identity=manifest["lock_identity"],
-        scientific_corpus_identity=manifest["scientific_corpus_identity"],
-        game_mode=manifest["game_mode"],
-        source_contract_digest=value_digest(manifest["source_contract"]),
-        allocation_bindings=allocation_bindings,
-        games=tuple(games),
+def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
+    """source record directoryをstrict readし、検証済みrecordを返す。
+
+    validationは全体としてfail closedである。1 rowでも不整合があれば、
+    成功分だけを返さず例外を送出する。全gameのdecisionをメモリへ保持する。
+    半荘数に依存しないメモリで列挙する場合は`open_source_record()`を使う。
+    """
+    root = Path(path)
+    summaries, header = _open_validated(root)
+    games = tuple(
+        _read_game(root / f"game-{summary['game_ordinal']:03d}", summary)
+        for summary in summaries
     )
+    return PlayerSafeSourceRecord(**header, games=games)
 
 
-def _policy_source_record(
+def open_source_record(path: str | Path) -> StreamingSourceRecord:
+    """source record directoryを開き、game payloadを逐次readするrecordを返す。
+
+    manifest側の検証は`read_source_record()`と同じ規則で開く時点に行い、
+    game payloadの検証は`StreamingSourceRecord.decisions()`の列挙中に行う。
+    """
+    root = Path(path)
+    summaries, header = _open_validated(root)
+    return StreamingSourceRecord(**header, root=root, summaries=tuple(summaries))
+
+
+def _policy_header(
     manifest: dict[str, object],
     summaries: list[dict[str, object]],
     seeds_by_split: dict[str, list[int]],
-    games: list[SourceGame],
-) -> PlayerSafeSourceRecord:
+) -> dict[str, object]:
     """policy source recordのpopulation / purpose / bindingを検証して返す。
 
     game順はsplit順（`POLICY_SOURCE_SPLITS`）、split内はpopulationの列挙順である。
@@ -753,18 +844,17 @@ def _policy_source_record(
             populations=seeds_by_split,
             context="manifest.allocation_bindings",
         )
-    return PlayerSafeSourceRecord(
-        schema=manifest["schema"],
-        identity=manifest["identity"],
-        lock_identity=None,
-        scientific_corpus_identity=None,
-        game_mode=manifest["game_mode"],
-        source_contract_digest=value_digest(manifest["source_contract"]),
-        allocation_bindings=allocation_bindings,
-        games=tuple(games),
-        purpose=manifest["purpose"],
-        teacher=_policy_teacher(manifest),
-    )
+    return {
+        "schema": manifest["schema"],
+        "identity": manifest["identity"],
+        "lock_identity": None,
+        "scientific_corpus_identity": None,
+        "game_mode": manifest["game_mode"],
+        "source_contract_digest": value_digest(manifest["source_contract"]),
+        "allocation_bindings": allocation_bindings,
+        "purpose": manifest["purpose"],
+        "teacher": _policy_teacher(manifest),
+    }
 
 
 __all__ = [
@@ -783,6 +873,8 @@ __all__ = [
     "PlayerSafeSourceRecord",
     "SourceDecision",
     "SourceGame",
+    "StreamingSourceRecord",
+    "open_source_record",
     "read_source_record",
     "seed_membership_identity",
     "validate_allocation_binding",

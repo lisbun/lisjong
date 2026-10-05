@@ -47,7 +47,7 @@ provenanceとsource population、split別count、candidate区間の連続性に�
 
 import sys
 from array import array
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -71,9 +71,9 @@ from lisjong.learning._o0 import (
     classify_o0_decision,
 )
 from lisjong.learning._publication import (
+    appended_new_bytes,
+    appended_new_text,
     staged_publication,
-    write_new_bytes,
-    write_new_text,
 )
 from lisjong.learning._typed_values import action_to_value, parse_action
 from lisjong.learning.candidate_encoding import (
@@ -96,6 +96,7 @@ from lisjong.learning.source_record import (
     DEVELOPMENT_PURPOSE,
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
+    StreamingSourceRecord,
 )
 from lisjong.policy_contract import DecisionContext, DiscardAction, Seat
 
@@ -328,16 +329,17 @@ def _empty_split_counts() -> dict[str, int]:
     return {field: 0 for field in sorted(_SPLIT_COUNT_FIELDS)}
 
 
-def materialize_candidate_dataset(
-    source: PlayerSafeSourceRecord, destination: str | Path
-) -> CandidateDataset:
-    """source recordからcandidate datasetを決定的にmaterializeする。
+def publish_candidate_dataset(
+    source: PlayerSafeSourceRecord | StreamingSourceRecord, destination: str | Path
+) -> dict[str, object]:
+    """source recordからcandidate datasetをmaterializeし、検証済みmanifestを返す。
 
-    rowの順序はsource populationの順序（game順、game内はdecision_ordinal順）
-    を保つ。split membershipはsourceのものをそのまま使い、再配分しない。
-    既存destinationは上書きしない。
+    出力のbytes・順序・manifest identityは`materialize_candidate_dataset()`と
+    同一である（同じ実装を共有する）。decisionごとにstaging fileへ追記し、
+    公開前後の検証も逐次readで行うため、payloadをメモリへ保持しない
+    （Issue #247）。失敗時はstagingを破棄し、destinationを作らない。
     """
-    if not isinstance(source, PlayerSafeSourceRecord):
+    if not isinstance(source, (PlayerSafeSourceRecord, StreamingSourceRecord)):
         raise DatasetError("source must be a PlayerSafeSourceRecord")
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
@@ -350,75 +352,76 @@ def materialize_candidate_dataset(
 
     destination = Path(destination)
     with staged_publication(destination, DatasetError) as staging:
-        row_lines: list[str] = []
-        context_payload = bytearray()
-        candidate_payload = bytearray()
-        split_counts: dict[str, dict[str, int]] = {}
-        candidate_total = 0
-
-        for decision in source.decisions():
-            counts = split_counts.setdefault(decision.split, _empty_split_counts())
-            counts["source_decisions"] += 1
-            context = DecisionContext(
-                input=decision.policy_input, legal_actions=decision.legal_actions
-            )
-            kind = classify_o0_decision(context)
-            if kind is not O0DecisionKind.DISCARD:
-                counts[_EXCLUSION_FIELD[kind]] += 1
-                continue
-
-            try:
-                candidates = build_scorer_candidates(context)
-                encoded = encode_candidates(candidates)
-            except CandidateFeatureError as exc:
-                raise DatasetError(
-                    f"candidate materialization failed at game "
-                    f"{decision.game_ordinal} decision {decision.decision_ordinal}: "
-                    f"{exc}"
-                ) from exc
-            teacher_index = resolve_teacher_candidate(
-                candidates, decision.selected_action
-            )
-            shared = build_player_safe_feature(decision.policy_input)
-            if len(shared) != FEATURE_DIMENSION or any(
-                not isfinite(value) for value in shared
-            ):
-                raise DatasetError("shared context materialization is invalid")
-
-            row_lines.append(
-                canonical_json_line(
-                    {
-                        "actor_seat": int(decision.actor_seat),
-                        "candidate_count": len(candidates),
-                        "candidate_offset": candidate_total,
-                        "candidates": [
-                            _candidate_to_value(candidate) for candidate in candidates
-                        ],
-                        "decision_ordinal": decision.decision_ordinal,
-                        "game_ordinal": decision.game_ordinal,
-                        "seed": decision.seed,
-                        "split": decision.split,
-                        "step_ordinal": decision.step_ordinal,
-                        "teacher_candidate_index": teacher_index,
-                    }
-                )
-            )
-            context_payload += _float32_bytes(shared)
-            for vector in encoded:
-                candidate_payload += _float32_bytes(vector)
-            candidate_total += len(candidates)
-            counts["scorer_decisions"] += 1
-            counts["candidates"] += len(candidates)
-
-        decision_count = len(row_lines)
-        if decision_count == 0:
-            raise DatasetError("source record contains no scorer decisions")
         decisions_path = staging / DECISIONS_FILENAME
         context_path = staging / CONTEXT_FILENAME
         candidates_path = staging / CANDIDATES_FILENAME
-        write_new_text(decisions_path, "".join(row_lines), DatasetError)
-        write_new_bytes(context_path, bytes(context_payload), DatasetError)
-        write_new_bytes(candidates_path, bytes(candidate_payload), DatasetError)
+        split_counts: dict[str, dict[str, int]] = {}
+        candidate_total = 0
+        decision_count = 0
+
+        with (
+            appended_new_text(decisions_path, DatasetError) as decisions_stream,
+            appended_new_bytes(context_path, DatasetError) as context_stream,
+            appended_new_bytes(candidates_path, DatasetError) as candidates_stream,
+        ):
+            for decision in source.decisions():
+                counts = split_counts.setdefault(decision.split, _empty_split_counts())
+                counts["source_decisions"] += 1
+                context = DecisionContext(
+                    input=decision.policy_input, legal_actions=decision.legal_actions
+                )
+                kind = classify_o0_decision(context)
+                if kind is not O0DecisionKind.DISCARD:
+                    counts[_EXCLUSION_FIELD[kind]] += 1
+                    continue
+
+                try:
+                    candidates = build_scorer_candidates(context)
+                    encoded = encode_candidates(candidates)
+                except CandidateFeatureError as exc:
+                    raise DatasetError(
+                        f"candidate materialization failed at game "
+                        f"{decision.game_ordinal} decision {decision.decision_ordinal}: "
+                        f"{exc}"
+                    ) from exc
+                teacher_index = resolve_teacher_candidate(
+                    candidates, decision.selected_action
+                )
+                shared = build_player_safe_feature(decision.policy_input)
+                if len(shared) != FEATURE_DIMENSION or any(
+                    not isfinite(value) for value in shared
+                ):
+                    raise DatasetError("shared context materialization is invalid")
+
+                decisions_stream.write(
+                    canonical_json_line(
+                        {
+                            "actor_seat": int(decision.actor_seat),
+                            "candidate_count": len(candidates),
+                            "candidate_offset": candidate_total,
+                            "candidates": [
+                                _candidate_to_value(candidate)
+                                for candidate in candidates
+                            ],
+                            "decision_ordinal": decision.decision_ordinal,
+                            "game_ordinal": decision.game_ordinal,
+                            "seed": decision.seed,
+                            "split": decision.split,
+                            "step_ordinal": decision.step_ordinal,
+                            "teacher_candidate_index": teacher_index,
+                        }
+                    )
+                )
+                context_stream.write(_float32_bytes(shared))
+                for vector in encoded:
+                    candidates_stream.write(_float32_bytes(vector))
+                candidate_total += len(candidates)
+                counts["scorer_decisions"] += 1
+                counts["candidates"] += len(candidates)
+                decision_count += 1
+
+        if decision_count == 0:
+            raise DatasetError("source record contains no scorer decisions")
 
         manifest = seal(
             {
@@ -456,15 +459,33 @@ def materialize_candidate_dataset(
                 "source": source.provenance(),
             }
         )
-        write_new_text(
-            staging / MANIFEST_FILENAME, canonical_json_text(manifest), DatasetError
-        )
-        published = read_candidate_dataset(staging)
+        with appended_new_text(staging / MANIFEST_FILENAME, DatasetError) as stream:
+            stream.write(canonical_json_text(manifest))
+        published = verify_candidate_dataset(staging)
 
-    republished = read_candidate_dataset(destination)
-    if republished.identity != published.identity:
+    republished = verify_candidate_dataset(destination)
+    if republished["identity"] != published["identity"]:
         raise DatasetError("dataset readback identity mismatch after publication")
     return republished
+
+
+def materialize_candidate_dataset(
+    source: PlayerSafeSourceRecord | StreamingSourceRecord, destination: str | Path
+) -> CandidateDataset:
+    """source recordからcandidate datasetを決定的にmaterializeする。
+
+    rowの順序はsource populationの順序（game順、game内はdecision_ordinal順）
+    を保つ。split membershipはsourceのものをそのまま使い、再配分しない。
+    既存destinationは上書きしない。
+
+    書出しは`publish_candidate_dataset()`と同じであり、戻り値のためにdataset
+    全体をメモリへ読む。変換だけを行う場合は`publish_candidate_dataset()`を使う。
+    """
+    manifest = publish_candidate_dataset(source, destination)
+    dataset = read_candidate_dataset(destination)
+    if dataset.identity != manifest["identity"]:
+        raise DatasetError("dataset readback identity mismatch after publication")
+    return dataset
 
 
 def _read_manifest(path: Path) -> dict[str, object]:
@@ -563,10 +584,21 @@ def _read_manifest(path: Path) -> dict[str, object]:
 def _read_rows(
     path: Path, manifest: dict[str, object]
 ) -> tuple[CandidateDecisionRow, ...]:
+    return tuple(_iter_rows(path, manifest))
+
+
+def _iter_rows(
+    path: Path, manifest: dict[str, object]
+) -> Iterator[CandidateDecisionRow]:
+    """decisions.jsonlを1行ずつstrict readして列挙する。
+
+    row数・candidate数・split母数の照合は最後の行の後に行うため、呼び出し側は
+    最後まで列挙しなければならない。
+    """
     population = {
         entry["game_ordinal"]: entry for entry in manifest["source"]["population"]
     }
-    rows: list[CandidateDecisionRow] = []
+    row_count = 0
     last_position = (-1, -1)
     candidate_total = 0
     observed: dict[str, dict[str, int]] = {}
@@ -630,22 +662,21 @@ def _read_rows(
             )
             counts["candidates"] += len(candidates)
             counts["scorer_decisions"] += 1
-            rows.append(
-                CandidateDecisionRow(
-                    game_ordinal=value["game_ordinal"],
-                    seed=value["seed"],
-                    split=value["split"],
-                    step_ordinal=value["step_ordinal"],
-                    decision_ordinal=value["decision_ordinal"],
-                    actor_seat=actor_seat,
-                    candidate_offset=value["candidate_offset"],
-                    teacher_candidate_index=value["teacher_candidate_index"],
-                    candidates=candidates,
-                )
+            row_count += 1
+            yield CandidateDecisionRow(
+                game_ordinal=value["game_ordinal"],
+                seed=value["seed"],
+                split=value["split"],
+                step_ordinal=value["step_ordinal"],
+                decision_ordinal=value["decision_ordinal"],
+                actor_seat=actor_seat,
+                candidate_offset=value["candidate_offset"],
+                teacher_candidate_index=value["teacher_candidate_index"],
+                candidates=candidates,
             )
 
     manifest_rows = manifest["rows"]
-    if len(rows) != manifest_rows["scorer_decisions"]:
+    if row_count != manifest_rows["scorer_decisions"]:
         raise DatasetError("dataset decision count mismatch")
     if candidate_total != manifest_rows["candidates"]:
         raise DatasetError("dataset candidate count mismatch")
@@ -656,12 +687,10 @@ def _read_rows(
             or seen["scorer_decisions"] != counts["scorer_decisions"]
         ):
             raise DatasetError("dataset split membership accounting mismatch")
-    return tuple(rows)
 
 
-def read_candidate_dataset(path: str | Path) -> CandidateDataset:
-    """candidate dataset directoryをstrict readする。1つでも合わなければfail closed。"""
-    root = Path(path)
+def _open_checked(root: Path) -> dict[str, object]:
+    """manifest、file集合、payloadのbyte長とdigestを照合する。"""
     if not root.is_dir():
         raise DatasetError(f"dataset directory does not exist: {root}")
     manifest = _read_manifest(root)
@@ -682,6 +711,22 @@ def read_candidate_dataset(path: str | Path) -> CandidateDataset:
             or digest["sha256"] != files[name]["sha256"]
         ):
             raise DatasetError(f"dataset payload size/digest mismatch: {name}")
+    return manifest
+
+
+def _reencoded(index: int, row: CandidateDecisionRow) -> bytes:
+    """typed candidate semanticから、candidates.f32上のその区間を再encodeする。"""
+    try:
+        vectors = encode_candidates(row.candidates)
+    except CandidateFeatureError as exc:
+        raise DatasetError(f"decisions[{index}] candidates: {exc}") from exc
+    return b"".join(_float32_bytes(vector) for vector in vectors)
+
+
+def read_candidate_dataset(path: str | Path) -> CandidateDataset:
+    """candidate dataset directoryをstrict readする。1つでも合わなければfail closed。"""
+    root = Path(path)
+    manifest = _open_checked(root)
 
     rows = _read_rows(root / DECISIONS_FILENAME, manifest)
 
@@ -704,12 +749,7 @@ def read_candidate_dataset(path: str | Path) -> CandidateDataset:
     # fail closedする。
     reencoded = bytearray()
     for index, row in enumerate(rows):
-        try:
-            vectors = encode_candidates(row.candidates)
-        except CandidateFeatureError as exc:
-            raise DatasetError(f"decisions[{index}] candidates: {exc}") from exc
-        for vector in vectors:
-            reencoded += _float32_bytes(vector)
+        reencoded += _reencoded(index, row)
     if bytes(reencoded) != candidate_bytes:
         raise DatasetError(
             "dataset candidate payload does not match the typed candidate semantic"
@@ -722,6 +762,49 @@ def read_candidate_dataset(path: str | Path) -> CandidateDataset:
         context=context,
         candidates=_float32_array(candidate_bytes),
     )
+
+
+def verify_candidate_dataset(path: str | Path) -> dict[str, object]:
+    """`read_candidate_dataset()`と同じ照合を逐次readで行い、manifestを返す。
+
+    payloadをメモリへ保持しないため、使用メモリはdecision数に依存しない
+    （Issue #247）。1つでも合わなければfail closedする。
+    """
+    root = Path(path)
+    manifest = _open_checked(root)
+    files = manifest["files"]
+    rows = manifest["rows"]
+    context_row_bytes = FEATURE_DIMENSION * _FLOAT32_BYTES
+    if files[CONTEXT_FILENAME]["bytes"] != rows["scorer_decisions"] * (
+        context_row_bytes
+    ):
+        raise DatasetError("dataset context payload has an unexpected byte length")
+    if files[CANDIDATES_FILENAME]["bytes"] != (
+        rows["candidates"] * CANDIDATE_ENCODING_DIMENSION * _FLOAT32_BYTES
+    ):
+        raise DatasetError("dataset candidate payload has an unexpected byte length")
+
+    with (
+        (root / CONTEXT_FILENAME).open("rb") as context,
+        (root / CANDIDATES_FILENAME).open("rb") as candidates,
+    ):
+        for index, row in enumerate(_iter_rows(root / DECISIONS_FILENAME, manifest)):
+            context_row = context.read(context_row_bytes)
+            if len(context_row) != context_row_bytes:
+                raise DatasetError("dataset context payload ended before its rows")
+            if any(not isfinite(value) for value in _float32_array(context_row)):
+                raise DatasetError(
+                    "dataset context payload contains a non-finite value"
+                )
+            expected = _reencoded(index, row)
+            if candidates.read(len(expected)) != expected:
+                raise DatasetError(
+                    "dataset candidate payload does not match the typed candidate "
+                    "semantic"
+                )
+        if context.read(1) or candidates.read(1):
+            raise DatasetError("dataset payload has bytes beyond its rows")
+    return manifest
 
 
 __all__ = [
@@ -737,6 +820,8 @@ __all__ = [
     "CandidateDecisionRow",
     "candidate_label_block",
     "materialize_candidate_dataset",
+    "publish_candidate_dataset",
     "read_candidate_dataset",
     "resolve_teacher_candidate",
+    "verify_candidate_dataset",
 ]

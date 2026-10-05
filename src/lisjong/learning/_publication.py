@@ -17,6 +17,7 @@ atomicityを失うためである。失敗時はstagingを破棄し、destinatio
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BufferedWriter, TextIOWrapper
 from pathlib import Path
 from shutil import rmtree
 from tempfile import mkdtemp
@@ -38,6 +39,30 @@ def write_new_bytes(path: Path, data: bytes, error: type[Exception]) -> None:
             stream.write(data)
     except OSError as exc:
         raise error(f"cannot write new artifact file: {path}") from exc
+
+
+@contextmanager
+def appended_new_text(path: Path, error: type[Exception]) -> Iterator[TextIOWrapper]:
+    """既存fileを上書きせず、逐次追記するtext streamをyieldする。
+
+    `write_new_text()`と同じencoding / 改行で書く。追記中のOSErrorは、原因を
+    chainしたまま`error`へ包む。
+    """
+    try:
+        with path.open("x", encoding="utf-8", newline="\n") as stream:
+            yield stream
+    except OSError as exc:
+        raise error(f"artifact file was not completed: {path}") from exc
+
+
+@contextmanager
+def appended_new_bytes(path: Path, error: type[Exception]) -> Iterator[BufferedWriter]:
+    """既存fileを上書きせず、逐次追記するbinary streamをyieldする。"""
+    try:
+        with path.open("xb") as stream:
+            yield stream
+    except OSError as exc:
+        raise error(f"artifact file was not completed: {path}") from exc
 
 
 @contextmanager
