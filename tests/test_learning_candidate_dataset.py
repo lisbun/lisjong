@@ -19,6 +19,7 @@ from lisjong.learning import (
     materialize_candidate_dataset,
     read_candidate_dataset,
     read_source_record,
+    verify_candidate_dataset,
 )
 from lisjong.learning._canonical import canonical_json_line, file_digest
 from lisjong.learning.candidate_dataset import (
@@ -202,6 +203,13 @@ class TeacherLabelFailClosedTests(unittest.TestCase):
 
 
 class StrictReadTests(unittest.TestCase):
+    def assert_rejected(self, root, pattern=None) -> None:
+        """全件readと逐次verifyの双方が同じ改竄をfail closedで拒否する。"""
+        for reader in (read_candidate_dataset, verify_candidate_dataset):
+            with self.subTest(reader=reader.__name__):
+                with self.assertRaisesRegex(DatasetError, pattern or ""):
+                    reader(root)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -219,8 +227,7 @@ class StrictReadTests(unittest.TestCase):
         self._mutate_manifest(
             lambda body: body["encoding"].update(fingerprint="0" * 64)
         )
-        with self.assertRaisesRegex(DatasetError, "encoding"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "encoding")
 
     def test_request_policy_mismatch_fails_closed(self) -> None:
         self._mutate_manifest(
@@ -228,31 +235,26 @@ class StrictReadTests(unittest.TestCase):
                 second_step_request_policy="all-candidate"
             )
         )
-        with self.assertRaises(DatasetError):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path)
 
     def test_shared_feature_fingerprint_mismatch_fails_closed(self) -> None:
         self._mutate_manifest(lambda body: body["feature"].update(fingerprint="0" * 64))
-        with self.assertRaisesRegex(DatasetError, "shared feature"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "shared feature")
 
     def test_label_semantics_mismatch_fails_closed(self) -> None:
         self._mutate_manifest(lambda body: body["label"].update(semantics="relabel"))
-        with self.assertRaises(DatasetError):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path)
 
     def test_broken_manifest_seal_fails_closed(self) -> None:
         fixtures.mutate_manifest(self.path, lambda body: None, identity="0" * 64)
-        with self.assertRaises(DatasetError):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path)
 
     def test_payload_digest_mismatch_fails_closed(self) -> None:
         payload = self.path / CONTEXT_FILENAME
         data = bytearray(payload.read_bytes())
         data[0] ^= 0x01
         payload.write_bytes(bytes(data))
-        with self.assertRaisesRegex(DatasetError, "digest"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "digest")
 
     def test_candidate_semantic_that_disagrees_with_the_payload_fails_closed(
         self,
@@ -271,8 +273,7 @@ class StrictReadTests(unittest.TestCase):
                 file_digest(decisions)
             )
         )
-        with self.assertRaisesRegex(DatasetError, "typed candidate semantic"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "typed candidate semantic")
 
     def test_teacher_index_out_of_range_fails_closed(self) -> None:
         decisions = self.path / DECISIONS_FILENAME
@@ -288,25 +289,21 @@ class StrictReadTests(unittest.TestCase):
                 file_digest(decisions)
             )
         )
-        with self.assertRaisesRegex(DatasetError, "teacher candidate index"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "teacher candidate index")
 
     def test_exclusion_accounting_mismatch_fails_closed(self) -> None:
         self._mutate_manifest(
             lambda body: body["rows"]["splits"]["TRAIN"].update(excluded_win=0)
         )
-        with self.assertRaisesRegex(DatasetError, "exclusion accounting"):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path, "exclusion accounting")
 
     def test_unexpected_file_fails_closed(self) -> None:
         (self.path / "extra.bin").write_bytes(b"")
-        with self.assertRaises(DatasetError):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path)
 
     def test_missing_payload_fails_closed(self) -> None:
         (self.path / CANDIDATES_FILENAME).unlink()
-        with self.assertRaises(DatasetError):
-            read_candidate_dataset(self.path)
+        self.assert_rejected(self.path)
 
 
 def _f32(values):

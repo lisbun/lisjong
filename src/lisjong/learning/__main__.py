@@ -39,7 +39,7 @@ from lisjong.learning._canonical import canonical_json_text
 from lisjong.learning.artifact import load_model_artifact
 from lisjong.learning.candidate_artifact import load_candidate_artifact
 from lisjong.learning.candidate_dataset import (
-    materialize_candidate_dataset,
+    publish_candidate_dataset,
     read_candidate_dataset,
 )
 from lisjong.learning.candidate_diagnostics import (
@@ -52,10 +52,10 @@ from lisjong.learning.candidate_training import (
     CandidateScorerTrainingConfig,
     train_candidate_scorer,
 )
-from lisjong.learning.dataset import materialize_dataset, read_dataset
+from lisjong.learning.dataset import publish_dataset, read_dataset
 from lisjong.learning.errors import LearningError
 from lisjong.learning.model import ModelConfig
-from lisjong.learning.source_record import read_source_record
+from lisjong.learning.source_record import open_source_record, read_source_record
 from lisjong.learning.training import BehaviorCloningConfig, train_behavior_cloning
 
 
@@ -134,14 +134,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _materialize(arguments) -> dict[str, object]:
-    source = read_source_record(arguments.source_record)
-    dataset = materialize_dataset(source, arguments.output)
+    # source / datasetを全件保持せずに変換する（Issue #247）。
+    source = open_source_record(arguments.source_record)
+    manifest = publish_dataset(source, arguments.output)
     return {
-        "dataset_identity": dataset.identity,
+        "dataset_identity": manifest["identity"],
         "output": str(arguments.output),
-        "row_count": dataset.row_count,
+        "row_count": manifest["rows"]["count"],
         "source_identity": source.identity,
-        "splits": dict(sorted(dataset.split_counts().items())),
+        "splits": dict(sorted(manifest["rows"]["splits"].items())),
     }
 
 
@@ -181,12 +182,12 @@ def _verify(arguments) -> dict[str, object]:
 
 
 def _materialize_candidates(arguments) -> dict[str, object]:
-    source = read_source_record(arguments.source_record)
-    dataset = materialize_candidate_dataset(source, arguments.output)
+    source = open_source_record(arguments.source_record)
+    manifest = publish_candidate_dataset(source, arguments.output)
     return {
-        "dataset_identity": dataset.identity,
+        "dataset_identity": manifest["identity"],
         "output": str(arguments.output),
-        "rows": dataset.manifest["rows"],
+        "rows": manifest["rows"],
         "source_identity": source.identity,
     }
 

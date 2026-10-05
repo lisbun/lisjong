@@ -156,6 +156,19 @@ allocation_bindings`、上記参照）をbindする。既存destinationは上書
 照合してstrict readする。同じsource recordから再materializeすると同一identityに
 なる。`materialize_dataset()`はschema v2のsource recordだけを受け付ける。
 
+変換のメモリはsourceの半荘数に依存しない（Issue #247）。
+`open_source_record()`はmanifest側を開く時点で`read_source_record()`と同じ規則で
+検証し、game payloadは列挙中に1 gameずつ同じ規則で検証する。
+`publish_dataset()` / `publish_candidate_dataset()`はdecisionごとにstaging fileへ
+追記し、公開前後の検証も`verify_dataset()` / `verify_candidate_dataset()`の
+逐次readで行い、検証済みmanifestを返す。出力bytes・manifest identityは
+`materialize_*()`と同一であり、`materialize_*()`は同じ書出しの後に戻り値の
+ためdataset全体を読む。変換の途中（後続gameのpayload不整合を含む）で失敗した
+場合はstagingを破棄し、部分出力を正式な出力として残さない。CLIの
+`materialize-dataset` / `materialize-candidate-dataset`はこの逐次経路を使う。
+学習側の読込み（`read_dataset()` / `read_candidate_dataset()`）は全件をメモリへ
+読む。
+
 ## Bounded BC trainer
 
 `lisjong.learning.train_behavior_cloning(dataset, config, destination)`は、

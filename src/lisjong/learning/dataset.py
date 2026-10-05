@@ -40,7 +40,7 @@ code / factory / callableのserializeは提供しない。
 
 import sys
 from array import array
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -65,9 +65,9 @@ from lisjong.learning._canonical import (
     unseal,
 )
 from lisjong.learning._publication import (
+    appended_new_bytes,
+    appended_new_text,
     staged_publication,
-    write_new_bytes,
-    write_new_text,
 )
 from lisjong.learning._typed_values import vocabulary_fingerprint
 from lisjong.learning.errors import DatasetError, SourceRecordError
@@ -83,6 +83,7 @@ from lisjong.learning.source_record import (
     SCIENTIFIC_PURPOSE,
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
+    StreamingSourceRecord,
     validate_allocation_bindings,
 )
 from lisjong.policy_contract import DecisionContext, Seat
@@ -374,31 +375,34 @@ def validate_source_block(
     return source
 
 
-def materialize_dataset(
-    source: PlayerSafeSourceRecord, destination: str | Path
-) -> "LearningDataset":
-    """source recordからdatasetを決定的にmaterializeし、strict readで返す。
-
-    rowの順序はsource populationの順序（game順、game内はdecision_ordinal順）
-    をそのまま保持する。既存destinationは上書きしない。同じsource recordから
-    再materializeすると、同じmanifest identityと同じpayload digestになる。
-
-    `source`はschema v2（Arena allocation binding provenance付き）でなければ
-    ならない。historical schema v1のsource recordはallocation provenanceを
-    持たないため、それを推測で補完してdatasetを作ることはしない。v1
-    readbackはこのIssueのcanonical first-slice datasetの入力にはならない。
-    """
-    if not isinstance(source, PlayerSafeSourceRecord):
+def _check_source(source: object, *, purpose_text: str) -> None:
+    if not isinstance(source, (PlayerSafeSourceRecord, StreamingSourceRecord)):
         raise DatasetError("source must be a PlayerSafeSourceRecord")
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
     if source.allocation_bindings is None and source.purpose != DEVELOPMENT_PURPOSE:
         raise DatasetError(
-            "dataset materialization requires a source record with Arena "
+            f"{purpose_text} requires a source record with Arena "
             "allocation provenance (schema "
             f"{SOURCE_RECORD_SCHEMA_V2!r}); got schema {source.schema!r} "
             "without allocation_bindings"
         )
+
+
+def publish_dataset(
+    source: PlayerSafeSourceRecord | StreamingSourceRecord, destination: str | Path
+) -> dict[str, object]:
+    """source recordからdatasetを決定的にmaterializeし、検証済みmanifestを返す。
+
+    出力のbytes・順序・manifest identityは`materialize_dataset()`と同一である
+    （同じ実装を共有する）。違いはpayloadをメモリへ読み戻さないことだけであり、
+    rowは判断ごとにstaging fileへ追記し、公開前後の検証も逐次readで行う
+    （Issue #247）。`StreamingSourceRecord`と組み合わせると、変換中に保持する
+    のは1 game分のdecisionとmanifestの数え上げだけになる。
+
+    失敗時はstagingを破棄し、destinationを作らない（fail closed）。
+    """
+    _check_source(source, purpose_text="dataset materialization")
 
     destination = Path(destination)
     with staged_publication(destination, DatasetError) as staging:
@@ -406,52 +410,53 @@ def materialize_dataset(
         features_path = staging / FEATURES_FILENAME
         mask_path = staging / LEGAL_MASK_FILENAME
 
-        row_lines: list[str] = []
-        feature_payload = bytearray()
-        mask_payload = bytearray()
+        row_count = 0
         split_counts: dict[str, int] = {}
-
-        for decision in source.decisions():
-            context = DecisionContext(
-                input=decision.policy_input, legal_actions=decision.legal_actions
-            )
-            mask = build_legal_action_mask(context)
-            teacher_index = encode_action(decision.selected_action)
-            if not mask[teacher_index]:
-                raise DatasetError(
-                    "teacher selected action is not legal under the bound vocabulary"
+        with (
+            appended_new_text(rows_path, DatasetError) as rows_stream,
+            appended_new_bytes(features_path, DatasetError) as features_stream,
+            appended_new_bytes(mask_path, DatasetError) as mask_stream,
+        ):
+            for decision in source.decisions():
+                context = DecisionContext(
+                    input=decision.policy_input, legal_actions=decision.legal_actions
                 )
-            values = build_player_safe_feature(decision.policy_input)
-            if len(values) != FEATURE_DIMENSION:
-                raise DatasetError("feature materialization produced a wrong length")
-            if any(not isfinite(value) for value in values):
-                raise DatasetError(
-                    "feature materialization produced a non-finite value"
-                )
+                mask = build_legal_action_mask(context)
+                teacher_index = encode_action(decision.selected_action)
+                if not mask[teacher_index]:
+                    raise DatasetError(
+                        "teacher selected action is not legal under the bound "
+                        "vocabulary"
+                    )
+                values = build_player_safe_feature(decision.policy_input)
+                if len(values) != FEATURE_DIMENSION:
+                    raise DatasetError(
+                        "feature materialization produced a wrong length"
+                    )
+                if any(not isfinite(value) for value in values):
+                    raise DatasetError(
+                        "feature materialization produced a non-finite value"
+                    )
 
-            legal_count = sum(1 for flag in mask if flag)
-            row_lines.append(
-                canonical_json_line(
-                    {
-                        "actor_seat": int(decision.actor_seat),
-                        "decision_ordinal": decision.decision_ordinal,
-                        "game_ordinal": decision.game_ordinal,
-                        "legal_action_count": legal_count,
-                        "seed": decision.seed,
-                        "split": decision.split,
-                        "step_ordinal": decision.step_ordinal,
-                        "teacher_action_index": teacher_index,
-                    }
+                legal_count = sum(1 for flag in mask if flag)
+                rows_stream.write(
+                    canonical_json_line(
+                        {
+                            "actor_seat": int(decision.actor_seat),
+                            "decision_ordinal": decision.decision_ordinal,
+                            "game_ordinal": decision.game_ordinal,
+                            "legal_action_count": legal_count,
+                            "seed": decision.seed,
+                            "split": decision.split,
+                            "step_ordinal": decision.step_ordinal,
+                            "teacher_action_index": teacher_index,
+                        }
+                    )
                 )
-            )
-            feature_payload += _float32_bytes(values)
-            mask_payload += bytes(1 if flag else 0 for flag in mask)
-            split_counts[decision.split] = split_counts.get(decision.split, 0) + 1
-
-        row_count = len(row_lines)
-        write_new_text(rows_path, "".join(row_lines), DatasetError)
-        write_new_bytes(features_path, bytes(feature_payload), DatasetError)
-        write_new_bytes(mask_path, bytes(mask_payload), DatasetError)
+                features_stream.write(_float32_bytes(values))
+                mask_stream.write(bytes(1 if flag else 0 for flag in mask))
+                split_counts[decision.split] = split_counts.get(decision.split, 0) + 1
+                row_count += 1
 
         manifest = seal(
             {
@@ -484,15 +489,39 @@ def materialize_dataset(
                 "vocabulary": vocabulary_block(),
             }
         )
-        write_new_text(
-            staging / MANIFEST_FILENAME, canonical_json_text(manifest), DatasetError
-        )
-        published = read_dataset(staging)
+        with appended_new_text(staging / MANIFEST_FILENAME, DatasetError) as stream:
+            stream.write(canonical_json_text(manifest))
+        published = verify_dataset(staging)
 
-    republished = read_dataset(destination)
-    if republished.identity != published.identity:
+    republished = verify_dataset(destination)
+    if republished["identity"] != published["identity"]:
         raise DatasetError("dataset readback identity mismatch after publication")
     return republished
+
+
+def materialize_dataset(
+    source: PlayerSafeSourceRecord | StreamingSourceRecord, destination: str | Path
+) -> "LearningDataset":
+    """source recordからdatasetを決定的にmaterializeし、strict readで返す。
+
+    rowの順序はsource populationの順序（game順、game内はdecision_ordinal順）
+    をそのまま保持する。既存destinationは上書きしない。同じsource recordから
+    再materializeすると、同じmanifest identityと同じpayload digestになる。
+
+    `source`はschema v2（Arena allocation binding provenance付き）でなければ
+    ならない。historical schema v1のsource recordはallocation provenanceを
+    持たないため、それを推測で補完してdatasetを作ることはしない。v1
+    readbackはこのIssueのcanonical first-slice datasetの入力にはならない。
+
+    書出しは`publish_dataset()`と同じであり、戻り値のためにdataset全体を
+    メモリへ読む。半荘数に依存しないメモリで変換だけを行う場合は
+    `publish_dataset()`を使う。
+    """
+    manifest = publish_dataset(source, destination)
+    dataset = read_dataset(destination)
+    if dataset.identity != manifest["identity"]:
+        raise DatasetError("dataset readback identity mismatch after publication")
+    return dataset
 
 
 def _read_manifest(path: Path) -> dict[str, object]:
@@ -573,12 +602,23 @@ def _read_manifest(path: Path) -> dict[str, object]:
 
 
 def _read_rows(path: Path, manifest: dict[str, object]) -> tuple[DatasetRow, ...]:
+    return tuple(_iter_rows(path, manifest))
+
+
+def _iter_rows(path: Path, manifest: dict[str, object]) -> Iterator[DatasetRow]:
+    """rows.jsonlを1行ずつstrict readして列挙する。
+
+    population全体にわたる照合（hanchanごとのdecision数、row数、split母数）は
+    最後の行の後に行うため、呼び出し側は最後まで列挙しなければならない。
+    """
     population = manifest["source"]["population"]
     expected_splits = {
         entry["game_ordinal"]: (entry["seed"], entry["split"], entry["decision_count"])
         for entry in population
     }
-    rows: list[DatasetRow] = []
+    row_count = 0
+    seen_games: set[int] = set()
+    observed: dict[str, int] = {}
     last_game = 0
     ordinal_in_game = 0
     with path.open(encoding="utf-8", newline="\n") as stream:
@@ -627,41 +667,32 @@ def _read_rows(path: Path, manifest: dict[str, object]) -> tuple[DatasetRow, ...
             except ValueError:
                 raise DatasetError(f"{context} actor seat is invalid") from None
 
-            rows.append(
-                DatasetRow(
-                    game_ordinal=game_ordinal,
-                    seed=seed,
-                    split=split,
-                    step_ordinal=value["step_ordinal"],
-                    decision_ordinal=value["decision_ordinal"],
-                    actor_seat=actor_seat,
-                    legal_action_count=value["legal_action_count"],
-                    teacher_action_index=value["teacher_action_index"],
-                )
+            row_count += 1
+            seen_games.add(game_ordinal)
+            observed[split] = observed.get(split, 0) + 1
+            yield DatasetRow(
+                game_ordinal=game_ordinal,
+                seed=seed,
+                split=split,
+                step_ordinal=value["step_ordinal"],
+                decision_ordinal=value["decision_ordinal"],
+                actor_seat=actor_seat,
+                legal_action_count=value["legal_action_count"],
+                teacher_action_index=value["teacher_action_index"],
             )
 
-    if rows and ordinal_in_game != expected_splits[last_game][2]:
+    if row_count and ordinal_in_game != expected_splits[last_game][2]:
         raise DatasetError("dataset hanchan decision accounting mismatch")
-    if len(rows) != manifest["rows"]["count"]:
+    if row_count != manifest["rows"]["count"]:
         raise DatasetError("dataset row count mismatch")
-    if len({row.game_ordinal for row in rows}) != len(expected_splits):
+    if len(seen_games) != len(expected_splits):
         raise DatasetError("dataset is missing source hanchan rows")
-    observed: dict[str, int] = {}
-    for row in rows:
-        observed[row.split] = observed.get(row.split, 0) + 1
     if observed != manifest["rows"]["splits"]:
         raise DatasetError("dataset split membership accounting mismatch")
-    return tuple(rows)
 
 
-def read_dataset(path: str | Path) -> LearningDataset:
-    """dataset directoryをstrict readする。
-
-    manifest identity、bindされたfeature / vocabulary / label identity、
-    payloadのbyte長とdigest、row provenance、ordering、split母数、legal mask
-    とteacher labelの整合をすべて照合する。1つでも合わなければfail closedする。
-    """
-    root = Path(path)
+def _open_checked(root: Path) -> dict[str, object]:
+    """manifest、file集合、payloadのbyte長とdigestを照合する。"""
     if not root.is_dir():
         raise DatasetError(f"dataset directory does not exist: {root}")
     manifest = _read_manifest(root)
@@ -683,6 +714,25 @@ def read_dataset(path: str | Path) -> LearningDataset:
             or digest["sha256"] != files[name]["sha256"]
         ):
             raise DatasetError(f"dataset payload size/digest mismatch: {name}")
+    return manifest
+
+
+def _check_mask_row(index: int, row: DatasetRow, mask_row: bytes) -> None:
+    if sum(mask_row) != row.legal_action_count:
+        raise DatasetError(f"rows[{index}] legal action count mismatch")
+    if not mask_row[row.teacher_action_index]:
+        raise DatasetError(f"rows[{index}] teacher label is not legal")
+
+
+def read_dataset(path: str | Path) -> LearningDataset:
+    """dataset directoryをstrict readする。
+
+    manifest identity、bindされたfeature / vocabulary / label identity、
+    payloadのbyte長とdigest、row provenance、ordering、split母数、legal mask
+    とteacher labelの整合をすべて照合する。1つでも合わなければfail closedする。
+    """
+    root = Path(path)
+    manifest = _open_checked(root)
 
     row_count = manifest["rows"]["count"]
     rows = _read_rows(root / ROWS_FILENAME, manifest)
@@ -702,11 +752,7 @@ def read_dataset(path: str | Path) -> LearningDataset:
 
     for index, row in enumerate(rows):
         start = index * _MASK_ROW_BYTES
-        mask_row = legal_mask[start : start + _MASK_ROW_BYTES]
-        if sum(mask_row) != row.legal_action_count:
-            raise DatasetError(f"rows[{index}] legal action count mismatch")
-        if not mask_row[row.teacher_action_index]:
-            raise DatasetError(f"rows[{index}] teacher label is not legal")
+        _check_mask_row(index, row, legal_mask[start : start + _MASK_ROW_BYTES])
 
     return LearningDataset(
         identity=manifest["identity"],
@@ -715,6 +761,45 @@ def read_dataset(path: str | Path) -> LearningDataset:
         features=features,
         legal_mask=legal_mask,
     )
+
+
+def verify_dataset(path: str | Path) -> dict[str, object]:
+    """`read_dataset()`と同じ照合を逐次readで行い、検証済みmanifestを返す。
+
+    payloadをメモリへ保持しないため、使用メモリはrow数に依存しない
+    （Issue #247）。1つでも合わなければfail closedする。
+    """
+    root = Path(path)
+    manifest = _open_checked(root)
+    files = manifest["files"]
+    row_count = manifest["rows"]["count"]
+    if files[FEATURES_FILENAME]["bytes"] != row_count * _FEATURE_ROW_BYTES:
+        raise DatasetError("dataset feature payload has an unexpected byte length")
+    if files[LEGAL_MASK_FILENAME]["bytes"] != row_count * _MASK_ROW_BYTES:
+        raise DatasetError("dataset legal mask payload has an unexpected byte length")
+
+    with (
+        (root / FEATURES_FILENAME).open("rb") as features,
+        (root / LEGAL_MASK_FILENAME).open("rb") as legal_mask,
+    ):
+        for index, row in enumerate(_iter_rows(root / ROWS_FILENAME, manifest)):
+            feature_row = features.read(_FEATURE_ROW_BYTES)
+            mask_row = legal_mask.read(_MASK_ROW_BYTES)
+            if (
+                len(feature_row) != _FEATURE_ROW_BYTES
+                or len(mask_row) != _MASK_ROW_BYTES
+            ):
+                raise DatasetError("dataset payload ended before its rows")
+            if any(not isfinite(value) for value in _float32_array(feature_row)):
+                raise DatasetError(
+                    "dataset feature payload contains a non-finite value"
+                )
+            if any(flag not in (0, 1) for flag in mask_row):
+                raise DatasetError("dataset legal mask payload must contain only 0 / 1")
+            _check_mask_row(index, row, mask_row)
+        if features.read(1) or legal_mask.read(1):
+            raise DatasetError("dataset payload has bytes beyond its rows")
+    return manifest
 
 
 __all__ = [
@@ -731,7 +816,9 @@ __all__ = [
     "feature_block",
     "label_block",
     "materialize_dataset",
+    "publish_dataset",
     "read_dataset",
     "validate_source_block",
+    "verify_dataset",
     "vocabulary_block",
 ]

@@ -20,6 +20,7 @@ from lisjong.learning import (
     materialize_dataset,
     read_dataset,
     read_source_record,
+    verify_dataset,
 )
 from lisjong.learning._canonical import canonical_json_line
 from lisjong.learning.dataset import (
@@ -34,6 +35,13 @@ from lisjong.learning.dataset import (
 
 
 class DatasetTests(unittest.TestCase):
+    def assert_rejected(self, root, pattern=None) -> None:
+        """全件readと逐次verifyの双方が同じ改竄をfail closedで拒否する。"""
+        for reader in (read_dataset, verify_dataset):
+            with self.subTest(reader=reader.__name__):
+                with self.assertRaisesRegex(DatasetError, pattern or ""):
+                    reader(root)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -158,8 +166,7 @@ class DatasetTests(unittest.TestCase):
             lambda body: body.update(dataset_schema="lisjong-future-dataset-v9"),
         )
 
-        with self.assertRaisesRegex(DatasetError, "unsupported dataset schema"):
-            read_dataset(root)
+        self.assert_rejected(root, "unsupported dataset schema")
 
     def test_feature_identity_mismatch_rejected(self) -> None:
         self.dataset()
@@ -171,8 +178,7 @@ class DatasetTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(DatasetError, "feature identity"):
-            read_dataset(root)
+        self.assert_rejected(root, "feature identity")
 
     def test_feature_fingerprint_mismatch_rejected(self) -> None:
         self.dataset()
@@ -181,16 +187,14 @@ class DatasetTests(unittest.TestCase):
             root, lambda body: body["feature"].update(fingerprint="0" * 64)
         )
 
-        with self.assertRaisesRegex(DatasetError, "feature identity"):
-            read_dataset(root)
+        self.assert_rejected(root, "feature identity")
 
     def test_vocabulary_mismatch_rejected(self) -> None:
         self.dataset()
         root = self.root / "dataset"
         fixtures.mutate_manifest(root, lambda body: body["vocabulary"].update(size=1))
 
-        with self.assertRaisesRegex(DatasetError, "vocabulary identity"):
-            read_dataset(root)
+        self.assert_rejected(root, "vocabulary identity")
 
     def test_label_semantics_mismatch_rejected(self) -> None:
         self.dataset()
@@ -199,8 +203,7 @@ class DatasetTests(unittest.TestCase):
             root, lambda body: body["label"].update(semantics="other-teacher-v1")
         )
 
-        with self.assertRaisesRegex(DatasetError, "label semantics"):
-            read_dataset(root)
+        self.assert_rejected(root, "label semantics")
 
     def test_source_population_tampering_rejected(self) -> None:
         self.dataset()
@@ -210,8 +213,7 @@ class DatasetTests(unittest.TestCase):
             lambda body: body["source"]["population"][0].update(decision_count=99),
         )
 
-        with self.assertRaisesRegex(DatasetError, "accounting mismatch"):
-            read_dataset(root)
+        self.assert_rejected(root, "accounting mismatch")
 
     def test_source_seed_reuse_rejected(self) -> None:
         self.dataset()
@@ -223,8 +225,7 @@ class DatasetTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(DatasetError, "reuses a seed"):
-            read_dataset(root)
+        self.assert_rejected(root, "reuses a seed")
 
     def test_tampered_allocation_identity_rejected(self) -> None:
         self.dataset()
@@ -236,8 +237,7 @@ class DatasetTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(DatasetError, "SHA-256"):
-            read_dataset(root)
+        self.assert_rejected(root, "SHA-256")
 
     def test_tampered_seed_membership_identity_rejected(self) -> None:
         """population(TRAIN=seed 100)と矛盾するbindingはfail closedする。"""
@@ -250,8 +250,7 @@ class DatasetTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(DatasetError, "contradicts the source population"):
-            read_dataset(root)
+        self.assert_rejected(root, "contradicts the source population")
 
     def test_allocation_binding_split_mismatch_rejected(self) -> None:
         self.dataset()
@@ -287,8 +286,7 @@ class DatasetTests(unittest.TestCase):
             root, lambda body: body["source"].pop("allocation_bindings")
         )
 
-        with self.assertRaisesRegex(DatasetError, "unexpected fields"):
-            read_dataset(root)
+        self.assert_rejected(root, "unexpected fields")
 
     def test_manifest_identity_tampering_rejected(self) -> None:
         self.dataset()
@@ -296,8 +294,7 @@ class DatasetTests(unittest.TestCase):
         body = fixtures.read_manifest_body(root)
         fixtures.rewrite_manifest(root, body, identity="0" * 64)
 
-        with self.assertRaisesRegex(DatasetError, "identity mismatch"):
-            read_dataset(root)
+        self.assert_rejected(root, "identity mismatch")
 
     def test_payload_digest_mismatch_rejected(self) -> None:
         self.dataset()
@@ -305,8 +302,7 @@ class DatasetTests(unittest.TestCase):
         payload = root / FEATURES_FILENAME
         payload.write_bytes(payload.read_bytes()[:-4])
 
-        with self.assertRaisesRegex(DatasetError, "digest mismatch"):
-            read_dataset(root)
+        self.assert_rejected(root, "digest mismatch")
 
     def test_non_finite_feature_payload_rejected(self) -> None:
         self.dataset()
@@ -323,8 +319,7 @@ class DatasetTests(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(DatasetError, "non-finite"):
-            read_dataset(root)
+        self.assert_rejected(root, "non-finite")
 
     def test_row_reordering_rejected(self) -> None:
         self.dataset()
@@ -336,8 +331,7 @@ class DatasetTests(unittest.TestCase):
         )
         self._refresh_digest(root, ROWS_FILENAME)
 
-        with self.assertRaisesRegex(DatasetError, "decision ordinal"):
-            read_dataset(root)
+        self.assert_rejected(root, "decision ordinal")
 
     def test_teacher_label_outside_the_legal_mask_rejected(self) -> None:
         dataset = self.dataset()
@@ -352,28 +346,24 @@ class DatasetTests(unittest.TestCase):
             root, 0, "legal_action_count", sum(mask[:ACTION_VOCABULARY_SIZE])
         )
 
-        with self.assertRaisesRegex(DatasetError, "teacher label is not legal"):
-            read_dataset(root)
+        self.assert_rejected(root, "teacher label is not legal")
 
     def test_legal_action_count_mismatch_rejected(self) -> None:
         self.dataset()
         root = self.root / "dataset"
         self._set_row_field(root, 0, "legal_action_count", 1)
 
-        with self.assertRaisesRegex(DatasetError, "legal action count mismatch"):
-            read_dataset(root)
+        self.assert_rejected(root, "legal action count mismatch")
 
     def test_unexpected_dataset_file_rejected(self) -> None:
         self.dataset()
         root = self.root / "dataset"
         (root / "notes.txt").write_text("extra\n", encoding="utf-8")
 
-        with self.assertRaisesRegex(DatasetError, "missing/unexpected"):
-            read_dataset(root)
+        self.assert_rejected(root, "missing/unexpected")
 
     def test_missing_directory_rejected(self) -> None:
-        with self.assertRaisesRegex(DatasetError, "does not exist"):
-            read_dataset(self.root / "absent")
+        self.assert_rejected(self.root / "absent", "does not exist")
 
     def _refresh_digest(self, root: Path, name: str) -> None:
         payload = (root / name).read_bytes()
