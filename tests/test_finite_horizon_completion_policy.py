@@ -1801,6 +1801,7 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
             set(policies.__all__),
             {
                 "CheapFarGuardOpenHandYakuAwareCallPolicy",
+                "ClassicalAttackLimitedMawashiPolicy",
                 "FiniteHorizonCompletionPolicy",
                 "GenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
                 "GenbutsuDefenseFiniteHorizonValueAwarePolicy",

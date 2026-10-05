@@ -822,6 +822,7 @@ class CrossPolicyPrivateImportTest(unittest.TestCase):
     def test_promoted_semantics_are_imported_from_the_reusable_component(self) -> None:
         """旧private helperを使っていたconsumerが新componentへ依存する。"""
         expected_consumers = {
+            "attack_limited_mawashi_placement_aware_speed_call.py",
             "experimental_hand_belief_sensitivity.py",
             "finite_horizon_completion.py",
             "genbutsu_defense_finite_horizon_hand_value_aware.py",

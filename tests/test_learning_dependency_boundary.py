@@ -90,6 +90,7 @@ _LEARNING_MODULES = (
     "lisjong.learning.riichi_deal_in_estimator",
     "lisjong.learning.riichi_deal_in_evaluation",
     "lisjong.learning.riichi_deal_in_source",
+    "lisjong.learning.riichi_wait_mawashi_policy",
     "lisjong.learning.source_record",
     "lisjong.learning.training",
     "lisjong.learning.__main__",
