@@ -45,9 +45,13 @@ provenanceとsource population、split別count、candidate区間の連続性に�
 で再encodeした値がcandidates.f32と一致することを照合する。
 """
 
+import shutil
 import sys
 from array import array
+from collections import deque
 from collections.abc import Iterator, Mapping
+from concurrent.futures import Executor, Future, ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -97,6 +101,7 @@ from lisjong.learning.source_record import (
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
     StreamingSourceRecord,
+    read_source_game,
 )
 from lisjong.policy_contract import DecisionContext, DiscardAction, Seat
 
@@ -179,6 +184,11 @@ _EXCLUSION_FIELD = {
     O0DecisionKind.RIICHI: "excluded_riichi",
     O0DecisionKind.RESPONSE: "excluded_response",
 }
+
+
+_SHARD_DIRECTORY = ".shards"
+"""並列変換中のshard一時file置き場（staging内、公開前に削除する）。"""
+_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,8 +339,195 @@ def _empty_split_counts() -> dict[str, int]:
     return {field: 0 for field in sorted(_SPLIT_COUNT_FIELDS)}
 
 
+def _materialize_decision(
+    decision, counts: dict[str, int], candidate_offset: int
+) -> tuple[str, bytes, bytes, int] | None:
+    """1 decisionをrow / context / candidate bytesへ変換する。対象外は`None`。
+
+    `counts`（そのdecisionのsplitの数え上げ）を更新する。
+    """
+    counts["source_decisions"] += 1
+    context = DecisionContext(
+        input=decision.policy_input, legal_actions=decision.legal_actions
+    )
+    kind = classify_o0_decision(context)
+    if kind is not O0DecisionKind.DISCARD:
+        counts[_EXCLUSION_FIELD[kind]] += 1
+        return None
+
+    try:
+        candidates = build_scorer_candidates(context)
+        encoded = encode_candidates(candidates)
+    except CandidateFeatureError as exc:
+        raise DatasetError(
+            f"candidate materialization failed at game "
+            f"{decision.game_ordinal} decision {decision.decision_ordinal}: "
+            f"{exc}"
+        ) from exc
+    teacher_index = resolve_teacher_candidate(candidates, decision.selected_action)
+    shared = build_player_safe_feature(decision.policy_input)
+    if len(shared) != FEATURE_DIMENSION or any(not isfinite(value) for value in shared):
+        raise DatasetError("shared context materialization is invalid")
+
+    line = canonical_json_line(
+        {
+            "actor_seat": int(decision.actor_seat),
+            "candidate_count": len(candidates),
+            "candidate_offset": candidate_offset,
+            "candidates": [_candidate_to_value(candidate) for candidate in candidates],
+            "decision_ordinal": decision.decision_ordinal,
+            "game_ordinal": decision.game_ordinal,
+            "seed": decision.seed,
+            "split": decision.split,
+            "step_ordinal": decision.step_ordinal,
+            "teacher_candidate_index": teacher_index,
+        }
+    )
+    counts["scorer_decisions"] += 1
+    counts["candidates"] += len(candidates)
+    return (
+        line,
+        _float32_bytes(shared),
+        b"".join(_float32_bytes(vector) for vector in encoded),
+        len(candidates),
+    )
+
+
+@contextmanager
+def _payload_streams(root: Path) -> Iterator[tuple]:
+    """decisions / context / candidatesの新規fileへ追記するstreamをyieldする。"""
+    with (
+        appended_new_text(root / DECISIONS_FILENAME, DatasetError) as decisions,
+        appended_new_bytes(root / CONTEXT_FILENAME, DatasetError) as context,
+        appended_new_bytes(root / CANDIDATES_FILENAME, DatasetError) as candidates,
+    ):
+        yield decisions, context, candidates
+
+
+def _write_decisions(
+    decisions, streams: tuple, split_counts: dict[str, dict[str, int]]
+) -> tuple[int, int]:
+    """decision列を追記し、(scorer decision数, candidate数)を返す。
+
+    `candidate_offset`はこの呼出しで書く区間の先頭を0とする。
+    """
+    decisions_stream, context_stream, candidates_stream = streams
+    decision_count = 0
+    candidate_total = 0
+    for decision in decisions:
+        counts = split_counts.setdefault(decision.split, _empty_split_counts())
+        result = _materialize_decision(decision, counts, candidate_total)
+        if result is None:
+            continue
+        line, shared, candidates, count = result
+        decisions_stream.write(line)
+        context_stream.write(shared)
+        candidates_stream.write(candidates)
+        decision_count += 1
+        candidate_total += count
+    return decision_count, candidate_total
+
+
+def _materialize_shard(root: str, summary: dict[str, object], shard: str) -> dict:
+    """1 game（shard）をstrict readし、shard directoryへ変換結果を書く。
+
+    worker processで実行する。candidate_offsetはshard内の相対値であり、
+    親processが連結時にgame順の通し番号へ直す。
+    """
+    game = read_source_game(Path(root), summary)
+    split_counts: dict[str, dict[str, int]] = {}
+    with _payload_streams(Path(shard)) as streams:
+        decisions, candidates = _write_decisions(game.decisions, streams, split_counts)
+    return {
+        "candidates": candidates,
+        "scorer_decisions": decisions,
+        "split_counts": split_counts,
+    }
+
+
+def _shard_executor(workers: int) -> Executor:
+    return ProcessPoolExecutor(max_workers=workers)
+
+
+def _append_shard(shard: Path, streams: tuple, candidate_base: int) -> None:
+    decisions_stream, context_stream, candidates_stream = streams
+    with (shard / DECISIONS_FILENAME).open(encoding="utf-8", newline="\n") as rows:
+        for line in rows:
+            value = parse_json_text(line, DatasetError, "shard decision row")
+            value["candidate_offset"] += candidate_base
+            decisions_stream.write(canonical_json_line(value))
+    for name, stream in (
+        (CONTEXT_FILENAME, context_stream),
+        (CANDIDATES_FILENAME, candidates_stream),
+    ):
+        with (shard / name).open("rb") as payload:
+            shutil.copyfileobj(payload, stream, _COPY_CHUNK_BYTES)
+
+
+def _write_shards(
+    source: StreamingSourceRecord,
+    staging: Path,
+    streams: tuple,
+    split_counts: dict[str, dict[str, int]],
+    *,
+    workers: int,
+    max_pending_shards: int,
+) -> tuple[int, int]:
+    """gameごとのshardを並列に変換し、game順に連結する（Issue #248）。
+
+    投入済みで未連結のshard（実行中・実行待ち・完了済み未連結の合計）は
+    `max_pending_shards`を超えない。先頭shardが遅い場合は、その連結まで次の
+    投入を待つ。shardの結果はstaging内の一時fileに置き、連結後に削除する。
+    1 shardでも失敗したら残りを取り消してworkerを停止し、例外を送出する。
+    """
+    shard_root = staging / _SHARD_DIRECTORY
+    shard_root.mkdir()
+    summaries = iter(source.summaries)
+    pending: deque[tuple[Path, Future]] = deque()
+    decision_count = 0
+    candidate_total = 0
+    pool = _shard_executor(workers)
+    try:
+        while True:
+            while len(pending) < max_pending_shards:
+                summary = next(summaries, None)
+                if summary is None:
+                    break
+                shard = shard_root / f"game-{summary['game_ordinal']:03d}"
+                shard.mkdir()
+                future = pool.submit(
+                    _materialize_shard, str(source.root), summary, str(shard)
+                )
+                pending.append((shard, future))
+            if not pending:
+                break
+            shard, future = pending.popleft()
+            result = future.result()
+            _append_shard(shard, streams, candidate_total)
+            shutil.rmtree(shard)
+            for split, counts in result["split_counts"].items():
+                merged = split_counts.setdefault(split, _empty_split_counts())
+                for field, count in counts.items():
+                    merged[field] += count
+            decision_count += result["scorer_decisions"]
+            candidate_total += result["candidates"]
+    except BaseException:
+        terminate = getattr(pool, "terminate_workers", None)
+        if terminate is not None:
+            terminate()
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
+    shard_root.rmdir()
+    return decision_count, candidate_total
+
+
 def publish_candidate_dataset(
-    source: PlayerSafeSourceRecord | StreamingSourceRecord, destination: str | Path
+    source: PlayerSafeSourceRecord | StreamingSourceRecord,
+    destination: str | Path,
+    *,
+    workers: int = 1,
+    max_pending_shards: int | None = None,
 ) -> dict[str, object]:
     """source recordからcandidate datasetをmaterializeし、検証済みmanifestを返す。
 
@@ -338,9 +535,24 @@ def publish_candidate_dataset(
     同一である（同じ実装を共有する）。decisionごとにstaging fileへ追記し、
     公開前後の検証も逐次readで行うため、payloadをメモリへ保持しない
     （Issue #247）。失敗時はstagingを破棄し、destinationを作らない。
+
+    `workers`が2以上なら、gameをshardとしてprocess並列に変換し、game順・
+    判断順に連結する（Issue #248）。出力はworker数によらず同一である。
+    `max_pending_shards`（既定は`2 * workers`）は投入済みで未連結のshard数の
+    上限である。並列変換には`open_source_record()`のrecordを使う。
     """
     if not isinstance(source, (PlayerSafeSourceRecord, StreamingSourceRecord)):
         raise DatasetError("source must be a PlayerSafeSourceRecord")
+    if type(workers) is not int or workers < 1:
+        raise DatasetError("workers must be a positive integer")
+    if max_pending_shards is None:
+        max_pending_shards = 2 * workers
+    if type(max_pending_shards) is not int or max_pending_shards < 1:
+        raise DatasetError("max_pending_shards must be a positive integer")
+    if workers > 1 and not isinstance(source, StreamingSourceRecord):
+        raise DatasetError(
+            "parallel candidate materialization requires open_source_record()"
+        )
     if source.decision_count == 0:
         raise DatasetError("source record contains no decisions")
     if source.allocation_bindings is None and source.purpose != DEVELOPMENT_PURPOSE:
@@ -356,69 +568,21 @@ def publish_candidate_dataset(
         context_path = staging / CONTEXT_FILENAME
         candidates_path = staging / CANDIDATES_FILENAME
         split_counts: dict[str, dict[str, int]] = {}
-        candidate_total = 0
-        decision_count = 0
 
-        with (
-            appended_new_text(decisions_path, DatasetError) as decisions_stream,
-            appended_new_bytes(context_path, DatasetError) as context_stream,
-            appended_new_bytes(candidates_path, DatasetError) as candidates_stream,
-        ):
-            for decision in source.decisions():
-                counts = split_counts.setdefault(decision.split, _empty_split_counts())
-                counts["source_decisions"] += 1
-                context = DecisionContext(
-                    input=decision.policy_input, legal_actions=decision.legal_actions
+        with _payload_streams(staging) as streams:
+            if workers == 1:
+                decision_count, candidate_total = _write_decisions(
+                    source.decisions(), streams, split_counts
                 )
-                kind = classify_o0_decision(context)
-                if kind is not O0DecisionKind.DISCARD:
-                    counts[_EXCLUSION_FIELD[kind]] += 1
-                    continue
-
-                try:
-                    candidates = build_scorer_candidates(context)
-                    encoded = encode_candidates(candidates)
-                except CandidateFeatureError as exc:
-                    raise DatasetError(
-                        f"candidate materialization failed at game "
-                        f"{decision.game_ordinal} decision {decision.decision_ordinal}: "
-                        f"{exc}"
-                    ) from exc
-                teacher_index = resolve_teacher_candidate(
-                    candidates, decision.selected_action
+            else:
+                decision_count, candidate_total = _write_shards(
+                    source,
+                    staging,
+                    streams,
+                    split_counts,
+                    workers=workers,
+                    max_pending_shards=max_pending_shards,
                 )
-                shared = build_player_safe_feature(decision.policy_input)
-                if len(shared) != FEATURE_DIMENSION or any(
-                    not isfinite(value) for value in shared
-                ):
-                    raise DatasetError("shared context materialization is invalid")
-
-                decisions_stream.write(
-                    canonical_json_line(
-                        {
-                            "actor_seat": int(decision.actor_seat),
-                            "candidate_count": len(candidates),
-                            "candidate_offset": candidate_total,
-                            "candidates": [
-                                _candidate_to_value(candidate)
-                                for candidate in candidates
-                            ],
-                            "decision_ordinal": decision.decision_ordinal,
-                            "game_ordinal": decision.game_ordinal,
-                            "seed": decision.seed,
-                            "split": decision.split,
-                            "step_ordinal": decision.step_ordinal,
-                            "teacher_candidate_index": teacher_index,
-                        }
-                    )
-                )
-                context_stream.write(_float32_bytes(shared))
-                for vector in encoded:
-                    candidates_stream.write(_float32_bytes(vector))
-                candidate_total += len(candidates)
-                counts["scorer_decisions"] += 1
-                counts["candidates"] += len(candidates)
-                decision_count += 1
 
         if decision_count == 0:
             raise DatasetError("source record contains no scorer decisions")
