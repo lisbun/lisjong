@@ -641,12 +641,14 @@ def bootstrap(
     per_group: dict[str, dict[int, dict[str, list[float]]]],
     seeds: Sequence[int],
     targets: Sequence[tuple[str, str]],
+    *,
+    seed: int = BOOTSTRAP_SEED,
 ) -> dict[str, dict[str, object]]:
     """eval半荘を復元抽出し、各 (group, 指標) のepisode-macroの95%区間を求める。
 
     全targetで同じ再標本を使う（paired）。
     """
-    random = Random(BOOTSTRAP_SEED)
+    random = Random(seed)
     samples = [
         [random.choice(seeds) for _ in seeds] for _ in range(BOOTSTRAP_RESAMPLES)
     ]
