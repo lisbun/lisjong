@@ -1,7 +1,8 @@
 # ロン合法確率の表現・正解・測定設計（#262）
 
-[lisbun/lisjong#262](https://github.com/lisbun/lisjong/issues/262)（親: #255）の実装前設計。
-今回のPRは設計までであり、表現追加・正解計算・producer・測定は未実装である。
+[lisbun/lisjong#262](https://github.com/lisbun/lisjong/issues/262)（親: #255）の設計と実装状況。
+段階Aの表現追加・availability・raw整合性検証は実装済み。
+正解計算・追加source reader・producer・測定は未実装である。
 #263は[役・符・点数計算](hand-scoring.md)として完成済みで、正解の役判定に利用する。
 #259のselectを再実行せず、#260のモデル固定も待機のままとする。
 
@@ -41,7 +42,7 @@ context protocolは固定の評価規則であり、未知の他家手牌や見�
 
 ## 段階A: availabilityと整合性
 
-`HandBelief`へ`ron_legal_probability_raw: tuple[int, ...] | None = None`を追加する計画とする。
+`HandBelief`に`ron_legal_probability_raw: tuple[int, ...] | None = None`を追加した。
 34牌種canonical順、各要素は厳密なintで`0..PROBABILITY_MAX_RAW`。
 `None`は未提供、全0はロン合法確率0の推定であり、区別を維持する。
 
@@ -69,7 +70,7 @@ waitが未提供ならronも未提供とし、別のwaitモデルへの黙示的
 loss用epsilonは出力を変えるためには使わない。
 
 段階Aは#259の固定モデルを必要としない。test用の明示的な値で表現契約を検証し、
-本番推定器や学習を先行追加しない。architectureとbelief packageの説明を実装時に更新する。
+本番推定器や学習を先行追加しない。architectureとbelief packageの説明も段階Aへ更新済み。
 
 ## フリテン規則の照合
 

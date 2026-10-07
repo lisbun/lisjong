@@ -344,6 +344,7 @@ lisjong-engineへのruntime依存はない。契約と検証方法は[役・符�
 - tile conservation
 - conditional-uniform baseline estimator
 - structural wait belief
+- optional ron-legal belief for the fixed normal-discard counterfactual context
 - exact wait ground-truth builder for offline validation
 
 current representationでは、player axisはWind semanticsを明示的に扱い、expected-count / probabilityはcanonical fixed-point domainを使う。storage表現をconsumer側semanticへ漏らさず、semantic accessorを優先する。
@@ -369,6 +370,14 @@ structural wait
 conditional-uniform baselineは、exact観測で条件付けたremaining physical tilesがremaining hidden slotsへexchangeableに配置されているというmodel assumptionを使う。これはground truthではない。
 
 wait beliefでは`None = feature unavailable`と`all-zero = estimatorがzeroと評価`を区別する。mechanism channelはmulti-labelであり、単純sumからjoint distributionを復元できるとは仮定しない。
+
+`HandBelief.ron_legal_probability`（#262段階A）は、判断時点の状態で牌種tが河底でない
+通常打牌として出た場合のロン合法確率である。contextは`project-standard-normal-discard-ron-v1`
+（project標準ルール、自風・場風・成立済みリーチ/ダブルリーチ・一発を反映）に固定する。
+フリテン・役を含む同時確率で、structural waitや実際のロン選択・放銃確率とは区別する。
+wait未提供ならronも未提供とし、constructorが各slotの`ron_legal_raw <= wait_raw`を
+厳密に検証する。形別groupのavailabilityと既存Level 0/1/2は変えない。
+現在は表現のみで、正解計算・推定器・測定は後続段階。詳細は[ロン合法確率の設計](ron-legal-belief.md)。
 
 exact / player-safe informationとlearned uncertaintyを混同しない。physical conservationを壊すbeliefを黙って正常値として扱わない。
 
