@@ -60,6 +60,7 @@ from lisjong.learning.hand_belief_accuracy import (
     _Groups,
     bootstrap,
     check_population,
+    check_producer,
     episode_macro,
     kyoku_instances,
     seed_range,
@@ -504,6 +505,7 @@ def run_test(
     if used & set(test_seeds):
         raise _E("a test seed was used by the selection")
     identity = check_population(sources, {"train": [], "valid": [], "eval": test_seeds})
+    check_producer(identity, selection["population"]["producer"])
     model, rate = _models_from_value(selection["models"])
     rows, _ = read_split_rows(sources, "test")
     report = Report()

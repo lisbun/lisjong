@@ -63,6 +63,7 @@ from lisjong.learning.hand_belief_accuracy import (
     _stratum,
     bootstrap,
     check_population,
+    check_producer,
     episode_macro,
     kyoku_instances,
     seed_range,
@@ -466,6 +467,7 @@ def run_test(
     if used & set(test_seeds):
         raise _E("a test seed was used by the selection")
     identity = check_population(sources, {"train": [], "valid": [], "eval": test_seeds})
+    check_producer(identity, selection["population"]["producer"])
     report = Report()
     for decisions in iterate_split(sources, "test"):
         report.add(decisions, model)

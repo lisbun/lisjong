@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from test_learning_hand_belief_source import (
     SEED,
@@ -25,7 +26,11 @@ from lisjong.belief.non_player_hidden_belief import derive_non_player_hidden_bel
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.learning import hand_count_estimator as estimator
 from lisjong.learning import hand_count_evaluation as evaluation
-from lisjong.learning.hand_belief_source import label_decisions
+from lisjong.learning._canonical import canonical_json_text
+from lisjong.learning.hand_belief_source import (
+    HandBeliefSourceError,
+    label_decisions,
+)
 from lisjong.policy_contract.seat import Seat
 
 
@@ -242,6 +247,84 @@ class SelectAndTestTest(unittest.TestCase):
                     ]
                 )
             self.assertIn("verdicts", json.loads((d / "result.json").read_text()))
+
+
+class ProducerTest(unittest.TestCase):
+    """formal testは、selectionを作ったproducerと全fieldで一致するsourceだけを受け付ける。"""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        for offset, split in enumerate(("train", "valid", "test")):
+            (self.root / split).mkdir()
+            write_source(
+                self.root / split,
+                with_seed(all_decisions(), SEED + offset),
+                with_seed(all_facts(), SEED + offset),
+                splits={
+                    name: [SEED + offset] if name == split else []
+                    for name in ("train", "valid", "test")
+                },
+            )
+        self.selection = json.loads(
+            json.dumps(
+                evaluation.select(
+                    [self.root / name for name in ("train", "valid", "test")],
+                    {"train": [SEED], "valid": [SEED + 1], "eval": [SEED + 2]},
+                )
+            )
+        )
+
+    def new_source(self, name, change):
+        root = self.root / name
+        root.mkdir()
+        write_source(
+            root,
+            with_seed(all_decisions(), SEED + 3),
+            with_seed(all_facts(), SEED + 3),
+            splits={"train": [], "valid": [], "test": [SEED + 3]},
+        )
+        manifest = json.loads((root / "manifest.json").read_text())
+        change(manifest["producer"])
+        (root / "manifest.json").write_text(canonical_json_text(manifest))
+        return root
+
+    def test_every_producer_field_must_match_the_selection(self):
+        registered = self.selection["population"]["producer"]
+        self.assertEqual(
+            set(registered),
+            {"arena_revision", "lisjong_revision", "lisjong_engine_revision", "policy"},
+        )
+        for field_name in sorted(registered):
+
+            def change(producer, field_name=field_name):
+                producer[field_name] = "f" * 40
+
+            source = self.new_source(field_name, change)
+            with (
+                self.subTest(field_name),
+                mock.patch.object(
+                    evaluation, "read_labelled_source", side_effect=AssertionError
+                ),
+                self.assertRaisesRegex(evaluation.HandBeliefAccuracyError, field_name),
+            ):
+                evaluation.run_test([source], [SEED + 3], self.selection)
+
+    def test_an_extra_producer_field_is_rejected(self):
+        source = self.new_source(
+            "extra", lambda producer: producer.update(wrapper_revision="d" * 40)
+        )
+        # producerのfieldはmanifestの読み込みで固定されている（未知のfieldは拒否）
+        with self.assertRaisesRegex(HandBeliefSourceError, "unexpected fields"):
+            evaluation.run_test([source], [SEED + 3], self.selection)
+
+    def test_the_same_producer_is_accepted(self):
+        source = self.new_source("same", lambda producer: None)
+        result = evaluation.run_test([source], [SEED + 3], self.selection)
+        self.assertEqual(
+            result["population"]["producer"], self.selection["population"]["producer"]
+        )
 
 
 if __name__ == "__main__":
