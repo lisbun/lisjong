@@ -2,7 +2,8 @@
 
 [lisbun/lisjong#262](https://github.com/lisbun/lisjong/issues/262)（親: #255）の設計と実装状況。
 段階Aの表現追加・availability・raw整合性検証は実装済み。
-正解計算・追加source reader・producer・測定は未実装である。
+B1の正解計算・追加source reader・履歴検証は実装済み。
+producer・測定は未実装である。[追加source v1のwire契約](ron-legal-source.md)を正本とする。
 #263は[役・符・点数計算](hand-scoring.md)として完成済みで、正解の役判定に利用する。
 #259のselectを再実行せず、#260のモデル固定も待機のままとする。
 
@@ -110,7 +111,7 @@ S1ラベルAとの一致を主張できるのは、リーチ成立・stable hand
 
 [#256 v1](hand-belief-accuracy-source.md)のschema、同一sequence、手牌・副露、
 player-safeな`decisions.jsonl`を変更しない。新しい拡張sourceを別directoryに置き、
-次の3fileでv1を参照する。以下の識別子は今回定義する契約で、まだ実装はない。
+次の3fileでv1を参照する。具体的なfieldとcommit内の順序は[追加source v1](ron-legal-source.md)に定義する。
 
 | file / schema | 必須の内容 |
 |---|---|

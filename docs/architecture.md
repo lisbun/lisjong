@@ -377,7 +377,9 @@ wait beliefでは`None = feature unavailable`と`all-zero = estimatorがzeroと�
 フリテン・役を含む同時確率で、structural waitや実際のロン選択・放銃確率とは区別する。
 wait未提供ならronも未提供とし、constructorが各slotの`ron_legal_raw <= wait_raw`を
 厳密に検証する。形別groupのavailabilityと既存Level 0/1/2は変えない。
-現在は表現のみで、正解計算・推定器・測定は後続段階。詳細は[ロン合法確率の設計](ron-legal-belief.md)。
+表現とoffline正解計算・追加source reader・履歴検証を実装済み。
+推定器・producer・測定は後続段階。詳細は[ロン合法確率の設計](ron-legal-belief.md)と
+[学習専用source v1](ron-legal-source.md)。追加context・全席checkpointは推論入力へ渡さない。
 
 exact / player-safe informationとlearned uncertaintyを混同しない。physical conservationを壊すbeliefを黙って正常値として扱わない。
 

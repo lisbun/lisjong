@@ -372,8 +372,14 @@ def read_decisions(
 def _check_conservation(
     decision: HandBeliefDecision, opponents: Sequence[OpponentHand], context: str
 ) -> None:
+    _check_conservation_input(decision.policy_input, opponents, context)
+
+
+def _check_conservation_input(
+    policy_input: PolicyInput, opponents: Sequence[OpponentHand], context: str
+) -> None:
     try:
-        remaining = derive_remaining_tile_inventory(decision.policy_input)
+        remaining = derive_remaining_tile_inventory(policy_input)
     except ValueError as error:
         raise _E(f"{context}: the public state is not tile-consistent") from error
     tile_counts = [0] * len(remaining.remaining_tile_counts)
