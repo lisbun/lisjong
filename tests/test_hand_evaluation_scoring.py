@@ -425,6 +425,26 @@ class BoundaryFixtureTest(unittest.TestCase):
         self.assertEqual(score.dora.red, 1)
         self.assertEqual(score.ron_payment, 2600)
 
+    def test_plain_fives_are_limited_with_red_dora(self) -> None:
+        four_plain = hand("234p567p345s6s", "6s", (MeldKind.ANKAN, "5555m"))
+        with self.assertRaises(ValueError):
+            evaluate_win(four_plain, context(WinMethod.TSUMO))
+        with self.assertRaises(ValueError):
+            evaluate_win(
+                hand("555m234p567p345s6s", "6s"), context(WinMethod.TSUMO, dora="5m")
+            )
+        with_red = self.score(
+            hand("234p567p345s6s", "6s", (MeldKind.ANKAN, "0555m")),
+            context(WinMethod.TSUMO),
+        )
+        self.assertEqual(with_red.dora.red, 1)
+        no_red = dataclasses.replace(
+            PROJECT_STANDARD_SCORING_RULES, red_dora_enabled=False
+        )
+        self.assertEqual(
+            self.score(four_plain, context(WinMethod.TSUMO), no_red).dora.red, 0
+        )
+
     def test_invalid_inputs_raise_value_error(self) -> None:
         invalid = [
             (hand("23m567p345s678s2p", "1m"), context()),

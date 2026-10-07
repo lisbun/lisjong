@@ -330,6 +330,29 @@ fn red_fives_count_and_disabled_red_rejects_them() {
 }
 
 #[test]
+fn plain_fives_are_limited_to_three_per_suit_with_red_dora() {
+    // 5555m as ankan: four plain fives cannot exist when red dora is enabled.
+    let four_plain = tsumo("234p567p345s6s", vec![meld(MeldKind::Ankan, "5555m")], "6s");
+    assert!(evaluate(&four_plain, &standard()).is_err());
+
+    // The same count with an indicator tile also fails (indicators are counted).
+    let mut with_indicator = tsumo("555m234p567p345s6s", vec![], "6s");
+    with_indicator.dora_indicators = tiles("5m");
+    assert!(evaluate(&with_indicator, &standard()).is_err());
+
+    // Three plain fives plus the red five are allowed.
+    let with_red = tsumo("234p567p345s6s", vec![meld(MeldKind::Ankan, "0555m")], "6s");
+    assert!(evaluate(&with_red, &standard()).is_ok());
+
+    // Without red dora all four fives are plain.
+    let rules = Rules {
+        red_dora_enabled: false,
+        ..standard()
+    };
+    assert!(evaluate(&four_plain, &rules).is_ok());
+}
+
+#[test]
 fn dealer_payments() {
     let mut input = ron("23m567p345s678s22p", vec![], "1m");
     input.seat_wind = 0;

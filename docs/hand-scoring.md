@@ -51,7 +51,7 @@ AIの判断と分析が、仮定の完成形（推定した相手の手、反実
 
 | 結果 | 意味 |
 | --- | --- |
-| `ValueError` | 牌枚数（同種5枚以上・赤5の重複を含む）・副露・context・ルールの不整合（fail closed） |
+| `ValueError` | 牌枚数（同種5枚以上・赤5の重複・赤あり時の同色通常5の4枚目を含む。表示牌も数える）・副露・context・ルールの不整合（fail closed） |
 | `EvaluationStatus.NOT_COMPLETE` | 和了形でない |
 | `EvaluationStatus.NO_YAKU` | 和了形だが役がない。ドラだけでは役ありにしない。正常な評価結果 |
 | `EvaluationStatus.SCORED` | `WinScore`: 成立役と役ごとの翻・役満倍率、ドラ / 赤 / 裏、符と内訳、上限区分、支払内訳（親子、ロン / ツモ） |

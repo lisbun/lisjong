@@ -568,6 +568,7 @@ fn validate(input: &WinInput, rules: &Rules) -> Result<(), String> {
     };
     let mut kind_counts = [0u8; TILE_KIND_COUNT];
     let mut red_counts = [0u8; 3];
+    let mut plain_five_counts = [0u8; 3];
     let all_physical = input
         .concealed
         .iter()
@@ -586,6 +587,15 @@ fn validate(input: &WinInput, rules: &Rules) -> Result<(), String> {
             red_counts[index] += 1;
             if red_counts[index] > 1 {
                 return Err("each suit has only one red five".to_string());
+            }
+        } else if rules.red_dora_enabled && RED_FIVE_KINDS.contains(&tile.kind) {
+            // With red dora each suit's fives are one red and three plain
+            // copies, so a fourth plain five is an input error, not a hand
+            // that silently lacks its red dora.
+            let index = usize::from(suit(tile.kind));
+            plain_five_counts[index] += 1;
+            if plain_five_counts[index] > COPIES_PER_KIND - 1 {
+                return Err("with red dora each suit has only three plain fives".to_string());
             }
         }
     }
