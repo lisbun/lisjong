@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyInt, PyList, PyTuple, PyType};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyTuple, PyType};
 
+use crate::scoring;
 use crate::{
     MAX_FIXED_MELDS, ShantenCore, TILE_KIND_COUNT, VALID_CONCEALED_TILE_COUNTS, parse_artifact,
     parse_combine, parse_penalties, progression,
@@ -454,10 +455,188 @@ const SOURCE_REVISION: &str = match option_env!("LISJONG_NATIVE_SOURCE_REVISION"
     None => "unknown",
 };
 
+/// Version of the scoring entry `evaluate_win` (Issue #263).  Checked by
+/// `lisjong.hand_evaluation.scoring` independently of the shanten
+/// `API_VERSION`, so the shanten backend contract is unchanged.
+const SCORING_API_VERSION: u32 = 1;
+
+type TileTuple = (u8, bool);
+
+fn scoring_tile((kind, red): TileTuple) -> scoring::TileInput {
+    scoring::TileInput { kind, red }
+}
+
+fn scoring_tiles(tiles: Vec<TileTuple>) -> Vec<scoring::TileInput> {
+    tiles.into_iter().map(scoring_tile).collect()
+}
+
+fn unknown(field: &str, value: &str) -> PyErr {
+    PyValueError::new_err(format!("unknown {field}: {value:?}"))
+}
+
+/// Score one concrete complete hand (Issue #263).
+///
+/// Arguments are primitive conversions of the `lisjong.hand_evaluation.scoring`
+/// dataclasses: tiles are `(kind_34, is_red)` tuples, enums are their string
+/// values, `ura_dora` is a tile list or `None` for the explicit exclusion
+/// mode.  Returns `("not_complete", None)`, `("no_yaku", None)` or
+/// `("scored", dict)`.  Invalid input raises `ValueError`.
+#[pyfunction]
+#[pyo3(signature = (
+    concealed, melds, winning_tile, method, seat_wind, prevailing_wind, riichi,
+    ippatsu, situation, dora_indicators, ura_dora, rules
+))]
+#[allow(clippy::too_many_arguments)]
+fn evaluate_win<'py>(
+    py: Python<'py>,
+    concealed: Vec<TileTuple>,
+    melds: Vec<(String, Vec<TileTuple>)>,
+    winning_tile: TileTuple,
+    method: &str,
+    seat_wind: u8,
+    prevailing_wind: u8,
+    riichi: &str,
+    ippatsu: bool,
+    situation: &str,
+    dora_indicators: Vec<TileTuple>,
+    ura_dora: Option<Vec<TileTuple>>,
+    rules: (bool, bool, bool, bool, bool, Vec<String>, u8),
+) -> PyResult<(&'static str, Option<Bound<'py, PyDict>>)> {
+    let melds = melds
+        .into_iter()
+        .map(|(kind, tiles)| {
+            let kind = match kind.as_str() {
+                "chi" => scoring::MeldKind::Chi,
+                "pon" => scoring::MeldKind::Pon,
+                "daiminkan" => scoring::MeldKind::Daiminkan,
+                "ankan" => scoring::MeldKind::Ankan,
+                "kakan" => scoring::MeldKind::Kakan,
+                other => return Err(unknown("meld kind", other)),
+            };
+            Ok(scoring::MeldInput {
+                kind,
+                tiles: scoring_tiles(tiles),
+            })
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let method = match method {
+        "ron" => scoring::WinMethod::Ron,
+        "tsumo" => scoring::WinMethod::Tsumo,
+        other => return Err(unknown("win method", other)),
+    };
+    let riichi = match riichi {
+        "none" => scoring::RiichiStatus::None,
+        "riichi" => scoring::RiichiStatus::Riichi,
+        "double_riichi" => scoring::RiichiStatus::DoubleRiichi,
+        other => return Err(unknown("riichi status", other)),
+    };
+    let situation = match situation {
+        "normal" => scoring::WinSituation::Normal,
+        "haitei" => scoring::WinSituation::Haitei,
+        "houtei" => scoring::WinSituation::Houtei,
+        "rinshan" => scoring::WinSituation::Rinshan,
+        "chankan" => scoring::WinSituation::Chankan,
+        "tenhou" => scoring::WinSituation::Tenhou,
+        "chiihou" => scoring::WinSituation::Chiihou,
+        other => return Err(unknown("win situation", other)),
+    };
+    let (kuitan, red, rounded, counted, multiple, double_variants, double_wind_fu) = rules;
+    let double_yakuman_variants = double_variants
+        .iter()
+        .map(|name| scoring::Yaku::from_name(name).ok_or_else(|| unknown("yaku", name)))
+        .collect::<PyResult<Vec<_>>>()?;
+    let input = scoring::WinInput {
+        concealed: scoring_tiles(concealed),
+        melds,
+        winning_tile: scoring_tile(winning_tile),
+        method,
+        seat_wind,
+        prevailing_wind,
+        riichi,
+        ippatsu,
+        situation,
+        dora_indicators: scoring_tiles(dora_indicators),
+        ura_dora: match ura_dora {
+            Some(tiles) => scoring::UraDora::Indicators(scoring_tiles(tiles)),
+            None => scoring::UraDora::Excluded,
+        },
+    };
+    let rules = scoring::Rules {
+        kuitan_enabled: kuitan,
+        red_dora_enabled: red,
+        rounded_mangan_enabled: rounded,
+        counted_yakuman_enabled: counted,
+        multiple_yakuman_enabled: multiple,
+        double_yakuman_variants,
+        double_wind_pair_fu: double_wind_fu,
+    };
+    let score = match scoring::evaluate(&input, &rules).map_err(PyValueError::new_err)? {
+        scoring::Evaluation::NotComplete => return Ok(("not_complete", None)),
+        scoring::Evaluation::CompleteWithoutYaku => return Ok(("no_yaku", None)),
+        scoring::Evaluation::Scored(score) => score,
+    };
+    let result = PyDict::new(py);
+    result.set_item("shape", score.shape.name())?;
+    result.set_item("wait", score.wait.name())?;
+    result.set_item("pair", score.pair)?;
+    let groups: Vec<(&str, u8, bool, bool)> = score
+        .groups
+        .iter()
+        .map(|group| {
+            (
+                group.kind.name(),
+                group.tile,
+                group.is_open,
+                group.completed_by_ron,
+            )
+        })
+        .collect();
+    result.set_item("groups", groups)?;
+    result.set_item("completed_group", score.completed_group)?;
+    let yaku: Vec<(&str, u8, u8)> = score
+        .yaku
+        .iter()
+        .map(|value| (value.yaku.name(), value.han, value.yakuman_units))
+        .collect();
+    result.set_item("yaku", yaku)?;
+    result.set_item(
+        "dora",
+        score.dora.map(|dora| (dora.dora, dora.red, dora.ura)),
+    )?;
+    result.set_item("ura_dora_excluded", score.ura_dora_excluded)?;
+    result.set_item("yaku_han", score.yaku_han)?;
+    result.set_item("han", score.han)?;
+    result.set_item("fu", score.fu)?;
+    let fu_components: Vec<(&str, u32)> = score
+        .fu_components
+        .iter()
+        .map(|(reason, fu)| (reason.name(), *fu))
+        .collect();
+    result.set_item("fu_components", fu_components)?;
+    result.set_item("yakuman_units", score.yakuman_units)?;
+    result.set_item(
+        "method",
+        match score.method {
+            scoring::WinMethod::Ron => "ron",
+            scoring::WinMethod::Tsumo => "tsumo",
+        },
+    )?;
+    result.set_item("is_dealer", score.is_dealer)?;
+    result.set_item("base_points", score.base_points)?;
+    result.set_item("limit", score.limit.name())?;
+    result.set_item("ron_payment", score.ron_payment)?;
+    result.set_item("tsumo_dealer_payment", score.tsumo_dealer_payment)?;
+    result.set_item("tsumo_non_dealer_payment", score.tsumo_non_dealer_payment)?;
+    result.set_item("winner_points", score.winner_points)?;
+    Ok(("scored", Some(result)))
+}
+
 #[pymodule]
 fn _lisjong_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("SOURCE_REVISION", SOURCE_REVISION)?;
     module.add("API_VERSION", API_VERSION)?;
+    module.add("SCORING_API_VERSION", SCORING_API_VERSION)?;
+    module.add_function(wrap_pyfunction!(evaluate_win, module)?)?;
     module.add_class::<StandardShantenTable>()?;
     module.add_function(wrap_pyfunction!(standard_shanten_call_count, module)?)?;
     module.add_function(wrap_pyfunction!(discard_evaluation_call_count, module)?)?;
