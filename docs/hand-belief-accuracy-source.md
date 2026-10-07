@@ -63,3 +63,10 @@ Arenaの`stage_a0_tenpai_feasibility`で使っている観測の仕組みは流�
 相対席の形式なので、この契約の`hand_facts.jsonl`へは使わない。Arena側では、上の
 snapshotから観測者以外の3席を取り出し、`sequence`を判断と同じ値にしてこの契約の形で
 書けばよい。記録経路の実装はlisjong-arenaの別Issueで扱う。
+
+## 精度の測定（lisbun/lisjong#257）
+
+このsourceを使う測定は`lisjong.learning.hand_belief_accuracy`で行う。条件（半荘数・分割・seed・
+baseline・集約・区間）は#257の事前登録に従い、詳細はmoduleのdocstringにまとめている。
+複数のchunk（それぞれ単独で完全なsource）を受け取り、manifestの分割を合わせたものが
+登録したseed範囲とちょうど一致することを、ラベルを読む前に検査する。
