@@ -27,12 +27,13 @@ Arenaが観測事実（判断時点の`PolicyInput`と他家の手牌）を記�
 - 未知のschema / scope、manifestのdigest・行数の不一致、正準JSONでない行、splitに属さないseed
 - 判断記録と手牌記録の`DecisionKey`の欠落・重複・不一致
 - 手牌記録が観測者以外の3席を席順に持っていない
-- 時点違反: 他家の手牌の`sequence`が判断の`sequence`より後。同じ`sequence`は、判断の行動を
-  適用する前に取ったsnapshotを意味する（観測者の行動は他家の手牌を変えない）
+- 時点違反: 他家の手牌の`sequence`が判断の`sequence`と違う。手牌は判断の行動を適用する前に
+  取ったsnapshot（同じ`sequence`）に限る。観測者の行動は他家の手牌を変えない。前の時点の手牌は
+  途中のツモ・打牌で変わっている可能性があり、副露・牌保存則だけでは現在の手牌と保証できない
 - 他家の副露が`PolicyInput`の公開副露と一致しない
 - 手牌が13枚相当（`len(concealed) + 3 * len(melds) == 13`）でない
 - 他家3席のconcealed tilesの合計が、`PolicyInput`から見て未確定の牌
-  （`derive_remaining_tile_inventory()`）を牌種別・赤5別に超える
+  （`derive_remaining_tile_inventory()`）を牌種別・赤5別・通常5（5の総数−赤5）別に超える
 
 ## ラベル
 

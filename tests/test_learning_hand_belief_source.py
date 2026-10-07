@@ -315,10 +315,15 @@ class JoinChecksTest(unittest.TestCase):
         with_self = make_facts(20, {0: A_HANDS[1], 2: A_HANDS[2], 3: A_HANDS[3]})
         self.assert_rejected([decision], [with_self])
 
-    def test_hand_from_after_the_decision_is_rejected(self):
+    def test_hand_must_be_the_decision_point_snapshot(self):
         decision = make_decision(20, A_OWN, A_PLAYERS)
-        label_decisions([decision], [make_facts(20, A_HANDS, hand_sequence=19)])
-        self.assert_rejected([decision], [make_facts(20, A_HANDS, hand_sequence=21)])
+        label_decisions([decision], [make_facts(20, A_HANDS, hand_sequence=20)])
+        for stale_or_future in (0, 19, 21):
+            with self.subTest(hand_sequence=stale_or_future):
+                self.assert_rejected(
+                    [decision],
+                    [make_facts(20, A_HANDS, hand_sequence=stale_or_future)],
+                )
 
     def test_melds_must_match_the_public_state(self):
         decision = make_decision(20, A_OWN, A_PLAYERS)
@@ -340,6 +345,17 @@ class JoinChecksTest(unittest.TestCase):
         hands = dict(A_HANDS)
         hands[2] = ("1357m2408p99s", A_HANDS[2][1])  # 赤5pが2枚
         self.assert_rejected([decision], [make_facts(20, hands)])
+
+    def test_normal_fives_must_fit_in_the_unseen_normal_fives(self):
+        # 自分が通常5pを1枚持つので、未確定の5pは通常2枚 + 赤1枚。
+        # 他家の5pが通常3枚・赤0枚なら総数(3)と赤(0)は収まるが通常5が超える
+        decision = make_decision(20, A_OWN, A_PLAYERS)
+        hands = dict(A_HANDS)
+        hands[1] = ("123m456p789s11z23m", ())
+        hands[2] = ("1357m2455p99s", A_HANDS[2][1])
+        self.assert_rejected([decision], [make_facts(20, hands)])
+        hands[2] = ("1357m2405p99s", A_HANDS[2][1])  # 通常2枚 + 赤1枚なら通る
+        label_decisions([decision], [make_facts(20, hands)])
 
     def test_decision_scope_and_selected_action(self):
         legal = (PassAction(actor=Seat.SEAT_0),)

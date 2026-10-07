@@ -17,13 +17,13 @@ lisjongはArenaのmoduleをimportしない（逆依存なし）。
 - ``hand_facts.jsonl`` は他家3席それぞれのconcealed tiles（赤5を区別する）と副露を持つ
   学習専用の記録。``read_labelled_source()`` だけが読み、``DecisionKey`` で判断記録と
   結合する。キーの欠落・重複・不一致はエラー
-- 時点: 各他家の手牌は対象判断の時点（``sequence`` が判断と同じ）か、それより前でなければ
-  ならない。判断と同じ ``sequence`` は、その判断の行動を適用する前に取ったsnapshotを意味する
-  （観測者の行動は他家の手牌を変えないので、判断時点の他家の手牌そのものである）。
-  判断より後の時点ならエラー
+- 時点: 各他家の手牌の ``sequence`` は判断と同じでなければならない。これはその判断の行動を
+  適用する前に取ったsnapshotを意味する（観測者の行動は他家の手牌を変えないので、判断時点の
+  他家の手牌そのものである）。前の時点の手牌は途中のツモ・打牌で変わっている可能性があり、
+  副露・牌保存則の検査だけでは現在の手牌と保証できないので、前後どちらもエラーにする
 - 判断時点との整合: 各他家の副露は ``PolicyInput`` の公開副露と一致しなければならない。
   他家3席のconcealed tilesの合計は、``PolicyInput`` から見て未確定の牌
-  （``derive_remaining_tile_inventory()``）を牌種別・赤5別に超えてはならない
+  （``derive_remaining_tile_inventory()``）を牌種別・赤5別・通常5別に超えてはならない
 - ラベル: 各他家について、手牌から ``exact_hand_belief_with_waits()`` で正解の
   ``HandBelief``（``expected_count`` / ``red_five_probability`` / ``wait_probability`` /
   形別7テーブル、すべて0か``SCALE``）を求める。待ち判定は再実装しない。手牌は13枚相当
@@ -67,7 +67,7 @@ from lisjong.learning.riichi_deal_in_source import DecisionKey
 from lisjong.policy_contract.action import DiscardAction, InternalAction
 from lisjong.policy_contract.meld import PublicMeld
 from lisjong.policy_contract.policy_input import PolicyInput
-from lisjong.policy_contract.tile import Tile
+from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 MANIFEST_SCHEMA = "lisjong-hand-belief-source-manifest-v1"
 DECISION_SCHEMA = "lisjong-hand-belief-decision-record-v1"
@@ -91,6 +91,7 @@ _DECISION_FIELDS = frozenset(
 _FACT_FIELDS = frozenset({"schema", "key", "opponents"})
 _HAND_FIELDS = frozenset({"seat", "sequence", "concealed_tiles", "melds"})
 _SEAT_COUNT = 4
+_SUITED_CATEGORIES = (TileCategory.MANZU, TileCategory.PINZU, TileCategory.SOUZU)
 
 
 class HandBeliefSourceError(ValueError):
@@ -382,13 +383,24 @@ def _check_conservation(
             tile_counts[tile_type_index(tile.tile_type)] += 1
             if tile.is_red:
                 red_counts[red_five_index(tile.tile_type.category)] += 1
-    if any(
+    over = any(
         count > limit
         for count, limit in zip(tile_counts, remaining.remaining_tile_counts)
     ) or any(
         count > limit
         for count, limit in zip(red_counts, remaining.remaining_red_five_counts)
-    ):
+    )
+    # 5は「総数」と「赤」だけでなく「通常5（総数 - 赤）」も残数以下でなければならない
+    for category in _SUITED_CATEGORIES:
+        five = tile_type_index(TileType(category, 5))
+        red = red_five_index(category)
+        normal = tile_counts[five] - red_counts[red]
+        remaining_normal = (
+            remaining.remaining_tile_counts[five]
+            - remaining.remaining_red_five_counts[red]
+        )
+        over = over or normal > remaining_normal
+    if over:
         raise _E(f"{context}: opponents' hands exceed the unseen tiles")
 
 
@@ -411,8 +423,8 @@ def label_decisions(
         truths = []
         for hand in fact.opponents:
             hand_context = f"{context} seat {hand.seat}"
-            if hand.sequence > key.sequence:
-                raise _E(f"{hand_context}: the hand is from after the decision")
+            if hand.sequence != key.sequence:
+                raise _E(f"{hand_context}: the hand is not the decision-point snapshot")
             public = decision.policy_input.players[hand.seat]
             if tuple(hand.melds) != tuple(public.melds):
                 raise _E(f"{hand_context}: melds differ from the public state")
