@@ -148,10 +148,15 @@ def _require_native(test: unittest.TestCase) -> None:
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess:
+    # native拡張を隠したprocessでshanten backendのrust指定（native CI job）を
+    # 継承すると、scoringと無関係なshanten backendのimport時エラーになる。
+    environment = dict(os.environ)
+    environment.pop("LISJONG_SHANTEN_BACKEND", None)
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
+        env=environment,
         cwd=_REPOSITORY_ROOT,
         timeout=120,
     )

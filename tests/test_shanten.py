@@ -978,7 +978,8 @@ class PublicSurfaceTest(unittest.TestCase):
 
     def test_backend_stays_behind_a_private_module_name(self) -> None:
         # Issue #115のnumeric backend、Issue #141のpredicate backend、
-        # Issue #213のbackend選択moduleを含む。
+        # Issue #213のbackend選択module、Issue #263の役・点数計算binding
+        # （`scoring.py`、計算coreはnative拡張）を含む。
         # 期待するprivate architectureをexact setとして固定する（public
         # surfaceは増やさない）。
         modules = {path.name for path in _PACKAGE_ROOT.glob("*.py")}
@@ -992,6 +993,7 @@ class PublicSurfaceTest(unittest.TestCase):
                 "_lookup_shanten.py",
                 "_shanten_backend.py",
                 "_structural_predicates.py",
+                "scoring.py",
             },
         )
 
