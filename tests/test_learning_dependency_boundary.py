@@ -78,6 +78,7 @@ _LEARNING_MODULES = (
     "lisjong.learning.dataset",
     "lisjong.learning.errors",
     "lisjong.learning.features",
+    "lisjong.learning.hand_belief_source",
     "lisjong.learning.model",
     "lisjong.learning.outcome_q_artifact",
     "lisjong.learning.outcome_q_dataset",
