@@ -22,8 +22,15 @@ sourceは複数（chunk）を受け取る。各chunkのmanifestの ``train`` / `
   凍結済みのselectionをそのまま使い、S1の対象条件の行（下記）でだけ値を出す
 - 形別7種: channel・牌種ごとの出現率（trainの全行、Jeffreys 0.5）
 
-validで選ぶハイパーパラメータはない。validの行はchunkと一緒に読み込まれるが、fit・選択・
-報告のどれにも使わない。
+validで選ぶハイパーパラメータはない。validは正例・対象行の件数の報告にだけ使い、fit・選択・
+指標には使わない。
+
+## 希少な層の扱い（#257計画の6）
+
+- 待ちの指標は、全行に加えて聴牌行（待ちが1牌種以上）だけ・非聴牌行だけでも出す
+- 正例の行数・エピソード数・独立半荘数をtrain / valid / eval別に出す。ラベル・集計は省略しない
+- evalで正例を含む独立半荘が``HOLD_MIN_HANCHAN``未満、または正例エピソードが
+  ``HOLD_MIN_EPISODES``未満の層・tableは ``held``（判定保留）、正例が0なら ``not_estimable``
 
 ## #245の対象条件（S1と同じ）
 
@@ -103,6 +110,9 @@ CHANNELS = tuple(
 TILE_CLASSES = ("n19", "n28", "n37", "n456", "honor")
 TURNS = ("early(<=6)", "middle(7-11)", "late(>=12)")
 CALIBRATION_BINS = 10
+# evalで正例を含む独立半荘・正例エピソードがこれ未満の層・tableは判定を保留する
+HOLD_MIN_HANCHAN = 50
+HOLD_MIN_EPISODES = 100
 
 
 class HandBeliefAccuracyError(ValueError):
@@ -493,18 +503,17 @@ class Evaluation:
     calibration: dict[str, _Calibration] = field(
         default_factory=lambda: defaultdict(_Calibration)
     )
-    support: dict[str, dict[str, set]] = field(
-        default_factory=lambda: defaultdict(lambda: defaultdict(set))
-    )
-    rows: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    support: "Support" = field(default_factory=lambda: Support())
 
     def add(self, rows: Sequence[Row], rates: dict[str, tuple[float, ...]]) -> None:
         for row, weight in zip(rows, episode_weights(rows)):
             values = row_metrics(row, rates)
+            tenpai = "tenpai" if any(wait_labels(row)) else "not_tenpai"
             groups = ["all", f"stratum.{row.stratum}", f"turn.{row.turn}"]
+            groups += [f"{group}.{tenpai}" for group in groups[:2]]
             for group in groups:
                 self.groups.add(row.seed, row.episode, group, values)
-            self._count(row)
+            self.support.add(row)
             self.calibration["wait.rate"].add(
                 weight, [clip(p) for p in rates["wait"]], wait_labels(row)
             )
@@ -528,35 +537,55 @@ class Evaluation:
                 weight, [clip(p) for p in rates["wait"]], labels
             )
 
-    def _count(self, row: Row) -> None:
+
+class Support:
+    """正例・対象行の件数（行・エピソード・独立半荘）。splitごとに1つ持つ。"""
+
+    def __init__(self) -> None:
+        self.sets: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
+        self.rows: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    def add(self, row: Row) -> None:
         episode = (row.seed, row.episode)
         tables = {"wait": wait_labels(row)} | {
             name: channel_labels(row, f) for name, f, _ in CHANNELS
         }
         for group in ("all", f"stratum.{row.stratum}"):
-            self.rows[f"{group}.rows"] += 1
-            self.support[group]["episodes"].add(episode)
-            self.support[group]["hanchan"].add(row.seed)
-            self.rows[f"{group}.245_scope_rows"] += row.in_245_scope
+            rows, sets = self.rows[group], self.sets[group]
+            rows["rows"] += 1
+            sets["episodes"].add(episode)
+            sets["hanchan"].add(row.seed)
+            rows["245_scope_rows"] += row.in_245_scope
             if row.in_245_scope:
-                self.support[group]["245_scope_episodes"].add(episode)
+                sets["245_scope_episodes"].add(episode)
             for name, labels in tables.items():
                 if any(labels):
-                    self.rows[f"{group}.{name}.positive_rows"] += 1
-                    self.support[group][f"{name}.positive_episodes"].add(episode)
-                    self.support[group][f"{name}.positive_hanchan"].add(row.seed)
+                    rows[f"{name}.positive_rows"] += 1
+                    sets[f"{name}.positive_episodes"].add(episode)
+                    sets[f"{name}.positive_hanchan"].add(row.seed)
 
     def counts(self) -> dict[str, dict[str, int]]:
-        result: dict = defaultdict(dict)
-        for key, value in self.rows.items():
-            group = (
-                ".".join(key.split(".")[:2]) if key.startswith("stratum.") else "all"
+        groups = sorted(set(self.rows) | set(self.sets))
+        return {
+            group: dict(
+                sorted(
+                    {**self.rows[group]}.items()
+                    | {name: len(v) for name, v in self.sets[group].items()}.items()
+                )
             )
-            result[group][key[len(group) + 1 :]] = value
-        for group, sets in self.support.items():
-            for name, values in sets.items():
-                result[group][name] = len(values)
-        return {group: dict(sorted(values.items())) for group, values in result.items()}
+            for group in groups
+        }
+
+
+def judgement(counts: dict[str, int], table: str) -> str:
+    """希少な正例の扱い（#257計画の6、閾値は生成前に確定する案）。"""
+    episodes = counts.get(f"{table}.positive_episodes", 0)
+    hanchan = counts.get(f"{table}.positive_hanchan", 0)
+    if not episodes:
+        return "not_estimable"
+    if hanchan < HOLD_MIN_HANCHAN or episodes < HOLD_MIN_EPISODES:
+        return "held"
+    return "reported"
 
 
 def episode_macro(per_seed: dict[int, dict[str, list[float]]], seeds, metric) -> float:
@@ -622,13 +651,18 @@ def load_245_model(path: Path, sha256: str) -> LogisticWaitModel:
     return _models_from_value(chosen["models"])[2]
 
 
-def _rows_of_split(source: Path, split: str, model_245) -> list[Row]:
+def _rows_of_splits(
+    source: Path, splits: Sequence[str], model_245
+) -> dict[str, list[Row]]:
     manifest, labelled = read_labelled_source(source)
-    wanted = set(manifest.splits[split])
-    chosen = [r for r in labelled if r.decision.key.seed in wanted]
-    if {r.decision.key.seed for r in chosen} != wanted:
-        raise _E(f"{source}: a {split} seed has no decision")
-    return list(build_rows(chosen, model_245))
+    result = {}
+    for split in splits:
+        wanted = set(manifest.splits[split])
+        chosen = [r for r in labelled if r.decision.key.seed in wanted]
+        if {r.decision.key.seed for r in chosen} != wanted:
+            raise _E(f"{source}: a {split} seed has no decision")
+        result[split] = list(build_rows(chosen, model_245))
+    return result
 
 
 def evaluate_population(
@@ -638,19 +672,30 @@ def evaluate_population(
 ) -> dict[str, object]:
     identity = check_population(sources, expected)
     fit = RateFit()
+    support = {"train": Support(), "valid": Support()}
     for source in sources:
-        fit.add(_rows_of_split(source, "train", model_245))
+        rows = _rows_of_splits(source, ("train", "valid"), model_245)
+        fit.add(rows["train"])
+        for name in ("train", "valid"):
+            for row in rows[name]:
+                support[name].add(row)
     rates = fit.probabilities()
     evaluation = Evaluation()
     for source in sources:
-        evaluation.add(_rows_of_split(source, "test", model_245), rates)
+        evaluation.add(_rows_of_splits(source, ("test",), model_245)["test"], rates)
+    eval_counts = evaluation.support.counts()
     per_group = evaluation.groups.per_seed()
     seeds = sorted(expected["eval"])
-    targets = [
-        (group, metric)
-        for group in ("all", *(f"stratum.{s}" for s in STRATA))
-        for metric in PRIMARY
-    ] + [("245_scope", metric) for metric in PRIMARY_245]
+    base_groups = ("all", *(f"stratum.{s}" for s in STRATA))
+    targets = (
+        [(group, metric) for group in base_groups for metric in PRIMARY]
+        + [
+            (f"{group}.{tenpai}", "wait.rate.log_loss.all")
+            for group in base_groups
+            for tenpai in ("tenpai", "not_tenpai")
+        ]
+        + [("245_scope", metric) for metric in PRIMARY_245]
+    )
     point = {
         group: {
             metric: episode_macro(per_seed, seeds, metric)
@@ -662,9 +707,24 @@ def evaluate_population(
         "schema": RESULT_SCHEMA,
         "population": identity,
         "splits": {name: sorted(seeds) for name, seeds in expected.items()},
-        "valid_used": False,
+        "valid_used_for": "support counts only",
         "rates": {"train_episode_weight": fit.weight, "probabilities": rates},
-        "counts": evaluation.counts(),
+        "counts": {
+            "train": support["train"].counts(),
+            "valid": support["valid"].counts(),
+            "eval": eval_counts,
+        },
+        "judgement": {
+            group: {
+                table: judgement(counts, table)
+                for table in ("wait", *(name for name, _, _ in CHANNELS))
+            }
+            for group, counts in eval_counts.items()
+        },
+        "hold_rule": {
+            "min_positive_hanchan": HOLD_MIN_HANCHAN,
+            "min_positive_episodes": HOLD_MIN_EPISODES,
+        },
         "episode_macro": point,
         "intervals": bootstrap(per_group, seeds, targets),
         "calibration": {

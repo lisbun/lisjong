@@ -163,9 +163,22 @@ class PopulationTest(unittest.TestCase):
             document = accuracy.evaluate_population(
                 [a, b], {"train": [SEED], "valid": [], "eval": [SEED + 1]}, MODEL
             )
-        self.assertEqual(document["counts"]["all"]["rows"], 9)
-        self.assertEqual(document["counts"]["all"]["245_scope_rows"], 2)
-        self.assertEqual(document["counts"]["stratum.riichi"]["rows"], 2)
+        counts = document["counts"]
+        self.assertEqual(counts["eval"]["all"]["rows"], 9)
+        self.assertEqual(counts["eval"]["all"]["245_scope_rows"], 2)
+        self.assertEqual(counts["eval"]["stratum.riichi"]["rows"], 2)
+        # train / valid も同じ件数の形で報告する（validはfit・指標に使わない）
+        self.assertEqual(counts["train"]["all"]["rows"], 9)
+        self.assertEqual(counts["valid"], {})
+        # A: 両面・嵌張、B: 双碰・辺張・国士、C: 単騎の6行が聴牌
+        self.assertEqual(counts["eval"]["all"]["wait.positive_rows"], 6)
+        self.assertIn("all.tenpai/wait.rate.log_loss.all", document["intervals"])
+        self.assertIn("all.not_tenpai", document["episode_macro"])
+        # 1半荘しかないので、正例がある表は保留、ない表は推定不能
+        self.assertEqual(document["judgement"]["all"]["wait"], "held")
+        self.assertEqual(
+            document["judgement"]["stratum.riichi"]["kokushi"], "not_estimable"
+        )
         interval = document["intervals"]["245_scope/wait.245_minus_rate.log_loss.all"]
         self.assertEqual(interval["low_2.5"], interval["point"])
         self.assertIn("all/channel.kokushi.log_loss.valid_slots", document["intervals"])
@@ -184,6 +197,19 @@ class PopulationTest(unittest.TestCase):
                 accuracy.check_population(
                     [a, b], {"train": [SEED], "valid": [], "eval": [SEED + 1]}
                 )
+
+
+class JudgementTest(unittest.TestCase):
+    def test_thresholds(self):
+        enough = {
+            "wait.positive_hanchan": accuracy.HOLD_MIN_HANCHAN,
+            "wait.positive_episodes": accuracy.HOLD_MIN_EPISODES,
+        }
+        self.assertEqual(accuracy.judgement(enough, "wait"), "reported")
+        for name in enough:
+            short = enough | {name: enough[name] - 1}
+            self.assertEqual(accuracy.judgement(short, "wait"), "held")
+        self.assertEqual(accuracy.judgement({}, "wait"), "not_estimable")
 
 
 class SelectionTest(unittest.TestCase):
