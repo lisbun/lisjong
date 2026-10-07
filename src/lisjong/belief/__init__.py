@@ -47,6 +47,12 @@ Issue #245（待ち確率の推定）で、待ち形の成立可能性を枚数�
 推定器・評価は`lisjong.learning.riichi_wait_estimator` / `riichi_wait_evaluation`にあり、
 このpackageのestimatorは待ちを未提供のままとする。
 
+Issue #262の段階Aで、`HandBelief`に`ron_legal_probability`を追加した。
+通常打牌の反実仮想contextでのロン合法確率であり、構造的待ち、実際のロン
+選択、放銃確率を区別する。primary waitの提供を必要とし、rawでron<=waitを
+検証する。形別groupとは独立のoptional tableで、`None`と全0を区別する。
+正解計算・推定器は未提供で、既存builder/estimatorはronを`None`のまま返す。
+
 `HandBelief`はbelief（推定値）、`PublicTileProvenance` /
 `TileConservationResult`はprovenance / conservation結果（実際に観測された
 exact count）であり、同じ34牌種 / red-five axisを共有するがsemanticは

@@ -22,6 +22,10 @@ derived hand-state beliefでもある。wait beliefを推定するestimator、�
 からwait ground truthを生成するbuilder、Policyからのwait belief利用は
 Issue #82のscope外であり、既存estimatorはwait beliefを未提供（`None`）の
 ままとする。
+
+Issue #262の段階Aで、通常打牌の反実仮想contextにおけるロン合法確率を
+別のoptional tableとして追加した。表現と検証だけを扱い、フリテン・役の
+正解計算や推定器はこのmoduleへ持ち込まない。
 """
 
 from dataclasses import dataclass
@@ -127,7 +131,9 @@ class HandBelief:
     ├── penchan_wait_probability_raw      (length 34 | None)
     ├── ryanmen_low_side_probability_raw  (length 34 | None)
     ├── ryanmen_high_side_probability_raw (length 34 | None)
-    └── kokushi_wait_probability_raw      (length 34 | None)
+    ├── kokushi_wait_probability_raw      (length 34 | None)
+    │
+    └── ron_legal_probability_raw         (length 34 | None)
     ```
 
     raw fieldはIssue #59が固定したfixed-point storageそのものであり、通常の
@@ -185,6 +191,21 @@ class HandBelief:
     `wait_probability_raw`が`None`の状態は拒否する。`None`は「estimatorが
     そのfeatureを提供していない」、all-zeroは「estimatorが全wait
     probabilityを0と推定している（非聴牌等）」を意味し、両者を区別する。
+
+    ## ron legal belief (Issue #262, stage A)
+
+    `ron_legal_probability`は、判断時点の状態のまま牌種tが他家の通常打牌
+    （河底でない、槍槓ではない）として出た場合に、このwindのロンが合法な
+    確率を表す反実仮想値である。採用contextは
+    `project-standard-normal-discard-ron-v1`（`PROJECT_STANDARD_RULES`）で、
+    自風・場風・成立済みリーチ/ダブルリーチ・一発を判断時点に合わせる。
+    待ち、非フリテン、役ありの同時確率であり、実際のロン選択、競合解決、
+    放銃確率、精算を含めない。場に4枚見える等の提示不能性だけでは0にしない。
+
+    `None`は未提供、all-zeroはロン合法確率0の推定。提供にはprimary wait
+    tableが必要で、同じ牌種の`ron_legal_raw <= wait_raw`をraw integerで
+    厳密に検証する。constructorは上限処理や不正値の修復をしない。
+    形別groupの提供とは独立で、既存Level 0/1/2の意味は変えない。
     """
 
     expected_count_raw: tuple[int, ...]
@@ -197,6 +218,7 @@ class HandBelief:
     ryanmen_low_side_probability_raw: tuple[int, ...] | None = None
     ryanmen_high_side_probability_raw: tuple[int, ...] | None = None
     kokushi_wait_probability_raw: tuple[int, ...] | None = None
+    ron_legal_probability_raw: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         expected_count_raw = _normalize_raw_tuple(
@@ -222,6 +244,7 @@ class HandBelief:
         object.__setattr__(self, "red_five_probability_raw", red_five_probability_raw)
 
         self._validate_wait_belief()
+        self._validate_ron_legal_belief()
 
     def _validate_wait_belief(self) -> None:
         provided_mechanisms = [
@@ -262,6 +285,30 @@ class HandBelief:
                 _normalize_probability_table(values, valid_indices, field_name),
             )
 
+    def _validate_ron_legal_belief(self) -> None:
+        if self.ron_legal_probability_raw is None:
+            return
+        if self.wait_probability_raw is None:
+            raise ValueError(
+                "wait_probability_raw must be provided when "
+                "ron_legal_probability_raw is provided"
+            )
+        values = _normalize_probability_table(
+            self.ron_legal_probability_raw,
+            _ALL_TILE_TYPE_INDICES,
+            "ron_legal_probability_raw",
+        )
+        if any(ron > wait for ron, wait in zip(values, self.wait_probability_raw)):
+            raise ValueError(
+                "ron_legal_probability_raw must not exceed wait_probability_raw"
+            )
+        object.__setattr__(self, "ron_legal_probability_raw", values)
+
+    @property
+    def has_ron_legal_belief(self) -> bool:
+        """ロン合法確率を提供しているか。structural waitのLevelとは独立。"""
+        return self.ron_legal_probability_raw is not None
+
     @property
     def has_wait_belief(self) -> bool:
         """primary `wait_probability`が提供されているか（Level 1以上）を返す。"""
@@ -291,6 +338,14 @@ class HandBelief:
         `0.0`（probability 0と推定）は区別する。
         """
         return self._probability(self.wait_probability_raw, tile_type)
+
+    def ron_legal_probability(self, tile_type: TileType) -> float | None:
+        """通常打牌の反実仮想contextでのロン合法確率。未提供なら`None`。
+
+        contextはclass docstringの`project-standard-normal-discard-ron-v1`。
+        実際にロンを選ぶ確率・放銃確率とは異なる。
+        """
+        return self._probability(self.ron_legal_probability_raw, tile_type)
 
     def tanki_wait_probability(self, tile_type: TileType) -> float | None:
         """`tile_type`が単騎待ちを完成させるprobabilityを返す（七対子を含む）。
