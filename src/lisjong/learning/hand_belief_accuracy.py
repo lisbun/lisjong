@@ -20,7 +20,9 @@ sourceは複数（chunk）を受け取る。各chunkのmanifestの ``train`` / `
   （``estimate_conditional_uniform_hand_belief``。他家のslot数は ``13 - 3 * 副露数``）
 - ``wait_probability``: 牌種ごとの待ち率（trainの全行、Jeffreys 0.5）。#245推定器は
   凍結済みのselectionをそのまま使い、S1の対象条件の行（下記）でだけ値を出す
-- 形別7種: channel・牌種ごとの出現率（trainの全行、Jeffreys 0.5）
+- 形別7種: channel・牌種ごとの出現率（trainの全行、Jeffreys 0.5）。そのchannelが構造上
+  占め得ないslotは``HandBelief``のcanonical zeroと同じく予測0とする（log lossではclipで
+  ``1e-6``になる）
 
 validで選ぶハイパーパラメータはない。validは正例・対象行の件数の報告にだけ使い、fit・選択・
 指標には使わない。
@@ -361,9 +363,15 @@ class RateFit:
     def probabilities(self) -> dict[str, tuple[float, ...]]:
         if not self.weight:
             raise _E("no train row")
+        valid = {"wait": frozenset(range(34))} | {
+            name: slots for name, _, slots in CHANNELS
+        }
         return {
             name: tuple(
-                (value + JEFFREYS) / (self.weight + 2 * JEFFREYS) for value in values
+                (value + JEFFREYS) / (self.weight + 2 * JEFFREYS)
+                if index in valid[name]
+                else 0.0
+                for index, value in enumerate(values)
             )
             for name, values in self.positives.items()
         }
@@ -538,6 +546,25 @@ class Evaluation:
             )
 
 
+COUNT_GROUPS = ("all", *(f"stratum.{stratum}" for stratum in STRATA))
+COUNT_TABLES = ("wait", *(name for name, _, _ in CHANNELS))
+_ROW_COUNTS = (
+    "rows",
+    "245_scope_rows",
+    *(f"{table}.positive_rows" for table in COUNT_TABLES),
+)
+_SET_COUNTS = (
+    "episodes",
+    "hanchan",
+    "245_scope_episodes",
+    *(
+        f"{table}.positive_{unit}"
+        for table in COUNT_TABLES
+        for unit in ("episodes", "hanchan")
+    ),
+)
+
+
 class Support:
     """正例・対象行の件数（行・エピソード・独立半荘）。splitごとに1つ持つ。"""
 
@@ -565,22 +592,20 @@ class Support:
                     sets[f"{name}.positive_hanchan"].add(row.seed)
 
     def counts(self) -> dict[str, dict[str, int]]:
-        groups = sorted(set(self.rows) | set(self.sets))
-        return {
-            group: dict(
-                sorted(
-                    {**self.rows[group]}.items()
-                    | {name: len(v) for name, v in self.sets[group].items()}.items()
-                )
-            )
-            for group in groups
-        }
+        """全体と3層を、行がなくても、正例が0でも、すべての件数を0で明示して返す。"""
+        result = {}
+        for group in COUNT_GROUPS:
+            rows, sets = self.rows.get(group, {}), self.sets.get(group, {})
+            values = {name: rows.get(name, 0) for name in _ROW_COUNTS}
+            values |= {name: len(sets.get(name, ())) for name in _SET_COUNTS}
+            result[group] = dict(sorted(values.items()))
+        return result
 
 
 def judgement(counts: dict[str, int], table: str) -> str:
     """希少な正例の扱い（#257計画の6、閾値は生成前に確定する案）。"""
-    episodes = counts.get(f"{table}.positive_episodes", 0)
-    hanchan = counts.get(f"{table}.positive_hanchan", 0)
+    episodes = counts[f"{table}.positive_episodes"]
+    hanchan = counts[f"{table}.positive_hanchan"]
     if not episodes:
         return "not_estimable"
     if hanchan < HOLD_MIN_HANCHAN or episodes < HOLD_MIN_EPISODES:
@@ -715,10 +740,7 @@ def evaluate_population(
             "eval": eval_counts,
         },
         "judgement": {
-            group: {
-                table: judgement(counts, table)
-                for table in ("wait", *(name for name, _, _ in CHANNELS))
-            }
+            group: {table: judgement(counts, table) for table in COUNT_TABLES}
             for group, counts in eval_counts.items()
         },
         "hold_rule": {

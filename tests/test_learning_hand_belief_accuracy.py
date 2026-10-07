@@ -169,7 +169,17 @@ class PopulationTest(unittest.TestCase):
         self.assertEqual(counts["eval"]["stratum.riichi"]["rows"], 2)
         # train / valid も同じ件数の形で報告する（validはfit・指標に使わない）
         self.assertEqual(counts["train"]["all"]["rows"], 9)
-        self.assertEqual(counts["valid"], {})
+        # validに行がなくても、全体と3層の全件数を0で明示する
+        self.assertEqual(set(counts["valid"]), set(accuracy.COUNT_GROUPS))
+        self.assertTrue(
+            all(v == 0 for group in counts["valid"].values() for v in group.values())
+        )
+        self.assertEqual(counts["valid"]["all"], counts["valid"]["stratum.riichi"])
+        # 正例0のchannelも件数0で出す（riichi層に国士はない）
+        riichi = counts["eval"]["stratum.riichi"]
+        for unit in ("rows", "episodes", "hanchan"):
+            self.assertEqual(riichi[f"kokushi.positive_{unit}"], 0)
+        self.assertEqual(set(document["judgement"]), set(accuracy.COUNT_GROUPS))
         # A: 両面・嵌張、B: 双碰・辺張・国士、C: 単騎の6行が聴牌
         self.assertEqual(counts["eval"]["all"]["wait.positive_rows"], 6)
         self.assertIn("all.tenpai/wait.rate.log_loss.all", document["intervals"])
@@ -199,17 +209,46 @@ class PopulationTest(unittest.TestCase):
                 )
 
 
+class SupportTest(unittest.TestCase):
+    def test_strata_without_rows_are_reported_as_zero(self):
+        support = accuracy.Support()
+        for row in accuracy.build_rows(labelled(), MODEL):
+            if row.stratum == "closed_non_riichi" and not any(
+                accuracy.wait_labels(row)
+            ):
+                support.add(row)
+        counts = support.counts()
+        self.assertEqual(set(counts), set(accuracy.COUNT_GROUPS))
+        self.assertEqual(counts["stratum.riichi"]["rows"], 0)
+        self.assertEqual(counts["stratum.riichi"]["wait.positive_hanchan"], 0)
+        self.assertGreater(counts["all"]["rows"], 0)
+        self.assertEqual(counts["all"]["kokushi.positive_rows"], 0)
+        self.assertEqual(accuracy.judgement(counts["all"], "kokushi"), "not_estimable")
+
+
+class RateTest(unittest.TestCase):
+    def test_channels_predict_zero_where_they_cannot_occur(self):
+        fit = accuracy.RateFit()
+        fit.add(list(accuracy.build_rows(labelled(), MODEL)))
+        rates = fit.probabilities()
+        for name, _, valid in accuracy.CHANNELS:
+            for index, p in enumerate(rates[name]):
+                self.assertEqual(p == 0.0, index not in valid, (name, index))
+        self.assertTrue(all(p > 0.0 for p in rates["wait"]))
+
+
 class JudgementTest(unittest.TestCase):
     def test_thresholds(self):
-        enough = {
+        zero = accuracy.Support().counts()["all"]
+        enough = zero | {
             "wait.positive_hanchan": accuracy.HOLD_MIN_HANCHAN,
             "wait.positive_episodes": accuracy.HOLD_MIN_EPISODES,
         }
         self.assertEqual(accuracy.judgement(enough, "wait"), "reported")
-        for name in enough:
+        for name in ("wait.positive_hanchan", "wait.positive_episodes"):
             short = enough | {name: enough[name] - 1}
             self.assertEqual(accuracy.judgement(short, "wait"), "held")
-        self.assertEqual(accuracy.judgement({}, "wait"), "not_estimable")
+        self.assertEqual(accuracy.judgement(zero, "wait"), "not_estimable")
 
 
 class SelectionTest(unittest.TestCase):
