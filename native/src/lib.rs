@@ -23,6 +23,7 @@
 mod progression;
 #[cfg(feature = "python")]
 mod python;
+pub mod scoring;
 
 const MAGIC: &[u8; 8] = b"LISJSHT\x01";
 const FORMAT_VERSION: u32 = 1;

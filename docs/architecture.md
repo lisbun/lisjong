@@ -324,6 +324,11 @@ opt-in native backend（Issue #213、`native/`）はnumeric shanten coreだけ�
 native拡張はcore installの依存に含めない。Rust指定時に利用できなければPythonへfallbackせず
 fail closedする。Policyはnative表現へ依存しない。詳細は[Rust backend試作記録](rust-backend-prototype.md)を参照する。
 
+役・符・点数計算（Issue #263、`lisjong.hand_evaluation.scoring`）は、仮定の完成手＋明示的な和了contextを
+評価する純粋な計算器である。計算coreは`native/src/scoring.rs`だけにあり、Python版は持たない。
+native拡張が未導入でもimportは成功し、`evaluate_win()`の呼び出しだけが明確なエラーになる。
+lisjong-engineへのruntime依存はない。契約と検証方法は[役・符・点数計算](hand-scoring.md)を参照する。
+
 ## `belief`
 
 `lisjong.belief`は、hidden-information inferenceに必要なstable AI-side representation / physical-accounting semanticsを所有する。
