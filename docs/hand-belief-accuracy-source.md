@@ -70,3 +70,7 @@ snapshotから観測者以外の3席を取り出し、`sequence`を判断と同�
 baseline・集約・区間）は#257の事前登録に従い、詳細はmoduleのdocstringにまとめている。
 複数のchunk（それぞれ単独で完全なsource）を受け取り、manifestの分割を合わせたものが
 登録したseed範囲とちょうど一致することを、ラベルを読む前に検査する。
+
+このsourceを使う形別7channelの改善（#260）は、
+[形別待ちテーブルの推定・評価設計](wait-shape-belief.md)に対象・baseline・整合性・
+判定条件をまとめている。同文書は実装前設計であり、実測結果ではない。
