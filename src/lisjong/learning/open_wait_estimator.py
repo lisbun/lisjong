@@ -18,6 +18,7 @@ P(W_t | I) = P(聴牌 | I) * P(W_t | 聴牌, I)
 役のない待ちを0にしない。
 """
 
+from collections import Counter
 from dataclasses import dataclass, replace
 from math import exp
 
@@ -128,7 +129,7 @@ def open_view(
         )
         > 0
     )
-    dora = frozenset(
+    dora_counts = Counter(
         _dora_tile_type(indicator.tile_type)
         for indicator in round_state.dora_indicators
     )
@@ -181,7 +182,7 @@ def open_view(
         ),
         flush_suit=suits.pop() if len(suits) == 1 else None,
         dora_in_melds=sum(
-            (tile.tile_type in dora) + tile.is_red for tile in meld_tiles
+            dora_counts[tile.tile_type] + tile.is_red for tile in meld_tiles
         ),
         melded_types=frozenset(tile.tile_type for tile in meld_tiles),
         river=frozenset(d.tile.tile_type for d in discards),
@@ -189,7 +190,7 @@ def open_view(
         remaining_counts=remaining_counts
         if remaining_counts is not None
         else derive_remaining_tile_inventory(policy_input).remaining_tile_counts,
-        dora=dora,
+        dora=frozenset(dora_counts),
         yakuhai=yakuhai,
     )
 

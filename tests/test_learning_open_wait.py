@@ -13,6 +13,8 @@ from test_learning_hand_belief_source import (
     SEED,
     all_decisions,
     all_facts,
+    chi,
+    tiles,
     tt,
     write_source,
 )
@@ -20,6 +22,7 @@ from test_learning_hand_belief_source import (
 from lisjong.learning import open_wait_estimator as estimator
 from lisjong.learning import open_wait_evaluation as evaluation
 from lisjong.learning.hand_belief_source import label_decisions
+from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import TileCategory
 
 
@@ -57,6 +60,31 @@ class ScopeTest(unittest.TestCase):
 
 
 class FeatureTest(unittest.TestCase):
+    def test_meld_dora_counts_repeated_indicators_and_red_tiles(self):
+        for meld_spec, indicators, expected in (
+            ("456p", "4p", 1),
+            ("456p", "44p", 2),
+            ("406p", "44p", 3),
+        ):
+            with self.subTest(meld=meld_spec, indicators=indicators):
+                policy_input = pi_of(30)
+                players = list(policy_input.players)
+                players[2] = replace(
+                    players[2], melds=(chi(meld_spec, "4p", Seat.SEAT_1),)
+                )
+                policy_input = replace(
+                    policy_input,
+                    players=tuple(players),
+                    round=replace(
+                        policy_input.round, dora_indicators=tiles(indicators)
+                    ),
+                )
+                view = estimator.open_view(policy_input, 2)
+                self.assertEqual(view.dora_in_melds, expected)
+                self.assertEqual(view.dora, frozenset({tt("5p")}))
+                names = {name for name, _ in estimator.tenpai_features(view)}
+                self.assertIn(f"dora_in_melds_{min(expected, 2)}", names)
+
     def test_meld_signals(self):
         pon_view = estimator.open_view(pi_of(20), 2)
         self.assertTrue(pon_view.yakuhai_meld)
