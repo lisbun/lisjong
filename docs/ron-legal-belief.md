@@ -279,3 +279,42 @@ python -m lisjong.learning.ron_legal_accuracy   --train FIRST..LAST --valid FIRS
 #457のpilot 2半荘（935000 train / 935001 valid）でこのmodeの読込・ラベル付け・集計が
 通ることを確認した（WSL、wall 30秒、最大RSS 約0.5GB）。これは接続確認であり、
 精度の測定結果ではない。pilot seedを本測定へ再利用しない。
+
+## 推定器: 待ち推定 × 確実な0（#277）
+
+[lisbun/lisjong#277](https://github.com/lisbun/lisjong/issues/277)の推定器は、学習済みの構造的待ち推定器の出力に、
+`PolicyInput`だけで確実にロン不可と言える牌種を0にする変換（`certain-ron-illegal-zero-v1`）を
+掛ける。新しい学習と確率的な補正は行わない。推論は`lisjong.learning.ron_legal_estimator`に置き、
+正解系module・native・学習用sourceをimportしない。
+
+0にする牌種は次の2つで、赤5と通常5は同じ牌種として扱う。
+
+1. 対象席の河にある牌種（現物）。wait_genbutsu baselineと同じ処理
+2. 対象席の最後の打牌より後に他家（観測者を含む）が切った牌種。対象席はその間ツモも副露も
+   していないので手牌は同じで、待ちでロン合法だったなら見逃しフリテン、役なしなら今もロン不可。
+   `Discard.order`は4席全体で一意・連番なので計算できる。対象席の打牌がまだない場合は
+   配牌から手牌が変わっていないので、他家の打牌すべてが該当する
+
+リーチ成立後に通った牌の全体（`PolicyInput`はリーチ宣言牌の位置を持たない）、河にある別の
+待ち牌による捨て牌フリテン、副露者の役なしは確定できないので0にせず、過大評価として残る。
+ronはwaitと同じrawか0なので、丸め後も`ron <= wait`になる。
+
+提供範囲は待ち推定器と同じにする。段階1（リーチ者）は#245の凍結モデル
+（`riichi-wait-features-v1`）を使い、観測者が非リーチ・対象席が唯一のリーチ者・対象席に打牌がある
+判断だけに値を出す。範囲外は未提供（`None`）で、ゼロ予測や別の待ちモデルへ置き換えない。
+段階2（副露者、#259のモデル）は別PRで扱う。
+
+測定は`ron_legal_accuracy`へ推定器を差し込んで行う。推定器は値を出した行だけで採点し、
+同じ行の2 baselineと対にした差を`estimators`に報告する（提供行・未提供行の数を併記）。
+baselineの節は推定器なしの場合と同じ計算で、推定器・`--score`を指定しない実行の結果は
+#262の時と同じである。待ちモデルのselectionは登録したSHA-256と一致しなければ読まない。
+
+```text
+python -m lisjong.learning.ron_legal_accuracy --train ... --valid ... --eval ... \
+  --producer producer.json --output result.json [--score valid] \
+  --riichi-wait-selection selection.json --riichi-wait-selection-sha256 HEX POPULATION_DIR...
+```
+
+`--score valid`はevalの代わりにvalidを採点する（調整・診断用。evalのラベルは読まない）。
+診断として、行ごとの牌種の和（待ち推定値、ron推定値、実際の待ち、実際のロン合法、0にしなかった
+牌種の実際の待ち、0にした牌種の実際のロン合法）を同じ集約で出す。最後の値は変換が正しければ0になる。

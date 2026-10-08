@@ -20,11 +20,13 @@ from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.fixed_point import SCALE, probability_to_raw
 from lisjong.hand_evaluation._shanten_backend import BACKEND_ENVIRONMENT_VARIABLE
 from lisjong.learning import ron_legal_accuracy as accuracy
+from lisjong.learning.riichi_wait_estimator import LogisticWaitModel
 from lisjong.learning.ron_legal_baseline import (
     RonRateModel,
     StratumRates,
     public_stratum,
 )
+from lisjong.learning.ron_legal_estimator import estimate_riichi_ron_legal_belief
 from lisjong.policy_contract import RiichiState, Seat
 
 
@@ -173,6 +175,225 @@ class AggregationTest(unittest.TestCase):
             row(wait=False, ron=True)
 
 
+WAIT_MODEL = LogisticWaitModel(weights=(("bias", -1.0),))
+RATES = RonRateModel((StratumRates((100,) * 34, (50,) * 34),) * 3)
+
+
+def wait_zero(name="riichi_wait_zero"):
+    return accuracy.Estimator(
+        name,
+        {"transform": "test"},
+        lambda policy_input, seat: estimate_riichi_ron_legal_belief(
+            policy_input, seat, WAIT_MODEL
+        ),
+    )
+
+
+def selection_document():
+    return {
+        "schema": "lisjong-riichi-wait-selection-v1",
+        "feature_set": "riichi-wait-features-v1",
+        "clip_epsilon": 1e-6,
+        "bootstrap": {"resamples": 2000, "seed": 245},
+        "l2_grid": [{"l2": l2} for l2 in (0.01, 0.1, 1.0, 10.0, 100.0)],
+        "chosen_l2": 1.0,
+        "used_seeds": {},
+        "source_manifest": {},
+        "models": {
+            "baseline1_prevalence": {"probabilities": [0.1] * 34},
+            "baseline2_classical_platt": {"intercept": 0.0, "slope": 0.0},
+            "estimator_logistic": {
+                "feature_set": "riichi-wait-features-v1",
+                "weights": dict(WAIT_MODEL.weights),
+            },
+        },
+    }
+
+
+class EstimatorTest(unittest.TestCase):
+    def test_estimator_is_scored_only_on_its_rows_paired_with_baselines(self):
+        plain, extended = accuracy.Evaluation(), accuracy.Evaluation([wait_zero()])
+        # seat 1 is the single riichi seat (provided); seat 3 is out of scope.
+        items = [row(), row(episode="2", ron=False), row(seat=3), row(2, seat=3)]
+        for item in items:
+            plain.add(item, RATES)
+            extended.add(item, RATES)
+        # Baseline cells, coverage and intervals are those of the plain run.
+        self.assertEqual(extended.cells, plain.cells)
+        self.assertEqual(extended.coverage, plain.coverage)
+        self.assertEqual(extended.coverage["all"]["provided_rows"], 4)
+        seeds = [1, 2]
+        self.assertEqual(
+            accuracy.confidence_intervals(extended, seeds),
+            accuracy.confidence_intervals(plain, seeds),
+        )
+        value = extended.estimator_value(extended.estimators[0], seeds)
+        self.assertEqual(
+            value["coverage"]["all"],
+            {"target_rows": 4, "provided_rows": 2, "unprovided_rows": 2},
+        )
+        self.assertEqual(value["coverage"]["closed_non_riichi"]["provided_rows"], 0)
+        metrics = value["metrics"]
+        self.assertIsNone(
+            metrics["closed_non_riichi"]["riichi_wait_zero.log_loss"]["point"]
+        )
+        # "all" holds only the provided riichi rows, so it equals the stratum.
+        self.assertEqual(metrics["all"], metrics["riichi"])
+        belief = estimate_riichi_ron_legal_belief(
+            row().policy_input, Seat(1), WAIT_MODEL
+        )
+        losses = [
+            accuracy.metrics(raw, (y,) + (False,) * 33, frozenset((0, 1)))["log_loss"]
+            for raw in (belief.ron_legal_probability_raw, (50,) * 34)
+            for y in (True, False)
+        ]
+        point = {k: v["point"] for k, v in metrics["riichi"].items()}
+        self.assertAlmostEqual(
+            point["riichi_wait_zero.log_loss"], (losses[0] + losses[1]) / 2
+        )
+        self.assertAlmostEqual(point["ron_rate.log_loss"], (losses[2] + losses[3]) / 2)
+        self.assertAlmostEqual(
+            point["riichi_wait_zero_minus_wait_genbutsu.log_loss"],
+            point["riichi_wait_zero.log_loss"] - point["wait_genbutsu.log_loss"],
+        )
+        self.assertIn("riichi_wait_zero_minus_ron_rate.log_loss", point)
+        self.assertAlmostEqual(point["riichi_wait_zero.actual_ron"], 0.5)
+        self.assertAlmostEqual(point["riichi_wait_zero.actual_wait_not_zeroed"], 1.0)
+        self.assertEqual(point["riichi_wait_zero.actual_ron_zeroed"], 0)
+        self.assertAlmostEqual(
+            point["riichi_wait_zero.predicted_wait"],
+            sum(belief.wait_probability_raw) / SCALE,
+        )
+        self.assertLess(
+            point["riichi_wait_zero.predicted_ron"],
+            point["riichi_wait_zero.predicted_wait"],
+        )
+        self.assertEqual(
+            sum(b["slots"] for b in value["calibration"]["all"]["riichi_wait_zero"]), 68
+        )
+
+    def test_zeroed_ron_truth_is_counted_and_bad_estimators_fail_closed(self):
+        belief = estimate_riichi_ron_legal_belief(
+            row().policy_input, Seat(1), WAIT_MODEL
+        )
+        zeroed = replace(belief, ron_legal_probability_raw=(0,) * 34)
+        evaluation = accuracy.Evaluation(
+            [accuracy.Estimator("zero", {}, lambda policy_input, seat: zeroed)]
+        )
+        evaluation.add(row(), RATES)
+        point = evaluation.estimator_value(evaluation.estimators[0], [1])["metrics"]
+        self.assertEqual(point["all"]["zero.actual_ron_zeroed"]["point"], 1)
+        self.assertEqual(point["all"]["zero.actual_wait_not_zeroed"]["point"], 0)
+        for bad in (replace(belief, ron_legal_probability_raw=None), (0,) * 34):
+            broken = accuracy.Evaluation(
+                [accuracy.Estimator("bad", {}, lambda policy_input, seat: bad)]
+            )
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                broken.add(row(), RATES)
+        # A provided row must have both baselines to be paired with.
+        unpaired = accuracy.Evaluation([wait_zero()])
+        with self.assertRaises(accuracy.RonLegalAccuracyError):
+            unpaired.add(row(), RonRateModel((None,) * 3))
+        for name in ("ron_rate", "wait_genbutsu", "not a name"):
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.Estimator(name, {}, lambda policy_input, seat: None)
+        with self.assertRaises(accuracy.RonLegalAccuracyError):
+            accuracy.Evaluation([wait_zero(), wait_zero()])
+
+    def test_population_result_keeps_the_baseline_document_unchanged(self):
+        from lisjong.learning.hand_belief_source import HandBeliefManifest
+
+        manifest = HandBeliefManifest(
+            {}, {"train": (1,), "valid": (2,), "test": (3,)}, {}
+        )
+        rows = [row(1), row(2), row(3), row(3, seat=3, wait=False, ron=False)]
+        expected = {"train": [1], "valid": [2], "eval": [3]}
+        with (
+            patch.object(accuracy, "check_population", return_value={}),
+            patch.object(accuracy, "backend_identity", return_value={}),
+            patch.object(accuracy, "read_manifest", return_value=manifest),
+            patch.object(accuracy, "rows_from_source", return_value=(manifest, rows)),
+        ):
+            plain = accuracy.evaluate_population([Path("p")], expected, {})
+            extended = accuracy.evaluate_population(
+                [Path("p")], expected, {}, estimators=[wait_zero()]
+            )
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.evaluate_population(
+                    [Path("p")],
+                    expected,
+                    {},
+                    support_only=True,
+                    estimators=[wait_zero()],
+                )
+        self.assertNotIn("estimators", plain)
+        self.assertNotIn("scored_split", plain)
+        self.assertEqual(extended.pop("scored_split"), "eval")
+        estimators = extended.pop("estimators")
+        self.assertEqual(extended, plain)
+        value = estimators["riichi_wait_zero"]
+        self.assertEqual(value["identity"], {"transform": "test"})
+        self.assertEqual(
+            value["coverage"]["all"],
+            {"target_rows": 2, "provided_rows": 1, "unprovided_rows": 1},
+        )
+        json.dumps(estimators, allow_nan=False)
+
+    def test_frozen_wait_selection_identity_fails_closed(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selection.json"
+            path.write_text(json.dumps(selection_document()))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            estimator = accuracy.riichi_wait_zero_estimator(path, digest)
+            self.assertEqual(estimator.name, "riichi_wait_zero")
+            self.assertEqual(estimator.identity["selection_sha256"], digest)
+            self.assertEqual(
+                estimator.identity["feature_set"], "riichi-wait-features-v1"
+            )
+            self.assertEqual(estimator.identity["chosen_l2"], 1.0)
+            self.assertEqual(
+                estimator.identity["transform"], "certain-ron-illegal-zero-v1"
+            )
+            self.assertEqual(len(estimator.identity["weights_sha256"]), 64)
+            self.assertEqual(
+                estimator.predict(row().policy_input, Seat(1)),
+                estimate_riichi_ron_legal_belief(
+                    row().policy_input, Seat(1), WAIT_MODEL
+                ),
+            )
+            self.assertIsNone(estimator.predict(row().policy_input, Seat(2)))
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.riichi_wait_zero_estimator(path, "0" * 64)
+            changed = selection_document()
+            changed["models"]["estimator_logistic"]["feature_set"] = "other"
+            path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):
+                accuracy.riichi_wait_zero_estimator(
+                    path, hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+            # The CLI refuses a selection without its registered digest.
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.main(
+                    [
+                        "--train",
+                        "1",
+                        "--valid",
+                        "2",
+                        "--eval",
+                        "3",
+                        "--producer",
+                        "missing",
+                        "--output",
+                        str(Path(directory) / "result.json"),
+                        "--riichi-wait-selection",
+                        str(path),
+                        "missing",
+                    ]
+                )
+
+
 class PopulationTest(unittest.TestCase):
     def test_seed_cli_rejects_invalid_and_reversed_ranges(self):
         self.assertEqual(accuracy.seed_range("1..3"), [1, 2, 3])
@@ -278,6 +499,48 @@ class PopulationTest(unittest.TestCase):
         self.assertEqual(support["mode"], "support_only")
         self.assertEqual(support["metrics"], {})
         self.assertEqual(support["model_sha256"], result["model_sha256"])
+
+    def test_score_valid_scores_valid_rows_and_never_reads_eval_sources(self):
+        from lisjong.learning.hand_belief_source import HandBeliefManifest
+
+        manifests = {
+            "tv": HandBeliefManifest(
+                {}, {"train": (1,), "valid": (2,), "test": ()}, {}
+            ),
+            "e": HandBeliefManifest({}, {"train": (), "valid": (), "test": (3,)}, {}),
+        }
+        read = []
+
+        def rows_from(root):
+            read.append(root.name)
+            return manifests[root.name], [row(1), row(2, wait=False, ron=False)]
+
+        expected = {"train": [1], "valid": [2], "eval": [3]}
+        with (
+            patch.object(accuracy, "check_population", return_value={}),
+            patch.object(accuracy, "backend_identity", return_value={}),
+            patch.object(
+                accuracy,
+                "read_manifest",
+                side_effect=lambda p: manifests[p.parent.name],
+            ),
+            patch.object(accuracy, "rows_from_source", side_effect=rows_from),
+        ):
+            result = accuracy.evaluate_population(
+                [Path("tv"), Path("e")], expected, {}, score="valid"
+            )
+            for bad in ({"score": "test"}, {"score": "valid", "support_only": True}):
+                with self.assertRaises(accuracy.RonLegalAccuracyError):
+                    accuracy.evaluate_population([Path("tv")], expected, {}, **bad)
+        self.assertEqual(set(read), {"tv"})
+        self.assertEqual(result["scored_split"], "valid")
+        self.assertEqual(result["estimators"], {})
+        self.assertEqual(result["coverage"]["all"]["provided_rows"], 1)
+        self.assertEqual(result["support"]["eval"]["all"]["rows"], 0)
+        self.assertEqual(
+            result["metrics"]["riichi"]["ron_rate.log_loss"]["resamples_with_rows"],
+            accuracy.BOOTSTRAP_RESAMPLES,
+        )
 
     def test_source_rows_keep_round_episode_and_replayed_diagnostics(self):
         # Stubbed yaku/backend, like SourceTest: this fixes the join, not scoring.
