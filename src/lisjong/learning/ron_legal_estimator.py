@@ -17,13 +17,19 @@ ronはwaitと同じrawか0なので、丸め後も`ron <= wait`になる。
 フリテン、副露者の役なしは`PolicyInput`から確定できないので0にせず、過大評価として残る。
 
 提供範囲は待ち推定器と同じにする。範囲外は`None`（未提供）を返し、ゼロ予測や別の待ち
-モデルへ置き換えない。
+モデルへ置き換えない。リーチ者は#245（`riichi_wait_estimator`）、副露者は#259範囲1
+（`open_wait_estimator`）のモデルを使い、門前非リーチは対象外である。
 """
 
 from dataclasses import replace
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.hand_belief import HandBelief
+from lisjong.learning.open_wait_estimator import (
+    OpenWaitModel,
+    estimate_open_wait_belief,
+    is_open_opponent,
+)
 from lisjong.learning.riichi_wait_estimator import (
     LogisticWaitModel,
     estimate_riichi_wait_belief,
@@ -32,6 +38,7 @@ from lisjong.policy_contract import PolicyInput, RiichiState, Seat
 
 TRANSFORM = "certain-ron-illegal-zero-v1"
 RIICHI_SCOPE = "single-opponent-riichi.self-not-riichi.riichi-seat-has-discard.v1"
+OPEN_SCOPE = "open-non-riichi-opponent.v1"
 
 
 def certain_ron_illegal_tile_types(
@@ -99,10 +106,32 @@ def estimate_riichi_ron_legal_belief(
     )
 
 
+def estimate_open_ron_legal_belief(
+    policy_input: PolicyInput, seat: Seat, model: OpenWaitModel
+) -> HandBelief | None:
+    """副露者`seat`のwaitとronを組にした`HandBelief`。提供範囲外は`None`。
+
+    提供範囲は`open_wait_estimator`と同じ（リーチしておらず暗槓以外の副露がある他家）。
+    """
+    if not isinstance(model, OpenWaitModel):
+        raise TypeError("an OpenWaitModel is required")
+    if not isinstance(policy_input, PolicyInput) or not isinstance(seat, Seat):
+        raise TypeError("a PolicyInput and Seat are required")
+    if seat is policy_input.self_seat:
+        raise ValueError("ron legality targets opponents only")
+    if not is_open_opponent(policy_input, int(seat)):
+        return None
+    return with_certain_zero(
+        estimate_open_wait_belief(policy_input, int(seat), model), policy_input, seat
+    )
+
+
 __all__ = [
+    "OPEN_SCOPE",
     "RIICHI_SCOPE",
     "TRANSFORM",
     "certain_ron_illegal_tile_types",
+    "estimate_open_ron_legal_belief",
     "estimate_riichi_ron_legal_belief",
     "in_riichi_scope",
     "with_certain_zero",
