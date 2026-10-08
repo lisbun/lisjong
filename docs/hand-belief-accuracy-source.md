@@ -64,12 +64,33 @@ Arenaの`stage_a0_tenpai_feasibility`で使っている観測の仕組みは流�
 snapshotから観測者以外の3席を取り出し、`sequence`を判断と同じ値にしてこの契約の形で
 書けばよい。記録経路の実装はlisjong-arenaの別Issueで扱う。
 
-## 精度の測定（lisbun/lisjong#257）
+## 精度の測定（lisbun/lisjong#257、設定化は#274）
 
-このsourceを使う測定は`lisjong.learning.hand_belief_accuracy`で行う。条件（半荘数・分割・seed・
-baseline・集約・区間）は#257の事前登録に従い、詳細はmoduleのdocstringにまとめている。
-複数のchunk（それぞれ単独で完全なsource）を受け取り、manifestの分割を合わせたものが
-登録したseed範囲とちょうど一致することを、ラベルを読む前に検査する。
+このsourceを使う測定は`lisjong.learning.hand_belief_accuracy`で行う。集約・baseline・区間の
+詳細はmoduleのdocstringにまとめている。複数のchunk（それぞれ単独で完全なsource）を受け取り、
+manifestの分割を合わせたものが登録したseed範囲とちょうど一致することを、ラベルを読む前に
+検査する。
+
+設定は2層に分ける。
+
+| 層 | 内容 | 扱い |
+|---|---|---|
+| protocol preset（`Preset`） | 分割のseed範囲、bootstrap回数・乱数seed、Jeffreys、clip幅、判定保留の閾値、`purpose` | 事前登録して固定する。version付きで、`--preset-sha256`が一致しなければラベルを読む前に拒否する。個別に上書きするoptionはない。変える場合は新しいpresetを事前登録する |
+| 差し替え点（`ScopedWaitEstimator`） | 比べる推定器 | 推定器が値を出す行（scope）を宣言する。scope外の行は未提供（`None`）のまま扱い、ゼロ予測にしない。#245は`Riichi245Estimator` |
+
+- #257の条件は`PRESET_257`（`hand-belief-accuracy-257`）。`--reproduce-of result-257.json`を
+  付けると、記録済みの結果と測定値（件数・指標・区間・較正）が一致するかを比べ、違うkeyを
+  報告して終了コード1を返す。実行環境・pathなどは比べない
+- clip幅（`1e-6`）はpresetでは変えられない（#245の学習側と共通のprotocol invariant）。
+  seed分割の重複検査、未提供値の扱い、同じ行集合でのpaired比較、episode-macro集約、
+  正例0件の明示は、presetによらず共通
+- `purpose`は`development-baseline`か`formal-test`。`formal-test`では
+  `--allocation-identity` / `--ledger-revision` / `--arena-revision` / `--evaluator-revision`
+  が必須で、結果に記録する。live ledgerとの照合はlisjong-arenaの`check-allocation`の責務で、
+  lisjong側は検査せず記録だけを行う（arenaへ依存しない）
+- 結果（`lisjong-hand-belief-accuracy-result-v2`）は、presetとそのSHA-256、推定器のidentity、
+  各chunkの`manifest.json` / `coverage.json`のSHA-256、予約の識別情報、実行環境
+  （CPython、wall time、最大RSS）を含む。評価はAWSを必要としない
 
 このsourceを使う形別7channelの改善（#260）は、
 [形別待ちテーブルの推定・評価設計](wait-shape-belief.md)に対象・baseline・整合性・

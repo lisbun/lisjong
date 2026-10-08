@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from test_learning_hand_belief_source import (
     A_HANDS,
@@ -25,7 +26,37 @@ from lisjong.learning.riichi_wait_estimator import LogisticWaitModel
 from lisjong.policy_contract.action import DiscardAction
 from lisjong.policy_contract.seat import Seat
 
-MODEL = LogisticWaitModel(weights=(("bias", -3.0),))
+MODEL = accuracy.Riichi245Estimator(
+    LogisticWaitModel(weights=(("bias", -3.0),)), "0" * 64
+)
+
+
+def preset_for(**changes):
+    fields = {
+        "preset_id": "test-preset",
+        "version": 1,
+        "purpose": "development-baseline",
+        "train": (str(SEED),),
+        "valid": (),
+        "eval": (str(SEED + 1),),
+        "bootstrap_resamples": 50,
+    }
+    return accuracy.Preset(**(fields | changes))
+
+
+class AltEstimator:
+    """#245とは別の推定器: 全ての他家の行（リーチ者以外も）に定数を出す。"""
+
+    name = "alt"
+
+    def identity(self):
+        return {"name": self.name, "kind": "constant"}
+
+    def scope_seat(self, decision):
+        return 2 if len(decision.legal_actions) >= 2 else None
+
+    def predict(self, policy_input):
+        return (0.25,) * 34
 
 
 def labelled():
@@ -56,12 +87,12 @@ class RowsTest(unittest.TestCase):
 
     def test_245_is_provided_only_for_the_single_riichi_player_in_scope(self):
         rows = list(accuracy.build_rows(labelled(), MODEL))
-        provided = [(row.episode[1], row.in_245_scope) for row in rows]
+        provided = [(row.episode[1], row.in_scope) for row in rows]
         self.assertEqual(
             [seat for seat, scope in provided if scope], [1, 1]
         )  # A and C seat 1
         for row in rows:
-            self.assertEqual(row.wait_245 is None, not row.in_245_scope)
+            self.assertEqual(row.scoped_wait is None, not row.in_scope)
 
     def test_fewer_than_two_candidate_types_is_out_of_scope(self):
         legal = (DiscardAction(actor=Seat(0), tile=tiles("2p")[0], tsumogiri=False),)
@@ -71,7 +102,7 @@ class RowsTest(unittest.TestCase):
                 label_decisions([decision], [make_facts(20, A_HANDS)]), MODEL
             )
         )
-        self.assertFalse(any(row.in_245_scope for row in rows))
+        self.assertFalse(any(row.in_scope for row in rows))
 
 
 class KyokuInstanceTest(unittest.TestCase):
@@ -160,9 +191,7 @@ class PopulationTest(unittest.TestCase):
             a, b = Path(directory, "a"), Path(directory, "b")
             self.write(a, SEED, {"train": [SEED], "valid": [], "test": []})
             self.write(b, SEED + 1, {"train": [], "valid": [], "test": [SEED + 1]})
-            document = accuracy.evaluate_population(
-                [a, b], {"train": [SEED], "valid": [], "eval": [SEED + 1]}, MODEL
-            )
+            document = accuracy.evaluate_population([a, b], preset_for(), MODEL)
         counts = document["counts"]
         self.assertEqual(counts["eval"]["all"]["rows"], 9)
         self.assertEqual(counts["eval"]["all"]["245_scope_rows"], 2)
@@ -207,6 +236,290 @@ class PopulationTest(unittest.TestCase):
                 accuracy.check_population(
                     [a, b], {"train": [SEED], "valid": [], "eval": [SEED + 1]}
                 )
+
+
+class PresetTest(unittest.TestCase):
+    def test_preset_257_keeps_the_registered_values(self):
+        preset = accuracy.PRESET_257
+        self.assertEqual(preset.expected()["train"], tuple(range(933000, 933160)))
+        self.assertEqual(preset.expected()["valid"], tuple(range(933160, 933240)))
+        self.assertEqual(preset.expected()["eval"], tuple(range(933240, 933400)))
+        self.assertEqual(preset.bootstrap_resamples, 2000)
+        self.assertEqual(preset.bootstrap_seed, 257)
+        self.assertEqual(preset.jeffreys, 0.5)
+        self.assertEqual(preset.clip_epsilon, 1e-6)
+        self.assertEqual((preset.hold_min_hanchan, preset.hold_min_episodes), (50, 100))
+
+    def test_the_hash_follows_every_field(self):
+        base = preset_for()
+        self.assertEqual(base.sha256(), preset_for().sha256())
+        for changes in (
+            {"preset_id": "other"},
+            {"version": 2},
+            {"purpose": "formal-test"},
+            {"train": (str(SEED), str(SEED + 5))},
+            {"eval": (str(SEED + 2),)},
+            {"bootstrap_resamples": 51},
+            {"bootstrap_seed": 1},
+            {"jeffreys": 1.0},
+            {"hold_min_hanchan": 3},
+            {"hold_min_episodes": 3},
+        ):
+            self.assertNotEqual(base.sha256(), preset_for(**changes).sha256(), changes)
+
+    def test_round_trip_and_strict_fields(self):
+        preset = preset_for()
+        self.assertEqual(accuracy.Preset.from_dict(preset.to_dict()), preset)
+        extra = preset.to_dict() | {"unknown": 1}
+        missing = {k: v for k, v in preset.to_dict().items() if k != "jeffreys"}
+        wrong_schema = preset.to_dict() | {"schema": "other"}
+        for bad in (extra, missing, wrong_schema, []):
+            with self.assertRaises(accuracy.HandBeliefAccuracyError):
+                accuracy.Preset.from_dict(bad)
+
+    def test_invalid_presets_are_rejected(self):
+        for changes in (
+            {"purpose": "strength-claim"},
+            {"train": (str(SEED),), "eval": (str(SEED),)},  # overlap
+            {"valid": (f"{SEED}..{SEED + 1}",), "eval": (str(SEED + 1),)},
+            {"train": ("abc",)},
+            {"eval": ()},
+            {"bootstrap_resamples": 0},
+            {"jeffreys": 0},
+            {"hold_min_episodes": 0},
+            {"clip_epsilon": 1e-3},  # protocol invariantはpresetで変えられない
+        ):
+            with self.assertRaises(accuracy.HandBeliefAccuracyError, msg=changes):
+                preset_for(**changes)
+
+    def test_loading_requires_the_registered_hash(self):
+        preset = accuracy.PRESET_257
+        self.assertIs(accuracy.load_preset(preset.preset_id, preset.sha256()), preset)
+        with self.assertRaises(accuracy.HandBeliefAccuracyError):
+            accuracy.load_preset(preset.preset_id, "0" * 64)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "preset.json")
+            custom = preset_for()
+            path.write_text(canonical_json_text(custom.to_dict()))
+            self.assertEqual(accuracy.load_preset(str(path), custom.sha256()), custom)
+            with self.assertRaises(accuracy.HandBeliefAccuracyError):
+                accuracy.load_preset(str(path), preset.sha256())
+            with self.assertRaises(accuracy.HandBeliefAccuracyError):
+                accuracy.load_preset(str(Path(directory, "missing")), "0" * 64)
+
+
+class RegistrationTest(unittest.TestCase):
+    FIELDS = dict.fromkeys(accuracy.REGISTRATION_FIELDS)
+
+    def test_a_formal_test_must_record_its_reservation(self):
+        formal = preset_for(purpose="formal-test")
+        with self.assertRaises(accuracy.HandBeliefAccuracyError):
+            accuracy.check_registration(formal, self.FIELDS)
+        full = {name: "x" for name in accuracy.REGISTRATION_FIELDS}
+        self.assertEqual(accuracy.check_registration(formal, full), full)
+        for name in accuracy.REGISTRATION_FIELDS:
+            with self.assertRaises(accuracy.HandBeliefAccuracyError):
+                accuracy.check_registration(formal, full | {name: ""})
+
+    def test_a_development_baseline_may_leave_them_empty(self):
+        self.assertEqual(
+            accuracy.check_registration(preset_for(), self.FIELDS), self.FIELDS
+        )
+
+    def test_unknown_registration_fields_are_rejected(self):
+        with self.assertRaises(accuracy.HandBeliefAccuracyError):
+            accuracy.check_registration(preset_for(), self.FIELDS | {"extra": "x"})
+
+
+class ConfiguredEvaluationTest(unittest.TestCase):
+    def sources(self, directory):
+        a, b = Path(directory, "a"), Path(directory, "b")
+        if a.exists():
+            return [a, b]
+        PopulationTest.write(self, a, SEED, {"train": [SEED], "valid": [], "test": []})
+        PopulationTest.write(
+            self, b, SEED + 1, {"train": [], "valid": [], "test": [SEED + 1]}
+        )
+        return [a, b]
+
+    def run_with(self, preset=None, estimator=MODEL, registration=None):
+        with tempfile.TemporaryDirectory() as directory:
+            return accuracy.evaluate_population(
+                self.sources(directory), preset or preset_for(), estimator, registration
+            )
+
+    def test_another_estimator_runs_without_changing_the_evaluation_code(self):
+        document = self.run_with(estimator=AltEstimator())
+        self.assertEqual(document["estimator"], {"name": "alt", "kind": "constant"})
+        counts = document["counts"]["eval"]["all"]
+        self.assertGreater(counts["alt_scope_rows"], 0)
+        self.assertNotIn("245_scope_rows", counts)
+        self.assertIn("alt_scope", document["episode_macro"])
+        interval = "alt_scope/wait.alt_minus_rate.log_loss.all"
+        self.assertIn(interval, document["intervals"])
+        self.assertNotIn(
+            "245_scope/wait.245_minus_rate.log_loss.all", document["intervals"]
+        )
+
+    def test_rows_outside_the_estimators_scope_stay_unprovided(self):
+        rows = list(accuracy.build_rows(labelled(), AltEstimator()))
+        self.assertTrue(any(row.in_scope for row in rows))
+        self.assertTrue(any(not row.in_scope for row in rows))
+        for row in rows:
+            self.assertEqual(row.scoped_wait is None, not row.in_scope)
+
+    def test_the_result_records_the_preset_estimator_and_registration(self):
+        preset = preset_for(purpose="formal-test")
+        registration = {name: name.upper() for name in accuracy.REGISTRATION_FIELDS}
+        document = self.run_with(preset, registration=registration)
+        self.assertEqual(document["schema"], accuracy.RESULT_SCHEMA)
+        self.assertEqual(document["preset"]["sha256"], preset.sha256())
+        self.assertEqual(document["purpose"], "formal-test")
+        self.assertEqual(document["registration"], registration)
+        self.assertEqual(document["estimator"], MODEL.identity())
+        self.assertEqual(document["estimator"]["selection_sha256"], "0" * 64)
+        self.assertEqual(
+            set(document["population"]["coverage_sha256"]),
+            {str(p) for p in map(Path, document["population"]["manifest_sha256"])},
+        )
+
+    def test_a_formal_test_without_registration_runs_nothing(self):
+        with self.assertRaises(accuracy.HandBeliefAccuracyError):
+            self.run_with(preset_for(purpose="formal-test"))
+
+    def test_preset_values_reach_the_measurement(self):
+        base = self.run_with()
+        self.assertEqual(base["bootstrap"], {"resamples": 50, "seed": 257})
+        other = self.run_with(
+            preset_for(bootstrap_resamples=60, bootstrap_seed=7, jeffreys=1.0)
+        )
+        self.assertEqual(other["bootstrap"], {"resamples": 60, "seed": 7})
+        self.assertNotEqual(
+            base["rates"]["probabilities"], other["rates"]["probabilities"]
+        )
+        strict = self.run_with(preset_for(hold_min_hanchan=1, hold_min_episodes=1))
+        self.assertEqual(strict["judgement"]["all"]["wait"], "reported")
+        self.assertEqual(
+            strict["hold_rule"],
+            {"min_positive_hanchan": 1, "min_positive_episodes": 1},
+        )
+
+    def test_the_invariants_hold_for_every_preset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sources = self.sources(directory)
+            for bad in (
+                preset_for(eval=(str(SEED + 1), str(SEED + 2))),
+                preset_for(train=(str(SEED), str(SEED + 1)), eval=(str(SEED + 3),)),
+            ):
+                with self.assertRaises(accuracy.HandBeliefAccuracyError):
+                    accuracy.evaluate_population(sources, bad, MODEL)
+
+    def test_estimator_names_must_be_plain(self):
+        class Bad(AltEstimator):
+            name = "a.b"
+
+        with self.assertRaises(accuracy.HandBeliefAccuracyError):
+            self.run_with(estimator=Bad())
+
+
+class ReproductionTest(unittest.TestCase):
+    def v1(self, document):
+        """記録済みの#257 result（v1）の形に直す。"""
+        recorded = json.loads(canonical_json_text(document))
+        recorded["schema"] = "lisjong-hand-belief-accuracy-result-v1"
+        recorded["selection_245_sha256"] = recorded["estimator"]["selection_sha256"]
+        for key in ("preset", "purpose", "estimator", "registration"):
+            del recorded[key]
+        recorded["population"] = {
+            "producer": recorded["population"]["producer"],
+            "manifest_sha256": {
+                f"/elsewhere/{i}": value
+                for i, value in enumerate(
+                    recorded["population"]["manifest_sha256"].values()
+                )
+            },
+        }
+        return recorded
+
+    def document(self):
+        return ConfiguredEvaluationTest().run_with()
+
+    def test_the_same_measurement_reproduces_a_v1_record(self):
+        document = self.document()
+        new = json.loads(canonical_json_text(document))
+        self.assertEqual(accuracy.reproduction_differences(self.v1(document), new), [])
+        self.assertEqual(accuracy.reproduction_differences(new, new), [])
+
+    def test_a_changed_measurement_is_reported(self):
+        document = self.document()
+        recorded = self.v1(document)
+        recorded["intervals"]["all/expected_count.mse.all"]["point"] += 1e-9
+        recorded["counts"]["eval"]["all"]["rows"] += 1
+        recorded["selection_245_sha256"] = "1" * 64
+        new = json.loads(canonical_json_text(document))
+        self.assertEqual(
+            accuracy.reproduction_differences(recorded, new),
+            ["counts", "intervals", "selection_sha256"],
+        )
+
+
+class CommandLineTest(unittest.TestCase):
+    def run_main(self, directory, *extra):
+        helper = ConfiguredEvaluationTest()
+        sources = helper.sources(directory)
+        preset = preset_for()
+        path = Path(directory, "preset.json")
+        path.write_text(canonical_json_text(preset.to_dict()))
+        output = Path(directory, f"result{len(extra)}.json")
+        arguments = [
+            "--preset", str(path), "--preset-sha256", preset.sha256(),
+            "--selection-245", "unused", "--selection-245-sha256", "0" * 64,
+            "--output", str(output), *extra, *map(str, sources),
+        ]  # fmt: skip
+        with (
+            mock.patch.object(accuracy, "load_245_estimator", return_value=MODEL),
+            mock.patch("sys.stdout"),
+            mock.patch("sys.stderr"),
+        ):
+            code = accuracy.main(arguments)
+        return code, json.loads(output.read_text())
+
+    def test_the_result_records_the_execution_and_reproduction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code, first = self.run_main(directory)
+            self.assertEqual(code, 0)
+            self.assertEqual(first["preset"]["sha256"], preset_for().sha256())
+            self.assertGreater(first["execution"]["max_rss_kib"], 0)
+            recorded = Path(directory, "recorded.json")
+            recorded.write_text(canonical_json_text(first))
+            code, again = self.run_main(directory, "--reproduce-of", str(recorded))
+            self.assertEqual(code, 0)
+            self.assertEqual(again["reproduction"]["differing"], [])
+            tampered = json.loads(recorded.read_text())
+            tampered["counts"]["eval"]["all"]["rows"] += 1
+            recorded.write_text(canonical_json_text(tampered))
+            code, third = self.run_main(
+                directory, "--reproduce-of", str(recorded), "--evaluator-revision", "r"
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(third["reproduction"]["differing"], ["counts"])
+
+    def test_a_wrong_preset_hash_stops_before_reading_labels(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "preset.json")
+            path.write_text(canonical_json_text(preset_for().to_dict()))
+            with (
+                mock.patch.object(accuracy, "read_labelled_source") as read,
+                self.assertRaises(accuracy.HandBeliefAccuracyError),
+            ):
+                accuracy.main(
+                    [
+                        "--preset", str(path), "--preset-sha256", "0" * 64,
+                        "--selection-245", "unused", "--selection-245-sha256", "0",
+                        "--output", str(Path(directory, "out.json")), directory,
+                    ]
+                )  # fmt: skip
+            read.assert_not_called()
 
 
 class SupportTest(unittest.TestCase):
