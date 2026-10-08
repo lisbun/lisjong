@@ -5,10 +5,25 @@
 
 ```text
 python -m lisjong.learning.hand_belief_accuracy \\
-    --train 933000..933159 --valid 933160..933239 --eval 933240..933399 \\
+    --preset hand-belief-accuracy-257 --preset-sha256 HEX \\
     --selection-245 SELECTION.json --selection-245-sha256 HEX \\
     --output RESULT.json SOURCE [SOURCE ...]
 ```
+
+## 設定の2層（lisbun/lisjong#274）
+
+- **protocol preset**（``Preset``）: 分割のseed範囲、bootstrap回数・乱数seed、Jeffreys、
+  clip幅、判定保留の閾値、``purpose``。version付きのimmutableな値で、事前登録した
+  ``--preset-sha256`` と一致しなければラベルを読む前に拒否する。実行時に個別の値を
+  上書きするoptionはない。変える場合は新しいpresetを事前登録する（``--preset`` は
+  組み込みpresetの名前か、presetのJSON file）。#257の値は ``PRESET_257``
+- **差し替え点**: 比べる推定器（``ScopedWaitEstimator``。#245は ``Riichi245Estimator``）。
+  推定器が値を出す行（scope）を自分で宣言し、それ以外の行は未提供（``None``）のまま扱う。
+  比較baseline（trainの出現率）と集約・指標は共通で、presetの下で固定する
+
+``purpose`` が ``formal-test`` なら、``--allocation-identity`` / ``--ledger-revision`` /
+``--arena-revision`` が必須で、結果に記録する。live ledgerとの照合はlisjong-arena側
+（``check-allocation``）の責務で、ここでは検査せず記録だけを行う（arenaへ依存しない）。
 
 sourceは複数（chunk）を受け取る。各chunkのmanifestの ``train`` / ``valid`` / ``test`` を
 合わせたものが、指定した train / valid / eval のseed範囲とちょうど一致しなければならない
@@ -18,7 +33,7 @@ sourceは複数（chunk）を受け取る。各chunkのmanifestの ``train`` / `
 
 - ``expected_count`` / ``red_five_probability``: 条件付き一様推定器
   （``estimate_conditional_uniform_hand_belief``。他家のslot数は ``13 - 3 * 副露数``）
-- ``wait_probability``: 牌種ごとの待ち率（trainの全行、Jeffreys 0.5）。#245推定器は
+- ``wait_probability``: 牌種ごとの待ち率（trainの全行、Jeffreys）。#245推定器は
   凍結済みのselectionをそのまま使い、S1の対象条件の行（下記）でだけ値を出す
 - 形別7種: channel・牌種ごとの出現率（trainの全行、Jeffreys 0.5）。そのchannelが構造上
   占め得ないslotは``HandBelief``のcanonical zeroと同じく予測0とする（log lossではclipで
@@ -50,19 +65,23 @@ validで選ぶハイパーパラメータはない。validは正例・対象行�
   各エピソードの当該行だけで行平均し、その行を持つエピソード間で平均する
 - trainのfit（出現率）も同じ重み（エピソード1をその行で等分）を使う
 - 確率はすべて ``[1e-6, 1 - 1e-6]`` にclipしてから指標を計算する
-- 区間: 半荘単位のpaired bootstrap（2,000回、seed 257）、95%の百分位区間
+- 区間: 半荘単位のpaired bootstrap（#257は2,000回、seed 257）、95%の百分位区間
 """
 
 import argparse
 import hashlib
 import json
+import platform
+import resource
 import sys
+import time
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from math import log
 from pathlib import Path
 from random import Random
+from typing import Protocol
 
 from lisjong.belief.canonical_axes import (
     red_five_index,
@@ -95,7 +114,8 @@ from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
 from lisjong.policy_contract.tile import TileCategory
 
-RESULT_SCHEMA = "lisjong-hand-belief-accuracy-result-v1"
+RESULT_SCHEMA = "lisjong-hand-belief-accuracy-result-v2"
+PRESET_SCHEMA = "lisjong-hand-belief-accuracy-preset-v1"
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 257
 JEFFREYS = 0.5
@@ -166,7 +186,7 @@ def check_population(
     if not sources:
         raise _E("no source")
     producers, seen = set(), defaultdict(list)
-    manifests = {}
+    manifests, coverages = {}, {}
     for source in sources:
         manifest = read_manifest(source)
         producers.add(tuple(sorted(manifest.producer.items())))
@@ -175,6 +195,12 @@ def check_population(
         manifests[str(source)] = hashlib.sha256(
             (source / "manifest.json").read_bytes()
         ).hexdigest()
+        coverage = source / "coverage.json"
+        coverages[str(source)] = (
+            hashlib.sha256(coverage.read_bytes()).hexdigest()
+            if coverage.exists()
+            else None
+        )
     if len(producers) != 1:
         raise _E("the sources were made by different producers")
     every = [seed for name in seen for seed in seen[name]]
@@ -183,7 +209,11 @@ def check_population(
     for name in ("train", "valid", "eval"):
         if sorted(seen[name]) != sorted(expected[name]):
             raise _E(f"the {name} seeds differ from the registered range")
-    return {"producer": dict(producers.pop()), "manifest_sha256": manifests}
+    return {
+        "producer": dict(producers.pop()),
+        "manifest_sha256": manifests,
+        "coverage_sha256": coverages,
+    }
 
 
 def check_producer(identity: dict[str, object], registered: dict[str, object]) -> None:
@@ -203,6 +233,212 @@ def check_producer(identity: dict[str, object], registered: dict[str, object]) -
         )
 
 
+# --- protocol preset（事前登録して固定する値） ---------------------------------
+
+PURPOSES = ("development-baseline", "formal-test")
+_PRESET_FIELDS = (
+    "schema",
+    "preset_id",
+    "version",
+    "purpose",
+    "train",
+    "valid",
+    "eval",
+    "bootstrap_resamples",
+    "bootstrap_seed",
+    "jeffreys",
+    "clip_epsilon",
+    "hold_min_hanchan",
+    "hold_min_episodes",
+)
+
+
+def _ranges(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise _E(f"preset {name} must be a list of seed ranges")
+    for item in value:
+        try:
+            seed_range(item)
+        except (ValueError, argparse.ArgumentTypeError) as error:
+            raise _E(f"preset {name}: bad seed range {item!r}") from error
+    return tuple(value)
+
+
+@dataclass(frozen=True, slots=True)
+class Preset:
+    """測定の事前登録で固定する条件。呼び出し側が実行時に個別に上書きしない。"""
+
+    preset_id: str
+    version: int
+    purpose: str
+    train: tuple[str, ...]
+    valid: tuple[str, ...]
+    eval: tuple[str, ...]
+    bootstrap_resamples: int = BOOTSTRAP_RESAMPLES
+    bootstrap_seed: int = BOOTSTRAP_SEED
+    jeffreys: float = JEFFREYS
+    clip_epsilon: float = CLIP_EPSILON
+    hold_min_hanchan: int = HOLD_MIN_HANCHAN
+    hold_min_episodes: int = HOLD_MIN_EPISODES
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.preset_id, str) or not self.preset_id:
+            raise _E("preset_id must be a non-empty string")
+        if not isinstance(self.version, int) or isinstance(self.version, bool):
+            raise _E("preset version must be an integer")
+        if self.purpose not in PURPOSES:
+            raise _E(f"preset purpose must be one of {PURPOSES}")
+        for name in ("train", "valid", "eval"):
+            _ranges(getattr(self, name), name)
+        if not self.train or not self.eval:
+            raise _E("preset needs train and eval seeds")
+        every = [
+            seed for name in ("train", "valid", "eval") for seed in self.seeds(name)
+        ]
+        if len(every) != len(set(every)):
+            raise _E("preset train / valid / eval seeds overlap")
+        for name in ("bootstrap_resamples", "bootstrap_seed", "hold_min_hanchan"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise _E(f"preset {name} must be a positive integer")
+        if (
+            not isinstance(self.hold_min_episodes, int)
+            or isinstance(self.hold_min_episodes, bool)
+            or self.hold_min_episodes < 1
+        ):
+            raise _E("preset hold_min_episodes must be a positive integer")
+        if not isinstance(self.jeffreys, (int, float)) or not self.jeffreys > 0:
+            raise _E("preset jeffreys must be positive")
+        # clip幅は#245の学習側と共通のprotocol invariantで、presetでは変えられない
+        if self.clip_epsilon != CLIP_EPSILON:
+            raise _E(f"preset clip_epsilon is fixed at {CLIP_EPSILON}")
+
+    def seeds(self, name: str) -> tuple[int, ...]:
+        return tuple(seed for item in getattr(self, name) for seed in seed_range(item))
+
+    def expected(self) -> dict[str, tuple[int, ...]]:
+        return {name: self.seeds(name) for name in ("train", "valid", "eval")}
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": PRESET_SCHEMA,
+            "preset_id": self.preset_id,
+            "version": self.version,
+            "purpose": self.purpose,
+            "train": list(self.train),
+            "valid": list(self.valid),
+            "eval": list(self.eval),
+            "bootstrap_resamples": self.bootstrap_resamples,
+            "bootstrap_seed": self.bootstrap_seed,
+            "jeffreys": self.jeffreys,
+            "clip_epsilon": self.clip_epsilon,
+            "hold_min_hanchan": self.hold_min_hanchan,
+            "hold_min_episodes": self.hold_min_episodes,
+        }
+
+    def sha256(self) -> str:
+        return hashlib.sha256(canonical_json_text(self.to_dict()).encode()).hexdigest()
+
+    @classmethod
+    def from_dict(cls, value: object) -> "Preset":
+        if not isinstance(value, dict) or set(value) != set(_PRESET_FIELDS):
+            raise _E("the preset does not have exactly the preset fields")
+        if value["schema"] != PRESET_SCHEMA:
+            raise _E("not a preset document")
+        fields = {name: value[name] for name in _PRESET_FIELDS if name != "schema"}
+        for name in ("train", "valid", "eval"):
+            fields[name] = _ranges(fields[name], name)
+        return cls(**fields)
+
+
+# #257の事前登録（lisbun/lisjong#257）。この値を変えず、再現の基準とする
+PRESET_257 = Preset(
+    preset_id="hand-belief-accuracy-257",
+    version=1,
+    purpose="development-baseline",
+    train=("933000..933159",),
+    valid=("933160..933239",),
+    eval=("933240..933399",),
+)
+PRESETS = {PRESET_257.preset_id: PRESET_257}
+
+
+def load_preset(name_or_path: str, sha256: str) -> Preset:
+    """組み込みpresetの名前かJSON fileを読み、事前登録のhashと一致するか検査する。"""
+    if name_or_path in PRESETS:
+        preset = PRESETS[name_or_path]
+    else:
+        try:
+            preset = Preset.from_dict(json.loads(Path(name_or_path).read_text("utf-8")))
+        except OSError as error:
+            raise _E(f"cannot read the preset {name_or_path!r}") from error
+    if preset.sha256() != sha256:
+        raise _E("the preset does not match the registered SHA-256")
+    return preset
+
+
+# --- 比べる推定器（差し替え点） -----------------------------------------------
+
+
+class ScopedWaitEstimator(Protocol):
+    """待ち確率の推定器。値を出す行（scope）を自分で宣言する。
+
+    ``scope_seat`` が席を返した判断では、その席の行だけが対象内で、同じ判断の他の席と
+    scope外の判断の行は未提供（``None``）として扱う。ゼロ予測へ変換しない。
+    ``name`` は結果のkey（``wait.<name>.*`` / ``<name>_scope``）に使う。
+    """
+
+    name: str
+
+    def identity(self) -> dict[str, object]: ...
+
+    def scope_seat(self, decision) -> int | None: ...
+
+    def predict(self, policy_input) -> Sequence[float]:
+        """34牌種のcanonical順の確率。"""
+        ...
+
+
+class Riichi245Estimator:
+    """凍結済みの#245推定器。S1の対象条件のリーチ者の行だけで値を出す。"""
+
+    name = "245"
+
+    def __init__(self, model: LogisticWaitModel, selection_sha256: str) -> None:
+        self.model = model
+        self.selection_sha256 = selection_sha256
+
+    def identity(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "kind": "riichi-wait-logistic-245",
+            "selection_sha256": self.selection_sha256,
+            "feature_set": self.model.feature_set,
+        }
+
+    def scope_seat(self, decision) -> int | None:
+        """S1の対象ならリーチ者の席を返す。"""
+        if not isinstance(decision.selected_action, DiscardAction):
+            return None
+        candidates = {
+            action.tile.tile_type
+            for action in decision.legal_actions
+            if isinstance(action, DiscardAction)
+        }
+        if len(candidates) < 2:
+            return None
+        try:
+            return riichi_view(decision.policy_input).riichi_seat
+        except ValueError:
+            return None
+
+    def predict(self, policy_input) -> Sequence[float]:
+        predicted = self.model.predict(policy_input)
+        return tuple(predicted[tile_type_from_index(i)] for i in range(34))
+
+
 # --- 行 --------------------------------------------------------------------
 
 
@@ -219,8 +455,8 @@ class Row:
     expected_count: tuple[float, ...]
     red_five: tuple[float, ...]
     truth: HandBelief
-    in_245_scope: bool
-    wait_245: tuple[float, ...] | None
+    in_scope: bool
+    scoped_wait: tuple[float, ...] | None
 
 
 def _stratum(player) -> str:
@@ -248,27 +484,8 @@ def kyoku_instances(rows: Sequence[HandBeliefLabelledDecision]) -> dict[int, int
     return result
 
 
-def _in_245_scope(row: HandBeliefLabelledDecision) -> int | None:
-    """S1の対象ならリーチ者の席を返す。"""
-    decision = row.decision
-    pi = decision.policy_input
-    if not isinstance(decision.selected_action, DiscardAction):
-        return None
-    candidates = {
-        action.tile.tile_type
-        for action in decision.legal_actions
-        if isinstance(action, DiscardAction)
-    }
-    if len(candidates) < 2:
-        return None
-    try:
-        return riichi_view(pi).riichi_seat
-    except ValueError:
-        return None
-
-
 def build_rows(
-    labelled: Sequence[HandBeliefLabelledDecision], model_245: LogisticWaitModel
+    labelled: Sequence[HandBeliefLabelledDecision], estimator: ScopedWaitEstimator
 ) -> Iterator[Row]:
     by_seed = defaultdict(list)
     for row in labelled:
@@ -276,11 +493,11 @@ def build_rows(
     for seed in sorted(by_seed):
         instances = kyoku_instances(by_seed[seed])
         for row in by_seed[seed]:
-            yield from _rows_of(row, instances[row.decision.key.sequence], model_245)
+            yield from _rows_of(row, instances[row.decision.key.sequence], estimator)
 
 
 def _rows_of(
-    row: HandBeliefLabelledDecision, instance: int, model_245: LogisticWaitModel
+    row: HandBeliefLabelledDecision, instance: int, estimator: ScopedWaitEstimator
 ) -> Iterator[Row]:
     decision = row.decision
     pi = decision.policy_input
@@ -298,11 +515,10 @@ def _rows_of(
         for action in decision.legal_actions
         if isinstance(action, DiscardAction)
     )
-    scope_seat = _in_245_scope(row)
-    wait_245 = None
+    scope_seat = estimator.scope_seat(decision)
+    scoped_wait = None
     if scope_seat is not None:
-        predicted = model_245.predict(pi)
-        wait_245 = tuple(predicted[tile_type_from_index(i)] for i in range(34))
+        scoped_wait = tuple(estimator.predict(pi))
     for opponent in row.opponents:
         player = pi.players[opponent.seat]
         belief = uniform.hand(wind_for_seat(Seat(opponent.seat), dealer))
@@ -317,8 +533,8 @@ def _rows_of(
             expected_count=tuple(raw / SCALE for raw in belief.expected_count_raw),
             red_five=tuple(raw / SCALE for raw in belief.red_five_probability_raw),
             truth=opponent.truth,
-            in_245_scope=in_scope,
-            wait_245=wait_245 if in_scope else None,
+            in_scope=in_scope,
+            scoped_wait=scoped_wait if in_scope else None,
         )
 
 
@@ -377,7 +593,7 @@ class RateFit:
                     if label:
                         target[index] += weight
 
-    def probabilities(self) -> dict[str, tuple[float, ...]]:
+    def probabilities(self, jeffreys: float = JEFFREYS) -> dict[str, tuple[float, ...]]:
         if not self.weight:
             raise _E("no train row")
         valid = {"wait": frozenset(range(34))} | {
@@ -385,7 +601,7 @@ class RateFit:
         }
         return {
             name: tuple(
-                (value + JEFFREYS) / (self.weight + 2 * JEFFREYS)
+                (value + jeffreys) / (self.weight + 2 * jeffreys)
                 if index in valid[name]
                 else 0.0
                 for index, value in enumerate(values)
@@ -473,21 +689,27 @@ def _probability_metrics(metrics, prefix, p, labels, candidates) -> None:
         )
 
 
-def scope_metrics(row: Row, rates: dict[str, tuple[float, ...]]) -> dict[str, float]:
-    """#245の対象行だけ: #245とbaselineを同じ行で。"""
+def scope_metrics(
+    row: Row, rates: dict[str, tuple[float, ...]], name: str = "245"
+) -> dict[str, float]:
+    """推定器の対象行だけ: 推定器とbaselineを同じ行で。"""
     metrics: dict[str, float] = {}
     waits = wait_labels(row)
     _probability_metrics(
-        metrics, "wait.245", [clip(p) for p in row.wait_245], waits, row.candidates
+        metrics,
+        f"wait.{name}",
+        [clip(p) for p in row.scoped_wait],
+        waits,
+        row.candidates,
     )
     _probability_metrics(
         metrics, "wait.rate", [clip(p) for p in rates["wait"]], waits, row.candidates
     )
-    metrics["wait.245.predicted_kinds"] = sum(row.wait_245)
+    metrics[f"wait.{name}.predicted_kinds"] = sum(row.scoped_wait)
     metrics["wait.actual_kinds"] = sum(waits)
     for suffix in ("log_loss.all", "log_loss.candidates", "brier.all"):
-        metrics[f"wait.245_minus_rate.{suffix}"] = (
-            metrics[f"wait.245.{suffix}"] - metrics[f"wait.rate.{suffix}"]
+        metrics[f"wait.{name}_minus_rate.{suffix}"] = (
+            metrics[f"wait.{name}.{suffix}"] - metrics[f"wait.rate.{suffix}"]
         )
     return metrics
 
@@ -528,7 +750,11 @@ class Evaluation:
     calibration: dict[str, _Calibration] = field(
         default_factory=lambda: defaultdict(_Calibration)
     )
-    support: "Support" = field(default_factory=lambda: Support())
+    scope: str = "245"
+    support: "Support" = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.support = Support(self.scope)
 
     def add(self, rows: Sequence[Row], rates: dict[str, tuple[float, ...]]) -> None:
         for row, weight in zip(rows, episode_weights(rows)):
@@ -545,18 +771,18 @@ class Evaluation:
             self.calibration["red_five.uniform"].add(
                 weight, [clip(p) for p in row.red_five], red_labels(row)
             )
-            if row.in_245_scope:
-                scoped = scope_metrics(row, rates)
-                self.groups.add(row.seed, row.episode, "245_scope", scoped)
+            if row.in_scope:
+                scoped = scope_metrics(row, rates, self.scope)
+                self.groups.add(row.seed, row.episode, f"{self.scope}_scope", scoped)
                 self.groups.add(
-                    row.seed, row.episode, f"245_scope.turn.{row.turn}", scoped
+                    row.seed, row.episode, f"{self.scope}_scope.turn.{row.turn}", scoped
                 )
-        # #245の対象行だけで別に重みを付け直す（エピソード1を対象行で等分）
-        scoped_rows = [row for row in rows if row.in_245_scope]
+        # 推定器の対象行だけで別に重みを付け直す（エピソード1を対象行で等分）
+        scoped_rows = [row for row in rows if row.in_scope]
         for row, weight in zip(scoped_rows, episode_weights(scoped_rows)):
             labels = wait_labels(row)
-            self.calibration["wait.245.scope"].add(
-                weight, [clip(p) for p in row.wait_245], labels
+            self.calibration[f"wait.{self.scope}.scope"].add(
+                weight, [clip(p) for p in row.scoped_wait], labels
             )
             self.calibration["wait.rate.scope"].add(
                 weight, [clip(p) for p in rates["wait"]], labels
@@ -565,27 +791,34 @@ class Evaluation:
 
 COUNT_GROUPS = ("all", *(f"stratum.{stratum}" for stratum in STRATA))
 COUNT_TABLES = ("wait", *(name for name, _, _ in CHANNELS))
-_ROW_COUNTS = (
-    "rows",
-    "245_scope_rows",
-    *(f"{table}.positive_rows" for table in COUNT_TABLES),
-)
-_SET_COUNTS = (
-    "episodes",
-    "hanchan",
-    "245_scope_episodes",
-    *(
-        f"{table}.positive_{unit}"
-        for table in COUNT_TABLES
-        for unit in ("episodes", "hanchan")
-    ),
-)
+
+
+def _row_counts(scope: str) -> tuple[str, ...]:
+    return (
+        "rows",
+        f"{scope}_scope_rows",
+        *(f"{table}.positive_rows" for table in COUNT_TABLES),
+    )
+
+
+def _set_counts(scope: str) -> tuple[str, ...]:
+    return (
+        "episodes",
+        "hanchan",
+        f"{scope}_scope_episodes",
+        *(
+            f"{table}.positive_{unit}"
+            for table in COUNT_TABLES
+            for unit in ("episodes", "hanchan")
+        ),
+    )
 
 
 class Support:
     """正例・対象行の件数（行・エピソード・独立半荘）。splitごとに1つ持つ。"""
 
-    def __init__(self) -> None:
+    def __init__(self, scope: str = "245") -> None:
+        self.scope = scope
         self.sets: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
         self.rows: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
@@ -599,9 +832,9 @@ class Support:
             rows["rows"] += 1
             sets["episodes"].add(episode)
             sets["hanchan"].add(row.seed)
-            rows["245_scope_rows"] += row.in_245_scope
-            if row.in_245_scope:
-                sets["245_scope_episodes"].add(episode)
+            rows[f"{self.scope}_scope_rows"] += row.in_scope
+            if row.in_scope:
+                sets[f"{self.scope}_scope_episodes"].add(episode)
             for name, labels in tables.items():
                 if any(labels):
                     rows[f"{name}.positive_rows"] += 1
@@ -613,19 +846,26 @@ class Support:
         result = {}
         for group in COUNT_GROUPS:
             rows, sets = self.rows.get(group, {}), self.sets.get(group, {})
-            values = {name: rows.get(name, 0) for name in _ROW_COUNTS}
-            values |= {name: len(sets.get(name, ())) for name in _SET_COUNTS}
+            values = {name: rows.get(name, 0) for name in _row_counts(self.scope)}
+            values |= {
+                name: len(sets.get(name, ())) for name in _set_counts(self.scope)
+            }
             result[group] = dict(sorted(values.items()))
         return result
 
 
-def judgement(counts: dict[str, int], table: str) -> str:
-    """希少な正例の扱い（#257計画の6、閾値は生成前に確定する案）。"""
+def judgement(
+    counts: dict[str, int],
+    table: str,
+    min_hanchan: int = HOLD_MIN_HANCHAN,
+    min_episodes: int = HOLD_MIN_EPISODES,
+) -> str:
+    """希少な正例の扱い（#257計画の6）。閾値はpresetで事前登録する。"""
     episodes = counts[f"{table}.positive_episodes"]
     hanchan = counts[f"{table}.positive_hanchan"]
     if not episodes:
         return "not_estimable"
-    if hanchan < HOLD_MIN_HANCHAN or episodes < HOLD_MIN_EPISODES:
+    if hanchan < min_hanchan or episodes < min_episodes:
         return "held"
     return "reported"
 
@@ -647,11 +887,14 @@ PRIMARY = (
     *(f"channel.{name}.log_loss.all" for name, _, _ in CHANNELS),
     *(f"channel.{name}.log_loss.valid_slots" for name, _, _ in CHANNELS),
 )
-PRIMARY_245 = (
-    "wait.245.log_loss.all",
-    "wait.rate.log_loss.all",
-    "wait.245_minus_rate.log_loss.all",
-)
+
+
+def primary_scoped(name: str) -> tuple[str, ...]:
+    return (
+        f"wait.{name}.log_loss.all",
+        "wait.rate.log_loss.all",
+        f"wait.{name}_minus_rate.log_loss.all",
+    )
 
 
 def bootstrap(
@@ -660,15 +903,14 @@ def bootstrap(
     targets: Sequence[tuple[str, str]],
     *,
     seed: int = BOOTSTRAP_SEED,
+    resamples: int = BOOTSTRAP_RESAMPLES,
 ) -> dict[str, dict[str, object]]:
     """eval半荘を復元抽出し、各 (group, 指標) のepisode-macroの95%区間を求める。
 
     全targetで同じ再標本を使う（paired）。
     """
     random = Random(seed)
-    samples = [
-        [random.choice(seeds) for _ in seeds] for _ in range(BOOTSTRAP_RESAMPLES)
-    ]
+    samples = [[random.choice(seeds) for _ in seeds] for _ in range(resamples)]
     result = {}
     for group, metric in targets:
         per_seed = per_group.get(group, {})
@@ -695,8 +937,12 @@ def load_245_model(path: Path, sha256: str) -> LogisticWaitModel:
     return _models_from_value(chosen["models"])[2]
 
 
+def load_245_estimator(path: Path, sha256: str) -> Riichi245Estimator:
+    return Riichi245Estimator(load_245_model(path, sha256), sha256)
+
+
 def _rows_of_splits(
-    source: Path, splits: Sequence[str], model_245
+    source: Path, splits: Sequence[str], estimator: ScopedWaitEstimator
 ) -> dict[str, list[Row]]:
     manifest, labelled = read_labelled_source(source)
     result = {}
@@ -705,28 +951,56 @@ def _rows_of_splits(
         chosen = [r for r in labelled if r.decision.key.seed in wanted]
         if {r.decision.key.seed for r in chosen} != wanted:
             raise _E(f"{source}: a {split} seed has no decision")
-        result[split] = list(build_rows(chosen, model_245))
+        result[split] = list(build_rows(chosen, estimator))
     return result
+
+
+REGISTRATION_FIELDS = (
+    "allocation_identity",
+    "ledger_revision",
+    "arena_revision",
+    "evaluator_revision",
+)
+
+
+def check_registration(
+    preset: Preset, registration: dict[str, str | None]
+) -> dict[str, str | None]:
+    """formal-testでは、予約の識別情報を記録することを求める（live ledgerの照合はArena側）。"""
+    if set(registration) != set(REGISTRATION_FIELDS):
+        raise _E("the registration does not have exactly the registration fields")
+    if preset.purpose == "formal-test":
+        missing = [name for name, value in registration.items() if not value]
+        if missing:
+            raise _E("a formal-test needs " + ", ".join(missing))
+    return dict(registration)
 
 
 def evaluate_population(
     sources: Sequence[Path],
-    expected: dict[str, Sequence[int]],
-    model_245: LogisticWaitModel,
+    preset: Preset,
+    estimator: ScopedWaitEstimator,
+    registration: dict[str, str | None] | None = None,
 ) -> dict[str, object]:
+    registration = check_registration(
+        preset, registration or dict.fromkeys(REGISTRATION_FIELDS)
+    )
+    if not (estimator.name.isascii() and estimator.name.isalnum()):
+        raise _E("the estimator name must be alphanumeric")
+    expected = preset.expected()
     identity = check_population(sources, expected)
     fit = RateFit()
-    support = {"train": Support(), "valid": Support()}
+    support = {"train": Support(estimator.name), "valid": Support(estimator.name)}
     for source in sources:
-        rows = _rows_of_splits(source, ("train", "valid"), model_245)
+        rows = _rows_of_splits(source, ("train", "valid"), estimator)
         fit.add(rows["train"])
         for name in ("train", "valid"):
             for row in rows[name]:
                 support[name].add(row)
-    rates = fit.probabilities()
-    evaluation = Evaluation()
+    rates = fit.probabilities(preset.jeffreys)
+    evaluation = Evaluation(scope=estimator.name)
     for source in sources:
-        evaluation.add(_rows_of_splits(source, ("test",), model_245)["test"], rates)
+        evaluation.add(_rows_of_splits(source, ("test",), estimator)["test"], rates)
     eval_counts = evaluation.support.counts()
     per_group = evaluation.groups.per_seed()
     seeds = sorted(expected["eval"])
@@ -738,7 +1012,7 @@ def evaluate_population(
             for group in base_groups
             for tenpai in ("tenpai", "not_tenpai")
         ]
-        + [("245_scope", metric) for metric in PRIMARY_245]
+        + [(f"{estimator.name}_scope", m) for m in primary_scoped(estimator.name)]
     )
     point = {
         group: {
@@ -749,6 +1023,10 @@ def evaluate_population(
     }
     return {
         "schema": RESULT_SCHEMA,
+        "preset": preset.to_dict() | {"sha256": preset.sha256()},
+        "purpose": preset.purpose,
+        "estimator": estimator.identity(),
+        "registration": registration,
         "population": identity,
         "splits": {name: sorted(seeds) for name, seeds in expected.items()},
         "valid_used_for": "support counts only",
@@ -759,46 +1037,125 @@ def evaluate_population(
             "eval": eval_counts,
         },
         "judgement": {
-            group: {table: judgement(counts, table) for table in COUNT_TABLES}
+            group: {
+                table: judgement(
+                    counts, table, preset.hold_min_hanchan, preset.hold_min_episodes
+                )
+                for table in COUNT_TABLES
+            }
             for group, counts in eval_counts.items()
         },
         "hold_rule": {
-            "min_positive_hanchan": HOLD_MIN_HANCHAN,
-            "min_positive_episodes": HOLD_MIN_EPISODES,
+            "min_positive_hanchan": preset.hold_min_hanchan,
+            "min_positive_episodes": preset.hold_min_episodes,
         },
         "episode_macro": point,
-        "intervals": bootstrap(per_group, seeds, targets),
+        "intervals": bootstrap(
+            per_group,
+            seeds,
+            targets,
+            seed=preset.bootstrap_seed,
+            resamples=preset.bootstrap_resamples,
+        ),
         "calibration": {
             name: cal.summary() for name, cal in sorted(evaluation.calibration.items())
         },
-        "bootstrap": {"resamples": BOOTSTRAP_RESAMPLES, "seed": BOOTSTRAP_SEED},
+        "bootstrap": {
+            "resamples": preset.bootstrap_resamples,
+            "seed": preset.bootstrap_seed,
+        },
         "clip_epsilon": CLIP_EPSILON,
     }
 
 
+# 再現の比較に使う、測定値の部分（実行環境・パス・v2で増えた記録は含めない）
+REPRODUCED_KEYS = (
+    "splits",
+    "valid_used_for",
+    "rates",
+    "counts",
+    "judgement",
+    "hold_rule",
+    "episode_macro",
+    "intervals",
+    "calibration",
+    "bootstrap",
+    "clip_epsilon",
+)
+
+
+def _comparable(document: dict) -> dict[str, object]:
+    population = document["population"]
+    selection = document.get("selection_245_sha256") or (
+        document.get("estimator", {}).get("selection_sha256")
+    )
+    return {key: document.get(key) for key in REPRODUCED_KEYS} | {
+        "producer": population["producer"],
+        "manifest_sha256": sorted(population["manifest_sha256"].values()),
+        "selection_sha256": selection,
+    }
+
+
+def reproduction_differences(recorded: dict, new: dict) -> list[str]:
+    """記録済み結果（v1でもv2でも）と新しい結果の測定値の違うkey。空なら再現している。"""
+    left, right = _comparable(recorded), _comparable(new)
+    return sorted(key for key in left if left[key] != right[key])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=__name__)
-    parser.add_argument("--train", type=seed_range, required=True)
-    parser.add_argument("--valid", type=seed_range, required=True)
-    parser.add_argument("--eval", type=seed_range, required=True)
+    parser.add_argument("--preset", required=True)
+    parser.add_argument("--preset-sha256", required=True)
     parser.add_argument("--selection-245", type=Path, required=True)
     parser.add_argument("--selection-245-sha256", required=True)
+    parser.add_argument("--allocation-identity")
+    parser.add_argument("--ledger-revision")
+    parser.add_argument("--arena-revision")
+    parser.add_argument("--evaluator-revision")
+    parser.add_argument("--reproduce-of", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("sources", type=Path, nargs="+")
     arguments = parser.parse_args(argv)
     if arguments.output.exists():
         parser.error(f"refusing to overwrite {arguments.output}")
-    model = load_245_model(arguments.selection_245, arguments.selection_245_sha256)
-    expected = {
-        "train": arguments.train,
-        "valid": arguments.valid,
-        "eval": arguments.eval,
+    started = time.monotonic()
+    preset = load_preset(arguments.preset, arguments.preset_sha256)
+    estimator = load_245_estimator(
+        arguments.selection_245, arguments.selection_245_sha256
+    )
+    registration = {
+        "allocation_identity": arguments.allocation_identity,
+        "ledger_revision": arguments.ledger_revision,
+        "arena_revision": arguments.arena_revision,
+        "evaluator_revision": arguments.evaluator_revision,
     }
-    document = evaluate_population(arguments.sources, expected, model)
-    document["selection_245_sha256"] = arguments.selection_245_sha256
+    document = evaluate_population(arguments.sources, preset, estimator, registration)
+    if arguments.reproduce_of is not None:
+        recorded = json.loads(arguments.reproduce_of.read_text(encoding="utf-8"))
+        differing = reproduction_differences(
+            recorded, json.loads(canonical_json_text(document))
+        )
+        document["reproduction"] = {
+            "of_sha256": hashlib.sha256(
+                arguments.reproduce_of.read_bytes()
+            ).hexdigest(),
+            "differing": differing,
+        }
+    document["execution"] = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "wall_seconds": round(time.monotonic() - started, 1),
+        "max_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+    }
     arguments.output.write_text(canonical_json_text(document), encoding="utf-8")
     json.dump(document["intervals"], sys.stdout, ensure_ascii=False, indent=1)
     print()
+    if document.get("reproduction", {}).get("differing"):
+        print(
+            "NOT reproduced: " + ", ".join(document["reproduction"]["differing"]),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
