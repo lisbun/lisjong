@@ -3,6 +3,11 @@
 Each source argument is a population directory containing base/ and ron/.
 Expected seeds and the full producer identity must be supplied before labels
 are read. valid reports support only; eval is the source manifest's test split.
+
+#277 adds optional estimators. Each is scored only on the rows it provides,
+paired with both baselines on those same rows, and reported under "estimators";
+the baseline sections are computed exactly as without it. --score valid scores
+the valid split instead of eval (tuning and diagnostics) and never reads eval.
 """
 
 import argparse
@@ -10,6 +15,7 @@ import hashlib
 import json
 import sys
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import log
 from pathlib import Path
@@ -17,7 +23,13 @@ from random import Random
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.fixed_point import SCALE, probability_to_raw
+from lisjong.belief.hand_belief import HandBelief
+from lisjong.learning._canonical import canonical_json_text
 from lisjong.learning.hand_belief_source import read_manifest
+from lisjong.learning.riichi_wait_evaluation import (
+    _check_selection,
+    _models_from_value,
+)
 from lisjong.learning.ron_legal_baseline import (
     BASELINES,
     CONTEXT_PROTOCOL,
@@ -25,6 +37,11 @@ from lisjong.learning.ron_legal_baseline import (
     RonRateModel,
     StratumRates,
     public_stratum,
+)
+from lisjong.learning.ron_legal_estimator import (
+    RIICHI_SCOPE,
+    TRANSFORM,
+    estimate_riichi_ron_legal_belief,
 )
 from lisjong.learning.ron_legal_source import (
     RULES,
@@ -45,6 +62,17 @@ DIAGNOSTICS = (
     "temporary_furiten",
     "riichi_missed_furiten",
     "no_yaku",
+)
+METRICS = ("log_loss", "brier", "candidate_log_loss")
+# Per-row slot sums that show how far ron truth falls below the wait estimate.
+# "zeroed" slots are those where the estimator's ron is below its own wait.
+GAP_SUMS = (
+    "predicted_wait",
+    "predicted_ron",
+    "actual_wait",
+    "actual_ron",
+    "actual_wait_not_zeroed",
+    "actual_ron_zeroed",
 )
 
 
@@ -87,6 +115,46 @@ class Row:
     @property
     def groups(self):
         return ("all", self.stratum, *self.diagnostics)
+
+
+@dataclass(frozen=True, slots=True)
+class Estimator:
+    """A PolicyInput-only ron estimator; predict returns None when unprovided."""
+
+    name: str
+    identity: dict
+    predict: Callable[[PolicyInput, Seat], HandBelief | None]
+
+    def __post_init__(self):
+        if not self.name.isidentifier() or self.name in BASELINES:
+            raise RonLegalAccuracyError("estimator name is invalid or a baseline")
+
+
+def riichi_wait_zero_estimator(selection, sha256):
+    """#245's frozen wait model times the certain zeros; identity fails closed."""
+    data = selection.read_bytes()
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise RonLegalAccuracyError("wait selection differs from registered SHA-256")
+    chosen = json.loads(data)
+    _check_selection(chosen)
+    model = _models_from_value(chosen["models"])[2]
+    return Estimator(
+        "riichi_wait_zero",
+        {
+            "transform": TRANSFORM,
+            "scope": RIICHI_SCOPE,
+            "selection_sha256": sha256,
+            "selection_schema": chosen["schema"],
+            "feature_set": model.feature_set,
+            "chosen_l2": chosen["chosen_l2"],
+            "weights_sha256": hashlib.sha256(
+                canonical_json_text(dict(model.weights)).encode()
+            ).hexdigest(),
+        },
+        lambda policy_input, seat: estimate_riichi_ron_legal_belief(
+            policy_input, seat, model
+        ),
+    )
 
 
 def _binary(raw):
@@ -266,16 +334,48 @@ def metrics(raw, labels, candidates):
     }
 
 
+def _calibrate(table, raw, labels):
+    for p, y in zip(raw, labels):
+        probability = p / SCALE
+        bucket = table[min(int(probability * 10), 9)]
+        bucket[0] += 1
+        bucket[1] += probability
+        bucket[2] += y
+
+
+def gap_sums(prediction, row):
+    wait, ron = prediction.wait_probability_raw, prediction.ron_legal_probability_raw
+    kept = tuple(r >= w for r, w in zip(ron, wait))
+    return {
+        "predicted_wait": sum(wait) / SCALE,
+        "predicted_ron": sum(ron) / SCALE,
+        "actual_wait": sum(row.wait),
+        "actual_ron": sum(row.ron),
+        "actual_wait_not_zeroed": sum(w and k for w, k in zip(row.wait, kept)),
+        "actual_ron_zeroed": sum(y and not k for y, k in zip(row.ron, kept)),
+    }
+
+
 class Evaluation:
-    def __init__(self):
+    def __init__(self, estimators=()):
         self.cells = {}
         self.coverage = {g: Counter() for g in (*GROUPS, *DIAGNOSTICS)}
+        self.estimators = tuple(estimators)
+        if len({e.name for e in self.estimators}) != len(self.estimators):
+            raise RonLegalAccuracyError("duplicate estimator name")
+        self.estimator_cells = {e.name: {} for e in self.estimators}
+        self.estimator_coverage = {
+            e.name: {g: Counter() for g in (*GROUPS, *DIAGNOSTICS)}
+            for e in self.estimators
+        }
 
     def add(self, row, model):
         predictions = {
             b: model.predict(row.policy_input, row.seat, b) for b in BASELINES
         }
         available = all(p is not None for p in predictions.values())
+        for estimator in self.estimators:
+            self._add_estimator(estimator, row, predictions, available)
         for group in row.groups:
             self.coverage[group]["target_rows"] += 1
             self.coverage[group][
@@ -300,58 +400,133 @@ class Evaluation:
                 values[baseline] = metrics(raw, row.ron, row.candidates)
                 for name, value in values[baseline].items():
                     cell["metrics"][f"{baseline}.{name}"] += value
-                for p, y in zip(raw, row.ron):
-                    probability = p / SCALE
-                    bucket = cell["calibration"][baseline][
-                        min(int(probability * 10), 9)
-                    ]
-                    bucket[0] += 1
-                    bucket[1] += probability
-                    bucket[2] += y
+                _calibrate(cell["calibration"][baseline], raw, row.ron)
             cell["metrics"]["wait_genbutsu_minus_ron_rate.log_loss"] += (
                 values["wait_genbutsu"]["log_loss"] - values["ron_rate"]["log_loss"]
             )
 
+    def _add_estimator(self, estimator, row, baselines, available):
+        name = estimator.name
+        prediction = estimator.predict(row.policy_input, row.seat)
+        if prediction is not None:
+            # An unprovided row stays unprovided; a malformed one is an error.
+            if (
+                not isinstance(prediction, HandBelief)
+                or prediction.ron_legal_probability_raw is None
+            ):
+                raise RonLegalAccuracyError("estimator must return paired wait and ron")
+            if not available:
+                raise RonLegalAccuracyError("estimator row has no paired baseline")
+            values = {
+                name: metrics(
+                    prediction.ron_legal_probability_raw, row.ron, row.candidates
+                )
+            } | {
+                b: metrics(p.ron_legal_probability_raw, row.ron, row.candidates)
+                for b, p in baselines.items()
+            }
+            gaps = gap_sums(prediction, row)
+        for group in row.groups:
+            coverage = self.estimator_coverage[name][group]
+            coverage["target_rows"] += 1
+            coverage["unprovided_rows" if prediction is None else "provided_rows"] += 1
+            if prediction is None:
+                continue
+            cell = self.estimator_cells[name].setdefault(
+                (group, row.episode),
+                {
+                    "rows": 0,
+                    "metrics": Counter(),
+                    "calibration": {name: [[0, 0.0, 0] for _ in range(10)]},
+                },
+            )
+            cell["rows"] += 1
+            for metric in METRICS:
+                for model, value in values.items():
+                    cell["metrics"][f"{model}.{metric}"] += value[metric]
+                for baseline in BASELINES:
+                    cell["metrics"][f"{name}_minus_{baseline}.{metric}"] += (
+                        values[name][metric] - values[baseline][metric]
+                    )
+            for key, value in gaps.items():
+                cell["metrics"][f"{name}.{key}"] += value
+            _calibrate(
+                cell["calibration"][name], prediction.ron_legal_probability_raw, row.ron
+            )
+
     def per_seed(self):
-        result = defaultdict(lambda: defaultdict(dict))
-        for (group, episode), cell in self.cells.items():
-            for metric, total in cell["metrics"].items():
-                pair = result[group][episode[0]].setdefault(metric, [0.0, 0])
-                pair[0] += total / cell["rows"]
-                pair[1] += 1
-        return result
+        return _per_seed(self.cells)
 
     def calibration(self):
-        bins = {
-            g: {b: [[0, 0.0, 0.0, 0.0] for _ in range(10)] for b in BASELINES}
-            for g in (*GROUPS, *DIAGNOSTICS)
-        }
-        for (group, _), cell in self.cells.items():
-            denominator = cell["rows"] * 34
-            for baseline in BASELINES:
-                for target, (slots, predicted, observed) in zip(
-                    bins[group][baseline], cell["calibration"][baseline]
-                ):
-                    target[0] += slots
-                    target[1] += slots / denominator
-                    target[2] += predicted / denominator
-                    target[3] += observed / denominator
+        return _calibration(self.cells, BASELINES)
+
+    def estimator_value(self, estimator, seeds):
+        name = estimator.name
+        cells = self.estimator_cells[name]
+        targets = tuple(
+            f"{model}.{metric}"
+            for metric in METRICS
+            for model in (
+                name,
+                *BASELINES,
+                *(f"{name}_minus_{b}" for b in BASELINES),
+            )
+        ) + tuple(f"{name}.{key}" for key in GAP_SUMS)
         return {
-            g: {
-                b: [
-                    {
-                        "bin": i,
-                        "slots": slots,
-                        "episode_weight": weight,
-                        "mean_probability": predicted / weight if weight else None,
-                        "observed_rate": observed / weight if weight else None,
-                    }
-                    for i, (slots, weight, predicted, observed) in enumerate(table)
-                ]
-                for b, table in baselines.items()
-            }
-            for g, baselines in bins.items()
+            "identity": estimator.identity,
+            "coverage": {
+                g: {
+                    k: self.estimator_coverage[name][g][k]
+                    for k in ("target_rows", "provided_rows", "unprovided_rows")
+                }
+                for g in self.estimator_coverage[name]
+            },
+            "metrics": _intervals(_per_seed(cells), seeds, targets),
+            "calibration": _calibration(cells, (name,)),
         }
+
+
+def _per_seed(cells):
+    result = defaultdict(lambda: defaultdict(dict))
+    for (group, episode), cell in cells.items():
+        for metric, total in cell["metrics"].items():
+            pair = result[group][episode[0]].setdefault(metric, [0.0, 0])
+            pair[0] += total / cell["rows"]
+            pair[1] += 1
+    return result
+
+
+def _calibration(cells, names):
+    bins = {
+        g: {b: [[0, 0.0, 0.0, 0.0] for _ in range(10)] for b in names}
+        for g in (*GROUPS, *DIAGNOSTICS)
+    }
+    for (group, _), cell in cells.items():
+        denominator = cell["rows"] * 34
+        for baseline in names:
+            for target, (slots, predicted, observed) in zip(
+                bins[group][baseline], cell["calibration"][baseline]
+            ):
+                target[0] += slots
+                target[1] += slots / denominator
+                target[2] += predicted / denominator
+                target[3] += observed / denominator
+    return {
+        g: {
+            b: [
+                {
+                    "bin": i,
+                    "slots": slots,
+                    "episode_weight": weight,
+                    "mean_probability": predicted / weight if weight else None,
+                    "observed_rate": observed / weight if weight else None,
+                }
+                for i, (slots, weight, predicted, observed) in enumerate(table)
+            ]
+            for b, table in baselines.items()
+        }
+        for g, baselines in bins.items()
+    }
 
 
 def episode_mean(per_seed, seeds, metric):
@@ -361,18 +536,25 @@ def episode_mean(per_seed, seeds, metric):
 
 
 def confidence_intervals(evaluation, seeds):
+    return _intervals(
+        evaluation.per_seed(),
+        seeds,
+        (
+            "ron_rate.log_loss",
+            "wait_genbutsu.log_loss",
+            "wait_genbutsu_minus_ron_rate.log_loss",
+            "ron_rate.brier",
+            "wait_genbutsu.brier",
+            "ron_rate.candidate_log_loss",
+            "wait_genbutsu.candidate_log_loss",
+        ),
+    )
+
+
+def _intervals(per_group, seeds, targets):
+    # The same RNG seed gives every model the same half-game draws (paired).
     random = Random(BOOTSTRAP_SEED)
     draws = [[random.choice(seeds) for _ in seeds] for _ in range(BOOTSTRAP_RESAMPLES)]
-    per_group = evaluation.per_seed()
-    targets = (
-        "ron_rate.log_loss",
-        "wait_genbutsu.log_loss",
-        "wait_genbutsu_minus_ron_rate.log_loss",
-        "ron_rate.brier",
-        "wait_genbutsu.brier",
-        "ron_rate.candidate_log_loss",
-        "wait_genbutsu.candidate_log_loss",
-    )
     result = {}
     for group in (*GROUPS, *DIAGNOSTICS):
         per_seed = per_group.get(group, {})
@@ -462,7 +644,14 @@ def backend_identity(producer):
     }
 
 
-def evaluate_population(roots, expected, producer, *, support_only=False):
+def evaluate_population(
+    roots, expected, producer, *, support_only=False, estimators=(), score="eval"
+):
+    if score not in ("eval", "valid") or (
+        support_only and (estimators or score != "eval")
+    ):
+        raise RonLegalAccuracyError("unknown score split or support-only scoring")
+    scored = "test" if score == "eval" else "valid"
     identity = check_population(roots, expected, producer)
     backend = backend_identity(producer)
     if (
@@ -489,18 +678,29 @@ def evaluate_population(roots, expected, producer, *, support_only=False):
                 supports[split].add(row)
         fit.add([r for r in rows if manifest.split_of(r.seed) == "train"])
     model = fit.model()
-    evaluation = Evaluation()
+    evaluation = Evaluation(estimators)
     if not support_only:
         for root in roots:
-            if not read_manifest(root / "base").splits["test"]:
+            if not read_manifest(root / "base").splits[scored]:
                 continue
             manifest, rows = rows_from_source(root)
             for row in rows:
-                if manifest.split_of(row.seed) == "test":
-                    supports["eval"].add(row)
+                if manifest.split_of(row.seed) == scored:
+                    if score == "eval":
+                        supports["eval"].add(row)
                     evaluation.add(row, model)
     model_json = json.dumps(model_value(model), sort_keys=True, separators=(",", ":"))
-    return {
+    extension = {}
+    if estimators or score != "eval":
+        # Absent on the #262 path, so its result document keeps the same keys.
+        extension = {
+            "scored_split": score,
+            "estimators": {
+                e.name: evaluation.estimator_value(e, expected[score])
+                for e in estimators
+            },
+        }
+    return extension | {
         "schema": RESULT_SCHEMA,
         "mode": "support_only" if support_only else "absolute_accuracy",
         "context_protocol": CONTEXT_PROTOCOL,
@@ -520,7 +720,7 @@ def evaluate_population(roots, expected, producer, *, support_only=False):
         },
         "metrics": {}
         if support_only
-        else confidence_intervals(evaluation, expected["eval"]),
+        else confidence_intervals(evaluation, expected[score]),
         "calibration": {} if support_only else evaluation.calibration(),
         "protocol": {
             "clip_epsilon": EPSILON,
@@ -556,16 +756,34 @@ def main(argv=None):
     parser.add_argument("--producer", type=Path, required=True)
     parser.add_argument("--support-only", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--score", choices=("eval", "valid"), default="eval")
+    parser.add_argument("--riichi-wait-selection", type=Path)
+    parser.add_argument("--riichi-wait-selection-sha256")
     parser.add_argument("sources", nargs="+", type=Path)
     args = parser.parse_args(argv)
     if args.output.exists():
         raise RonLegalAccuracyError("refusing to overwrite a measurement result")
+    if (args.riichi_wait_selection is None) != (
+        args.riichi_wait_selection_sha256 is None
+    ):
+        raise RonLegalAccuracyError("a wait selection needs its registered SHA-256")
+    estimators = (
+        ()
+        if args.riichi_wait_selection is None
+        else (
+            riichi_wait_zero_estimator(
+                args.riichi_wait_selection, args.riichi_wait_selection_sha256
+            ),
+        )
+    )
     expected = {name: getattr(args, name) for name in ("train", "valid", "eval")}
     result = evaluate_population(
         args.sources,
         expected,
         json.loads(args.producer.read_text()),
         support_only=args.support_only,
+        estimators=estimators,
+        score=args.score,
     )
     # Result appears only after complete validation and measurement.
     with args.output.open("x", encoding="utf-8") as stream:
