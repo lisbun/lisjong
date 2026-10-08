@@ -186,6 +186,23 @@ def check_population(
     return {"producer": dict(producers.pop()), "manifest_sha256": manifests}
 
 
+def check_producer(identity: dict[str, object], registered: dict[str, object]) -> None:
+    """testのsourceのproducerが、登録済み（selectionを作った）producerと全fieldで一致するか。
+
+    ラベルを読む前に呼ぶ。field名の集合が違う場合も、値が違う場合も拒否する。
+    """
+    producer = identity["producer"]
+    differing = sorted(
+        name
+        for name in set(producer) | set(registered)
+        if producer.get(name) != registered.get(name)
+    )
+    if differing:
+        raise _E(
+            "the test sources were made by another producer: " + ", ".join(differing)
+        )
+
+
 # --- 行 --------------------------------------------------------------------
 
 
