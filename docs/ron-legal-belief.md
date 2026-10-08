@@ -302,7 +302,9 @@ ronはwaitと同じrawか0なので、丸め後も`ron <= wait`になる。
 提供範囲は待ち推定器と同じにする。段階1（リーチ者）は#245の凍結モデル
 （`riichi-wait-features-v1`）を使い、観測者が非リーチ・対象席が唯一のリーチ者・対象席に打牌がある
 判断だけに値を出す。範囲外は未提供（`None`）で、ゼロ予測や別の待ちモデルへ置き換えない。
-段階2（副露者、#259のモデル）は別PRで扱う。
+段階2（副露者）は#259範囲1で選択済みのモデル（`open-wait-features-v1`）を使い、リーチしておらず
+暗槓以外の副露がある他家だけに値を出す（観測者の状態は問わない）。門前非リーチは対象外である。
+2つの推定器は別の名前（`riichi_wait_zero` / `open_wait_zero`）で別々に採点し、主張も分ける。
 
 測定は`ron_legal_accuracy`へ推定器を差し込んで行う。推定器は値を出した行だけで採点し、
 同じ行の2 baselineと対にした差を`estimators`に報告する（提供行・未提供行の数を併記）。
@@ -312,7 +314,8 @@ baselineの節は推定器なしの場合と同じ計算で、推定器・`--sco
 ```text
 python -m lisjong.learning.ron_legal_accuracy --train ... --valid ... --eval ... \
   --producer producer.json --output result.json [--score valid] \
-  --riichi-wait-selection selection.json --riichi-wait-selection-sha256 HEX POPULATION_DIR...
+  [--riichi-wait-selection selection.json --riichi-wait-selection-sha256 HEX] \
+  [--open-wait-selection selection.json --open-wait-selection-sha256 HEX] POPULATION_DIR...
 ```
 
 `--score valid`はevalの代わりにvalidを採点する（調整・診断用。evalのラベルは読まない）。

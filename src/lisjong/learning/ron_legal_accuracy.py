@@ -39,8 +39,10 @@ from lisjong.learning.ron_legal_baseline import (
     public_stratum,
 )
 from lisjong.learning.ron_legal_estimator import (
+    OPEN_SCOPE,
     RIICHI_SCOPE,
     TRANSFORM,
+    estimate_open_ron_legal_belief,
     estimate_riichi_ron_legal_belief,
 )
 from lisjong.learning.ron_legal_source import (
@@ -130,12 +132,20 @@ class Estimator:
             raise RonLegalAccuracyError("estimator name is invalid or a baseline")
 
 
-def riichi_wait_zero_estimator(selection, sha256):
-    """#245's frozen wait model times the certain zeros; identity fails closed."""
+def _registered_selection(selection, sha256):
     data = selection.read_bytes()
     if hashlib.sha256(data).hexdigest() != sha256:
         raise RonLegalAccuracyError("wait selection differs from registered SHA-256")
-    chosen = json.loads(data)
+    return json.loads(data)
+
+
+def _weights_sha256(weights):
+    return hashlib.sha256(canonical_json_text(weights).encode()).hexdigest()
+
+
+def riichi_wait_zero_estimator(selection, sha256):
+    """#245's frozen wait model times the certain zeros; identity fails closed."""
+    chosen = _registered_selection(selection, sha256)
     _check_selection(chosen)
     model = _models_from_value(chosen["models"])[2]
     return Estimator(
@@ -147,14 +157,48 @@ def riichi_wait_zero_estimator(selection, sha256):
             "selection_schema": chosen["schema"],
             "feature_set": model.feature_set,
             "chosen_l2": chosen["chosen_l2"],
-            "weights_sha256": hashlib.sha256(
-                canonical_json_text(dict(model.weights)).encode()
-            ).hexdigest(),
+            "weights_sha256": _weights_sha256(dict(model.weights)),
         },
         lambda policy_input, seat: estimate_riichi_ron_legal_belief(
             policy_input, seat, model
         ),
     )
+
+
+def open_wait_zero_estimator(selection, sha256):
+    """#259 range 1's selected wait model times the certain zeros."""
+    # Imported here: open_wait_evaluation needs the POSIX-only resource module.
+    from lisjong.learning import open_wait_evaluation
+
+    chosen = _registered_selection(selection, sha256)
+    open_wait_evaluation._check_selection(chosen)
+    model, _ = open_wait_evaluation._models_from_value(chosen["models"])
+    return Estimator(
+        "open_wait_zero",
+        {
+            "transform": TRANSFORM,
+            "scope": OPEN_SCOPE,
+            "selection_sha256": sha256,
+            "selection_schema": chosen["schema"],
+            "feature_set": model.feature_set,
+            "selected_l2": chosen["selected"],
+            "weights_sha256": _weights_sha256(
+                {
+                    "tenpai": dict(model.tenpai_weights),
+                    "wait": dict(model.wait_weights),
+                }
+            ),
+        },
+        lambda policy_input, seat: estimate_open_ron_legal_belief(
+            policy_input, seat, model
+        ),
+    )
+
+
+SELECTION_ESTIMATORS = {
+    "riichi_wait": riichi_wait_zero_estimator,
+    "open_wait": open_wait_zero_estimator,
+}
 
 
 def _binary(raw):
@@ -757,25 +801,21 @@ def main(argv=None):
     parser.add_argument("--support-only", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--score", choices=("eval", "valid"), default="eval")
-    parser.add_argument("--riichi-wait-selection", type=Path)
-    parser.add_argument("--riichi-wait-selection-sha256")
+    for kind in SELECTION_ESTIMATORS:
+        parser.add_argument(f"--{kind.replace('_', '-')}-selection", type=Path)
+        parser.add_argument(f"--{kind.replace('_', '-')}-selection-sha256")
     parser.add_argument("sources", nargs="+", type=Path)
     args = parser.parse_args(argv)
     if args.output.exists():
         raise RonLegalAccuracyError("refusing to overwrite a measurement result")
-    if (args.riichi_wait_selection is None) != (
-        args.riichi_wait_selection_sha256 is None
-    ):
-        raise RonLegalAccuracyError("a wait selection needs its registered SHA-256")
-    estimators = (
-        ()
-        if args.riichi_wait_selection is None
-        else (
-            riichi_wait_zero_estimator(
-                args.riichi_wait_selection, args.riichi_wait_selection_sha256
-            ),
-        )
-    )
+    estimators = []
+    for kind, build in SELECTION_ESTIMATORS.items():
+        selection = getattr(args, f"{kind}_selection")
+        sha256 = getattr(args, f"{kind}_selection_sha256")
+        if (selection is None) != (sha256 is None):
+            raise RonLegalAccuracyError("a wait selection needs its registered SHA-256")
+        if selection is not None:
+            estimators.append(build(selection, sha256))
     expected = {name: getattr(args, name) for name in ("train", "valid", "eval")}
     result = evaluate_population(
         args.sources,

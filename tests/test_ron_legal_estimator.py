@@ -7,16 +7,27 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from test_learning_hand_belief_source import A_OWN, make_decision, tiles
+from test_learning_hand_belief_source import (
+    A_OWN,
+    ankan,
+    make_decision,
+    pon,
+    tiles,
+)
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.hand_evaluation._shanten_backend import BACKEND_ENVIRONMENT_VARIABLE
+from lisjong.learning.open_wait_estimator import (
+    OpenWaitModel,
+    estimate_open_wait_belief,
+)
 from lisjong.learning.riichi_wait_estimator import (
     LogisticWaitModel,
     estimate_riichi_wait_belief,
 )
 from lisjong.learning.ron_legal_estimator import (
     certain_ron_illegal_tile_types,
+    estimate_open_ron_legal_belief,
     estimate_riichi_ron_legal_belief,
     in_riichi_scope,
     with_certain_zero,
@@ -147,15 +158,17 @@ class RiichiEstimatorTest(unittest.TestCase):
             )
 
     def test_inference_without_truth_source_or_native_imports(self):
+        # 副露者の推定器も同じprocessで呼び、学習・評価moduleを読まないことを固定する
         code = """
 import importlib.abc,sys
 sys.path.insert(0,'tests')
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
-        if name.startswith(("lisjong.learning.ron_legal_accuracy", "lisjong.learning.ron_legal_source", "lisjong.learning.riichi_wait_evaluation", "lisjong.learning.riichi_deal_in_source", "lisjong.learning.hand_belief_source", "lisjong.belief.ron_legal_ground_truth", "lisjong.belief.exact_wait_ground_truth", "_lisjong_native")):
+        if name.startswith(("lisjong.learning.ron_legal_accuracy", "lisjong.learning.ron_legal_source", "lisjong.learning.riichi_wait_evaluation", "lisjong.learning.open_wait_evaluation", "lisjong.learning.hand_belief_accuracy", "lisjong.learning.riichi_deal_in_source", "lisjong.learning.hand_belief_source", "lisjong.belief.ron_legal_ground_truth", "lisjong.belief.exact_wait_ground_truth", "_lisjong_native")):
             raise AssertionError("privileged import: " + name)
 from lisjong.learning.riichi_wait_estimator import LogisticWaitModel
-from lisjong.learning.ron_legal_estimator import estimate_riichi_ron_legal_belief
+from lisjong.learning.open_wait_estimator import OpenWaitModel
+from lisjong.learning.ron_legal_estimator import estimate_open_ron_legal_belief,estimate_riichi_ron_legal_belief
 from lisjong.policy_contract import Discard,PlayerPublicState,PolicyInput,OwnHandState,RiichiState,RoundState,Seat,Tile,TileCategory,TileType,Wind
 t=lambda r,c=TileCategory.MANZU: Tile(TileType(c,r),is_red=False)
 p=lambda riichi,*ds: PlayerPublicState(score=25000,discards=tuple(Discard(tile=t(r),tsumogiri=False,order=o,called_by=None) for r,o in ds),melds=(),riichi=riichi)
@@ -165,6 +178,7 @@ b=estimate_riichi_ron_legal_belief(pi,Seat.SEAT_1,LogisticWaitModel(weights=(("b
 assert b.ron_legal_probability_raw[8]==0 and b.ron_legal_probability_raw[1]==0
 assert b.ron_legal_probability_raw[0]==b.wait_probability_raw[0]>0
 assert estimate_riichi_ron_legal_belief(pi,Seat.SEAT_2,LogisticWaitModel(weights=())) is None
+assert estimate_open_ron_legal_belief(pi,Seat.SEAT_2,OpenWaitModel((),())) is None
 """
         result = subprocess.run(
             [sys.executable, "-c", code],
@@ -178,6 +192,70 @@ assert estimate_riichi_ron_legal_belief(pi,Seat.SEAT_2,LogisticWaitModel(weights
             },
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+OPEN_MODEL = OpenWaitModel(
+    tenpai_weights=(("bias", 0.5),),
+    wait_weights=(("bias", -1.0), ("genbutsu", -2.0)),
+)
+NONE = (RiichiState.NONE,) * 4
+
+
+def with_melds(policy_input, seat, melds, riichi=RiichiState.NONE):
+    players = list(policy_input.players)
+    players[seat] = replace(players[seat], melds=tuple(melds), riichi=riichi)
+    return replace(policy_input, players=tuple(players))
+
+
+class OpenEstimatorTest(unittest.TestCase):
+    def test_wait_is_kept_and_only_certain_tiles_become_zero(self):
+        policy_input = with_melds(public(RIVERS, NONE), 2, [pon("555z", Seat.SEAT_1)])
+        belief = estimate_open_ron_legal_belief(policy_input, Seat.SEAT_2, OPEN_MODEL)
+        wait = estimate_open_wait_belief(policy_input, 2, OPEN_MODEL)
+        self.assertEqual(belief.wait_probability_raw, wait.wait_probability_raw)
+        self.assertTrue(all(belief.wait_probability_raw))
+        # 席2の河は2s・3s（最後がorder 6）。その後は席3の赤5m(7)と観測者の7z(8)
+        zero = indices("23s5m7z")
+        for index in range(34):
+            self.assertEqual(
+                belief.ron_legal_probability_raw[index],
+                0 if index in zero else belief.wait_probability_raw[index],
+            )
+
+    def test_an_open_seat_without_a_discard_zeroes_every_other_discard(self):
+        rivers = (RIVERS[0], RIVERS[1], (), RIVERS[3])
+        policy_input = with_melds(public(rivers, NONE), 2, [pon("555z", Seat.SEAT_1)])
+        belief = estimate_open_ron_legal_belief(policy_input, Seat.SEAT_2, OPEN_MODEL)
+        zero = indices("1m7z9p5p4z5m")
+        self.assertEqual(
+            {i for i, raw in enumerate(belief.ron_legal_probability_raw) if not raw},
+            set(zero),
+        )
+
+    def test_outside_the_open_wait_estimators_scope_is_unprovided(self):
+        base = public(RIVERS, NONE)
+        open_meld = [pon("555z", Seat.SEAT_1)]
+        for policy_input in (
+            base,  # 門前非リーチ
+            with_melds(base, 2, [ankan("9999m")]),  # 暗槓だけは副露者ではない
+            with_melds(base, 2, open_meld, RiichiState.ACCEPTED),
+        ):
+            self.assertIsNone(
+                estimate_open_ron_legal_belief(policy_input, Seat.SEAT_2, OPEN_MODEL)
+            )
+        # 観測者がリーチでも、待ち推定器の範囲（副露者の席）なら提供する
+        observer_riichi = with_melds(
+            with_melds(base, 0, [], RiichiState.ACCEPTED), 2, open_meld
+        )
+        self.assertIsNotNone(
+            estimate_open_ron_legal_belief(observer_riichi, Seat.SEAT_2, OPEN_MODEL)
+        )
+        with self.assertRaises(ValueError):
+            estimate_open_ron_legal_belief(base, Seat.SEAT_0, OPEN_MODEL)
+        with self.assertRaises(TypeError):
+            estimate_open_ron_legal_belief(base, Seat.SEAT_2, MODEL)
+        with self.assertRaises(TypeError):
+            estimate_open_ron_legal_belief(base, 2, OPEN_MODEL)
 
 
 if __name__ == "__main__":

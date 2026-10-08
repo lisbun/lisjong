@@ -20,13 +20,17 @@ from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.fixed_point import SCALE, probability_to_raw
 from lisjong.hand_evaluation._shanten_backend import BACKEND_ENVIRONMENT_VARIABLE
 from lisjong.learning import ron_legal_accuracy as accuracy
+from lisjong.learning.open_wait_estimator import OpenWaitModel
 from lisjong.learning.riichi_wait_estimator import LogisticWaitModel
 from lisjong.learning.ron_legal_baseline import (
     RonRateModel,
     StratumRates,
     public_stratum,
 )
-from lisjong.learning.ron_legal_estimator import estimate_riichi_ron_legal_belief
+from lisjong.learning.ron_legal_estimator import (
+    estimate_open_ron_legal_belief,
+    estimate_riichi_ron_legal_belief,
+)
 from lisjong.policy_contract import RiichiState, Seat
 
 
@@ -392,6 +396,117 @@ class EstimatorTest(unittest.TestCase):
                         "missing",
                     ]
                 )
+
+
+@unittest.skipIf(sys.platform == "win32", "open_wait_evaluation is POSIX-only")
+class OpenEstimatorTest(unittest.TestCase):
+    def document(self):
+        return {
+            "schema": "lisjong-open-wait-selection-v1",
+            "feature_set": "open-wait-features-v1",
+            "selected": {"l2_tenpai": 0.01, "l2_wait": 0.01},
+            "models": {
+                "estimator": {
+                    "feature_set": "open-wait-features-v1",
+                    "tenpai_weights": [["bias", 0.5]],
+                    "wait_weights": [["bias", -1.0]],
+                },
+                "rate": [0.1] * 34,
+            },
+        }
+
+    def test_selected_open_wait_identity_fails_closed(self):
+        import hashlib
+
+        model = OpenWaitModel((("bias", 0.5),), (("bias", -1.0),))
+        public = row().policy_input
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selection.json"
+            path.write_text(json.dumps(self.document()))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            estimator = accuracy.open_wait_zero_estimator(path, digest)
+            self.assertEqual(estimator.name, "open_wait_zero")
+            self.assertEqual(estimator.identity["selection_sha256"], digest)
+            self.assertEqual(estimator.identity["scope"], "open-non-riichi-opponent.v1")
+            self.assertEqual(
+                estimator.identity["selected_l2"], {"l2_tenpai": 0.01, "l2_wait": 0.01}
+            )
+            self.assertEqual(
+                estimator.identity["transform"], "certain-ron-illegal-zero-v1"
+            )
+            # Seat 2 is the open seat; the riichi and closed seats stay unprovided.
+            self.assertEqual(
+                estimator.predict(public, Seat(2)),
+                estimate_open_ron_legal_belief(public, Seat(2), model),
+            )
+            self.assertIsNone(estimator.predict(public, Seat(1)))
+            self.assertIsNone(estimator.predict(public, Seat(3)))
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.open_wait_zero_estimator(path, "0" * 64)
+            # A riichi selection is not accepted as an open one, and vice versa.
+            with self.assertRaises(ValueError):
+                accuracy.riichi_wait_zero_estimator(path, digest)
+            changed = self.document()
+            changed["feature_set"] = "other"
+            path.write_text(json.dumps(changed))
+            with self.assertRaises(ValueError):
+                accuracy.open_wait_zero_estimator(
+                    path, hashlib.sha256(path.read_bytes()).hexdigest()
+                )
+            with self.assertRaises(accuracy.RonLegalAccuracyError):
+                accuracy.main(
+                    [
+                        "--train",
+                        "1",
+                        "--valid",
+                        "2",
+                        "--eval",
+                        "3",
+                        "--producer",
+                        "missing",
+                        "--output",
+                        str(Path(directory) / "result.json"),
+                        "--open-wait-selection-sha256",
+                        digest,
+                        "missing",
+                    ]
+                )
+
+    def test_each_estimator_is_scored_on_its_own_stratum(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selection.json"
+            path.write_text(json.dumps(self.document()))
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            evaluation = accuracy.Evaluation(
+                [wait_zero(), accuracy.open_wait_zero_estimator(path, digest)]
+            )
+        plain = accuracy.Evaluation()
+        for item in (row(), row(seat=2, ron=False), row(seat=3, wait=False, ron=False)):
+            evaluation.add(item, RATES)
+            plain.add(item, RATES)
+        self.assertEqual(evaluation.cells, plain.cells)
+        riichi, opened = (
+            evaluation.estimator_value(e, [1]) for e in evaluation.estimators
+        )
+        self.assertEqual(riichi["coverage"]["riichi"]["provided_rows"], 1)
+        self.assertEqual(riichi["coverage"]["open"]["provided_rows"], 0)
+        self.assertEqual(
+            opened["coverage"]["all"],
+            {"target_rows": 3, "provided_rows": 1, "unprovided_rows": 2},
+        )
+        self.assertEqual(opened["coverage"]["open"]["provided_rows"], 1)
+        self.assertEqual(opened["coverage"]["riichi"]["provided_rows"], 0)
+        self.assertEqual(opened["metrics"]["all"], opened["metrics"]["open"])
+        self.assertIsNotNone(
+            opened["metrics"]["open"]["open_wait_zero_minus_wait_genbutsu.log_loss"][
+                "point"
+            ]
+        )
+        self.assertEqual(
+            opened["metrics"]["open"]["open_wait_zero.actual_wait"]["point"], 1
+        )
 
 
 class PopulationTest(unittest.TestCase):
