@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from test_learning_hand_belief_source import (
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.fixed_point import SCALE, probability_to_raw
+from lisjong.hand_evaluation._shanten_backend import BACKEND_ENVIRONMENT_VARIABLE
 from lisjong.learning import ron_legal_accuracy as accuracy
 from lisjong.learning.ron_legal_baseline import (
     RonRateModel,
@@ -102,6 +104,11 @@ assert m.predict(p,Seat(1),"wait_genbutsu") is not None
             cwd=Path(__file__).resolve().parents[1],
             capture_output=True,
             text=True,
+            # The Rust shanten backend legitimately loads the native module;
+            # the baseline itself must work on the default Python backend.
+            env={
+                k: v for k, v in os.environ.items() if k != BACKEND_ENVIRONMENT_VARIABLE
+            },
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
