@@ -213,6 +213,11 @@ def _manifest(root, original):
     )
     for name, value in producer.items():
         expect_str(value, _E, name)
+    splits = _object(raw["splits"], "train valid test", "splits")
+    for name, values in splits.items():
+        # bool and integral floats compare equal to ints; check each seed first
+        for value in expect_list(values, _E, f"{name} split"):
+            _integer(value, f"{name} split seed")
     files = _object(raw["files"], "ron_facts ron_history", "files")
     for name, value in files.items():
         entry = _object(value, "bytes sha256 rows", name)
@@ -445,6 +450,30 @@ def _reaction(value, before, selectors, ids, discard_sources):
     return tuple(contexts)
 
 
+def _kan_reaction(value, kan_pending):
+    """Bind a reaction to the pending kan declaration (chankan opportunity)."""
+    if type(value) is not dict:
+        raise _E("reaction evidence must be an object")
+    origin = value.get("origin")
+    if origin == "discard":
+        if kan_pending:
+            raise _E("discard reaction while a kan declaration is pending")
+        return
+    seat = int(_parse_seat(value.get("source_seat"), _E, "source_seat"))
+    pending = kan_pending.get(seat)
+    if pending is None:
+        raise _E("kan reaction lacks a pending declaration by its source seat")
+    action, awaiting_reaction = pending
+    if origin != "kakan" or not isinstance(action, KakanAction):
+        raise _E("kan reaction origin differs from the fixed-rule chankan window")
+    if not awaiting_reaction:
+        raise _E("duplicate reaction for one kan declaration")
+    tile = parse_tile(value.get("winning_tile"), _E, "winning_tile")
+    if tile != action.added_tile:
+        raise _E("kakan reaction tile differs from the declared added tile")
+    pending[1] = False
+
+
 def _board_change(before, after, event, kan_action=None):
     """Check recorded hand/meld/river edits, without generating engine actions."""
     actor = None
@@ -634,6 +663,12 @@ def _replay_steps(rows, coverage):
                 "round_end",
             ):
                 raise _E("history continues play after a terminal win resolution")
+            if (
+                kan_pending
+                and not terminal
+                and kind not in ("reaction", "kan_confirmed")
+            ):
+                raise _E("history continues play before the pending kan resolves")
             if index == 0:
                 _object(event, "kind", "round_start")
                 if (
@@ -769,13 +804,20 @@ def _replay_steps(rows, coverage):
                             draw_sources.pop(seat, None),
                         )
                     elif isinstance(action, (AnkanAction, KakanAction)):
+                        if kan_pending:
+                            raise _E("kan declared while another kan is pending")
                         if Counter(_hand(before.views[int(action.actor)])) != Counter(
                             _hand(after.views[int(action.actor)])
                         ):
                             raise _E(
                                 "kan declaration must retain its hand until confirmation"
                             )
-                        kan_pending[int(action.actor)] = action
+                        # kakan always opens a chankan window; under the fixed
+                        # rules (no kokushi ankan chankan) ankan opens none
+                        kan_pending[int(action.actor)] = [
+                            action,
+                            isinstance(action, KakanAction),
+                        ]
                     elif isinstance(action, RiichiAction):
                         if (
                             before.views[0].players[int(action.actor)].riichi
@@ -788,6 +830,7 @@ def _replay_steps(rows, coverage):
                 elif kind == "reaction":
                     _object(event, "kind evidence", "reaction")
                     reactions += 1
+                    _kan_reaction(event["evidence"], kan_pending)
                     expected = _reaction(
                         event["evidence"], before, selectors, ids, discard_sources
                     )
@@ -813,7 +856,9 @@ def _replay_steps(rows, coverage):
                     seat = int(_parse_seat(event["seat"], _E, "kan seat"))
                     if selectors or seat not in kan_pending:
                         raise _E("kan confirmation lacks a declaration")
-                    kan_action = kan_pending.pop(seat)
+                    kan_action, awaiting_reaction = kan_pending.pop(seat)
+                    if awaiting_reaction:
+                        raise _E("kakan confirmation lacks its chankan reaction")
                     rinshan_due.add(seat)
                     expected = [replace(c, is_ippatsu=False) for c in expected]
                 elif kind == "round_result":

@@ -480,6 +480,19 @@ class SourceTest(unittest.TestCase):
         with self.assertRaisesRegex(source.RonLegalSourceError, "exact splits"):
             source.read_ron_source(self.extra, base_directory=self.base)
 
+    def test_split_seeds_are_strict_non_negative_integers(self):
+        self.write()
+        name = next(k for k, v in self.manifest["splits"].items() if v)
+        for value in (float(self.manifest["splits"][name][0]), True, -1):
+            with self.subTest(value=value):
+                manifest = copy.deepcopy(self.manifest)
+                manifest["splits"][name][0] = value
+                self.manifest_path.write_text(
+                    canonical_json_text(manifest), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(source.RonLegalSourceError, "split seed"):
+                    source.read_ron_source(self.extra, base_directory=self.base)
+
     def test_selector_omission_and_snapshot_commit_action_are_rejected(self):
         self.history[3]["steps"][0]["selector_sequences"] = [10]
         self.assert_bad("omitted")

@@ -105,7 +105,7 @@ eventは次の閉じたshapeだけを受理する。
 | `reaction` | `evidence` | 下記の観測機会を検証し、capable − selectedだけに見逃しを記録。成立した鳴きで全席一発終了 |
 | `riichi_established` | `seat`, `riichi_status`, `is_ippatsu`, `reaction_id` | 宣言牌のpass/call解決へ参照し成立。鳴かれた宣言牌では一発false |
 | `riichi_cancelled` | `seat`, `reaction_id` | 宣言牌のron解決へ参照してpublic DECLAREDをNONEへ戻す。成立役を作らない |
-| `kan_confirmed` | `seat` | 記録済み槓宣言の成立。全席一発終了 |
+| `kan_confirmed` | `seat` | 記録済み槓宣言の成立。全席一発終了。加槓は同じ席・同じ加槓牌のkakan reactionを1回解決済みであること |
 | `round_result` | なし | engine-owned結果・精算のcheckpoint。新しい見逃しを作らない |
 | `round_end` | なし | 最後の行の単独step。result等で終局済み、直前と同じcheckpointをflush |
 
@@ -124,7 +124,9 @@ fieldは`reaction_id`, `origin`, `source_seat`, `winning_tile`, `discard_draw_ki
 - discard_draw_kindは`normal/rinshan/null`で、履歴に記録した打牌元の実ツモと一致する。
   鳴き後打牌はnull、kan originもnull。
   live wall=0でも嶺上由来の打牌へ河底を付けない。kakanはCHANKANで照合する。
-  project-standard-v1は国士の暗槓槍槓を無効にするためankanのロン候補は0。
+  project-standard-v1は国士の暗槓槍槓を無効にするため、暗槓にはreaction windowがなくankan reactionは拒否する。
+  kakan reactionは保留中の加槓宣言と同じ席・同じadded_tileに限り1回だけ受理する。
+  槓宣言から成立（または槍槓ロン）までの間にreaction以外の進行・打牌reactionは置けない。
 - candidatesは発生元以外の3席をseat順に並べる。各itemは`seat`, `sequence`,
   `legal_actions`, `selected_action`。機会なしは空actions・null sequence/selected、
   機会ありは明示Passを含むactionsとその中の選択を持つ。actionは既存typed projection。
