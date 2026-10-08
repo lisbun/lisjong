@@ -233,6 +233,56 @@ def check_producer(identity: dict[str, object], registered: dict[str, object]) -
         )
 
 
+REVISION_FIELDS = ("arena_revision", "lisjong_revision", "lisjong_engine_revision")
+
+
+def check_test_producer(
+    identity: dict[str, object],
+    selection_producer: dict[str, object],
+    registered: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """testのsourceのproducerを、事前登録したproducerと全fieldで照合する（lisbun/lisjong#279）。
+
+    ``registered``がなければ、従来どおりselectionを作ったproducerと全fieldで照合する。
+    あれば、test sourceは``registered``と全fieldで一致しなければならない。``registered``が
+    selectionのproducerと違ってよいのは実行revisionのfieldだけで、対局Policyなど他のfieldが
+    違う登録は拒否する。どちらの場合も、登録していないproducerのsourceはラベルを読む前に拒否する。
+    """
+    if registered is None:
+        check_producer(identity, selection_producer)
+        return None
+    if set(registered) != set(selection_producer) or any(
+        type(value) is not str or not value for value in registered.values()
+    ):
+        raise _E("the registered test producer must have the selection's fields")
+    differing = sorted(
+        name for name in registered if registered[name] != selection_producer[name]
+    )
+    fixed = [name for name in differing if name not in REVISION_FIELDS]
+    if fixed:
+        raise _E(
+            "the registered test producer differs from the selection's in: "
+            + ", ".join(fixed)
+        )
+    check_producer(identity, registered)
+    return {
+        "selection_producer": dict(selection_producer),
+        "registered_test_producer": dict(registered),
+        "differing_revision_fields": differing,
+    }
+
+
+def read_registered_producer(path: Path, sha256: str) -> dict[str, object]:
+    """事前登録したproducerのJSONを読む。登録したSHA-256と一致しなければ拒否する。"""
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise _E("the test producer does not match the registered SHA-256")
+    producer = json.loads(data)
+    if not isinstance(producer, dict):
+        raise _E("the test producer must be a JSON object")
+    return producer
+
+
 # --- protocol preset（事前登録して固定する値） ---------------------------------
 
 PURPOSES = ("development-baseline", "formal-test")

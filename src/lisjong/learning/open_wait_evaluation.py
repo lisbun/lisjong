@@ -15,7 +15,10 @@ python -m lisjong.learning.open_wait_evaluation test \\
    validのlossで選ぶ。dev-eval（sourceの``test``分割）は開発用の確認として同じ指標を出すが、
    改善の主張には使わない
 2. ``test``: 選択を固定したまま、新しいseedのsource（``test``分割だけ）で1回だけ評価する。
-   selectionのseedと重なるseedは拒否する。出力は上書きしない
+   selectionのseedと重なるseedは拒否する。出力は上書きしない。sourceのproducerは
+   selectionを作ったproducerと全fieldで一致しなければならない。別の実行revisionで生成した
+   sourceを使う場合は、事前登録したproducerを ``--test-producer FILE --test-producer-sha256 HEX``
+   で渡す（実行revision以外のfieldが違う登録と、登録と違うsourceは拒否する。lisbun/lisjong#279）
 
 ## 行・重み・集約（#257と同じ）
 
@@ -60,9 +63,10 @@ from lisjong.learning.hand_belief_accuracy import (
     _Groups,
     bootstrap,
     check_population,
-    check_producer,
+    check_test_producer,
     episode_macro,
     kyoku_instances,
+    read_registered_producer,
     seed_range,
     turn_bucket,
 )
@@ -498,14 +502,19 @@ def _check_selection(selection: dict[str, object]) -> None:
 
 
 def run_test(
-    sources: Sequence[Path], test_seeds: Sequence[int], selection: dict[str, object]
+    sources: Sequence[Path],
+    test_seeds: Sequence[int],
+    selection: dict[str, object],
+    test_producer: dict[str, object] | None = None,
 ) -> dict[str, object]:
     _check_selection(selection)
     used = {seed for seeds in selection["splits"].values() for seed in seeds}
     if used & set(test_seeds):
         raise _E("a test seed was used by the selection")
     identity = check_population(sources, {"train": [], "valid": [], "eval": test_seeds})
-    check_producer(identity, selection["population"]["producer"])
+    registration = check_test_producer(
+        identity, selection["population"]["producer"], test_producer
+    )
     model, rate = _models_from_value(selection["models"])
     rows, _ = read_split_rows(sources, "test")
     report = Report()
@@ -524,7 +533,7 @@ def run_test(
         },
         "bootstrap": {"resamples": 2000, "seed": BOOTSTRAP_SEED},
         "clip_epsilon": CLIP_EPSILON,
-    }
+    } | ({} if registration is None else {"producer_registration": registration})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -538,6 +547,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     tested.add_argument("--test", type=seed_range, required=True)
     tested.add_argument("--selection", type=Path, required=True)
     tested.add_argument("--selection-sha256", required=True)
+    tested.add_argument("--test-producer", type=Path)
+    tested.add_argument("--test-producer-sha256")
     for command in (chosen, tested):
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("sources", type=Path, nargs="+")
@@ -562,8 +573,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         data = arguments.selection.read_bytes()
         if hashlib.sha256(data).hexdigest() != arguments.selection_sha256:
             parser.error("the selection does not match the registered SHA-256")
-        document = run_test(arguments.sources, arguments.test, json.loads(data))
+        if (arguments.test_producer is None) != (
+            arguments.test_producer_sha256 is None
+        ):
+            parser.error("a test producer needs its registered SHA-256")
+        test_producer = (
+            None
+            if arguments.test_producer is None
+            else read_registered_producer(
+                arguments.test_producer, arguments.test_producer_sha256
+            )
+        )
+        document = run_test(
+            arguments.sources, arguments.test, json.loads(data), test_producer
+        )
         document["selection_sha256"] = arguments.selection_sha256
+        if test_producer is not None:
+            document["producer_registration"]["sha256"] = arguments.test_producer_sha256
         summary = {"verdict": document["verdict"], "intervals": document["intervals"]}
     arguments.output.write_text(canonical_json_text(document), encoding="utf-8")
     json.dump(summary, sys.stdout, ensure_ascii=False, indent=1)

@@ -326,6 +326,64 @@ class ProducerTest(unittest.TestCase):
             result["population"]["producer"], self.selection["population"]["producer"]
         )
 
+    def test_a_registered_test_producer_may_differ_only_in_revisions(self):
+        # lisbun/lisjong#279: 新seedのsourceは、事前登録した実行revisionで生成される
+        revisions = {
+            "arena_revision": "1" * 40,
+            "lisjong_revision": "2" * 40,
+            "lisjong_engine_revision": "3" * 40,
+        }
+        selected = self.selection["population"]["producer"]
+        registered = selected | revisions
+        source = self.new_source("revised", lambda producer: producer.update(revisions))
+        with self.assertRaises(evaluation.HandBeliefAccuracyError):
+            evaluation.run_test([source], [SEED + 3], self.selection)
+        result = evaluation.run_test([source], [SEED + 3], self.selection, registered)
+        self.assertEqual(result["population"]["producer"], registered)
+        self.assertEqual(
+            result["producer_registration"],
+            {
+                "selection_producer": selected,
+                "registered_test_producer": registered,
+                "differing_revision_fields": sorted(revisions),
+            },
+        )
+        # 登録と違うproducerのsourceは、登録があってもラベルを読む前に拒否する
+        unregistered = self.new_source("unregistered", lambda producer: None)
+        with (
+            mock.patch.object(
+                evaluation, "read_labelled_source", side_effect=AssertionError
+            ),
+            self.assertRaisesRegex(
+                evaluation.HandBeliefAccuracyError, "arena_revision"
+            ),
+        ):
+            evaluation.run_test([unregistered], [SEED + 3], self.selection, registered)
+        plain = evaluation.run_test([unregistered], [SEED + 3], self.selection)
+        self.assertNotIn("producer_registration", plain)
+
+    def test_a_registration_cannot_change_the_policy_or_the_fields(self):
+        selected = self.selection["population"]["producer"]
+        other_policy = {"policy": "OtherPolicy"}
+        source = self.new_source(
+            "policy", lambda producer: producer.update(other_policy)
+        )
+        for registered in (
+            selected | other_policy,
+            {name: value for name, value in selected.items() if name != "policy"},
+            selected | {"wrapper_revision": "d" * 40},
+            selected | {"arena_revision": ""},
+            selected | {"arena_revision": None},
+        ):
+            with (
+                self.subTest(registered),
+                mock.patch.object(
+                    evaluation, "read_labelled_source", side_effect=AssertionError
+                ),
+                self.assertRaises(evaluation.HandBeliefAccuracyError),
+            ):
+                evaluation.run_test([source], [SEED + 3], self.selection, registered)
+
 
 if __name__ == "__main__":
     unittest.main()

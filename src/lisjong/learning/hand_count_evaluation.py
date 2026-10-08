@@ -63,9 +63,10 @@ from lisjong.learning.hand_belief_accuracy import (
     _stratum,
     bootstrap,
     check_population,
-    check_producer,
+    check_test_producer,
     episode_macro,
     kyoku_instances,
+    read_registered_producer,
     seed_range,
 )
 from lisjong.learning.hand_belief_source import (
@@ -460,14 +461,19 @@ def _model_from(selection: dict[str, object]) -> HandCountModel:
 
 
 def run_test(
-    sources: Sequence[Path], test_seeds: Sequence[int], selection: dict[str, object]
+    sources: Sequence[Path],
+    test_seeds: Sequence[int],
+    selection: dict[str, object],
+    test_producer: dict[str, object] | None = None,
 ) -> dict[str, object]:
     model = _model_from(selection)
     used = {seed for seeds in selection["splits"].values() for seed in seeds}
     if used & set(test_seeds):
         raise _E("a test seed was used by the selection")
     identity = check_population(sources, {"train": [], "valid": [], "eval": test_seeds})
-    check_producer(identity, selection["population"]["producer"])
+    registration = check_test_producer(
+        identity, selection["population"]["producer"], test_producer
+    )
     report = Report()
     for decisions in iterate_split(sources, "test"):
         report.add(decisions, model)
@@ -485,7 +491,7 @@ def run_test(
         },
         "bootstrap": {"resamples": 2000, "seed": BOOTSTRAP_SEED},
         "clip_epsilon": CLIP_EPSILON,
-    }
+    } | ({} if registration is None else {"producer_registration": registration})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -499,6 +505,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     tested.add_argument("--test", type=seed_range, required=True)
     tested.add_argument("--selection", type=Path, required=True)
     tested.add_argument("--selection-sha256", required=True)
+    tested.add_argument("--test-producer", type=Path)
+    tested.add_argument("--test-producer-sha256")
     for command in (chosen, tested):
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("sources", type=Path, nargs="+")
@@ -523,8 +531,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         data = arguments.selection.read_bytes()
         if hashlib.sha256(data).hexdigest() != arguments.selection_sha256:
             parser.error("the selection does not match the registered SHA-256")
-        document = run_test(arguments.sources, arguments.test, json.loads(data))
+        if (arguments.test_producer is None) != (
+            arguments.test_producer_sha256 is None
+        ):
+            parser.error("a test producer needs its registered SHA-256")
+        test_producer = (
+            None
+            if arguments.test_producer is None
+            else read_registered_producer(
+                arguments.test_producer, arguments.test_producer_sha256
+            )
+        )
+        document = run_test(
+            arguments.sources, arguments.test, json.loads(data), test_producer
+        )
         document["selection_sha256"] = arguments.selection_sha256
+        if test_producer is not None:
+            document["producer_registration"]["sha256"] = arguments.test_producer_sha256
         summary = {"verdicts": document["verdicts"], "intervals": document["intervals"]}
     arguments.output.write_text(canonical_json_text(document), encoding="utf-8")
     json.dump(summary, sys.stdout, ensure_ascii=False, indent=1)
