@@ -3,7 +3,9 @@
 [lisbun/lisjong#262](https://github.com/lisbun/lisjong/issues/262)（親: #255）の設計と実装状況。
 段階Aの表現追加・availability・raw整合性検証は実装済み。
 B1の正解計算・追加source reader・履歴検証は実装済み。
-producer・測定は未実装である。[追加source v1のwire契約](ron-legal-source.md)を正本とする。
+producerと2半荘pilotはlisjong-arena#457で完了した。段階Cは測定moduleまで実装済みで、
+本測定（新seed sourceの生成はlisjong-arena#460）は未実施である。
+[追加source v1のwire契約](ron-legal-source.md)を正本とする。
 #263は[役・符・点数計算](hand-scoring.md)として完成済みで、正解の役判定に利用する。
 #259のselectを再実行せず、#260のモデル固定も待機のままとする。
 
@@ -259,3 +261,21 @@ v1の過去snapshotから欠測した見逃し状態を埋めたり、過去のs
 「support不足」と明記する。負例が多いためlossが小さい層を精度合格としない。
 段階Cは絶対精度の記録であり、改善合格・強さ改善の判定を行わない。
 結果・digest・実行条件・未実施確認を#262へ記録し、その後の推定器改善は別Issueとする。
+
+### 測定moduleの実装状況
+
+baselineの推論は`lisjong.learning.ron_legal_baseline`（`PolicyInput`と固定rateだけを使い、
+正解系module・nativeをimportしない）、fit・集約・区間は`lisjong.learning.ron_legal_accuracy`に置く。
+入力は`base/`（#256 v1）と`ron/`（追加source）を持つpopulation directoryで、登録した
+train/valid/evalのseedとproducer identityを、ラベルを読む前に全sourceのmanifestと照合する。
+evalはmanifestの`test`分割に対応する。native scorerの`SOURCE_REVISION`が登録した
+producerのlisjong revisionと異なる場合は測定を止める。既存の結果fileは上書きしない。
+
+```text
+python -m lisjong.learning.ron_legal_accuracy   --train FIRST..LAST --valid FIRST..LAST --eval FIRST..LAST   --producer producer.json --output result.json POPULATION_DIR...
+```
+
+`--support-only`はfitとsupport集計だけを行い、指標・校正表を出さない（`--eval none`可）。
+#457のpilot 2半荘（935000 train / 935001 valid）でこのmodeの読込・ラベル付け・集計が
+通ることを確認した（WSL、wall 30秒、最大RSS 約0.5GB）。これは接続確認であり、
+精度の測定結果ではない。pilot seedを本測定へ再利用しない。

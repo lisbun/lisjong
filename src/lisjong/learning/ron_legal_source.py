@@ -1071,6 +1071,17 @@ def read_labelled_ron_source(
 ) -> tuple[base.HandBeliefManifest, tuple[base.HandBeliefLabelledDecision, ...]]:
     """Materialize complete structural + ron truth; never return partial labels."""
     source = read_ron_source(directory, base_directory=base_directory)
+    return source.base_manifest, label_ron_source(source)
+
+
+def label_ron_source(source: RonSource) -> tuple[base.HandBeliefLabelledDecision, ...]:
+    """Label a population already validated by read_ron_source.
+
+    Offline evaluators also need its checked contexts and round IDs. Keeping
+    this step separate avoids a second replay of the same source.
+    """
+    if not isinstance(source, RonSource):
+        raise TypeError("source must be a validated RonSource")
     require_scoring_backend()
     labelled = []
     for decision, hand, checkpoint in zip(
@@ -1090,4 +1101,4 @@ def read_labelled_ron_source(
             )
             opponents.append(base.OpponentTruth(seat, truth))
         labelled.append(base.HandBeliefLabelledDecision(decision, tuple(opponents)))
-    return source.base_manifest, tuple(labelled)
+    return tuple(labelled)
