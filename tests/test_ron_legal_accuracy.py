@@ -233,6 +233,45 @@ class PopulationTest(unittest.TestCase):
                     with self.assertRaises(accuracy.RonLegalAccuracyError):
                         accuracy.check_population(sources, seeds, identity)
 
+    def test_measurement_fits_train_only_and_scores_only_eval_rows(self):
+        from lisjong.learning.hand_belief_source import HandBeliefManifest
+
+        manifest = HandBeliefManifest(
+            {}, {"train": (1,), "valid": (2,), "test": (3,)}, {}
+        )
+        rows = [row(1), row(2, wait=False, ron=False), row(3, wait=False, ron=False)]
+        expected = {"train": [1], "valid": [2], "eval": [3]}
+        with (
+            patch.object(accuracy, "check_population", return_value={}),
+            patch.object(accuracy, "backend_identity", return_value={}),
+            patch.object(accuracy, "read_manifest", return_value=manifest),
+            patch.object(accuracy, "rows_from_source", return_value=(manifest, rows)),
+        ):
+            result = accuracy.evaluate_population([Path("p")], expected, {})
+            support = accuracy.evaluate_population(
+                [Path("p")], expected, {}, support_only=True
+            )
+        # Only the positive train row is fitted: (1 + 0.5) / (1 + 1).
+        rate = result["model"]["strata"]["riichi"]["ron_raw"][0]
+        self.assertEqual(rate, probability_to_raw(0.75))
+        self.assertEqual(
+            [result["support"][s]["all"]["rows"] for s in expected], [1, 1, 1]
+        )
+        self.assertEqual(result["coverage"]["all"]["provided_rows"], 1)
+        point = result["metrics"]["riichi"]["ron_rate.log_loss"]["point"]
+        self.assertAlmostEqual(
+            point,
+            accuracy.metrics(
+                result["model"]["strata"]["riichi"]["ron_raw"],
+                (False,) * 34,
+                frozenset((0,)),
+            )["log_loss"],
+        )
+        json.dumps(result, allow_nan=False)
+        self.assertEqual(support["mode"], "support_only")
+        self.assertEqual(support["metrics"], {})
+        self.assertEqual(support["model_sha256"], result["model_sha256"])
+
     def test_source_rows_keep_round_episode_and_replayed_diagnostics(self):
         # Stubbed yaku/backend, like SourceTest: this fixes the join, not scoring.
         fixture = ron_fixture.SourceTest()
