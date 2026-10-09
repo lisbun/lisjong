@@ -2,8 +2,8 @@
 
 [lisbun/lisjong#260](https://github.com/lisbun/lisjong/issues/260)（親: #255）の設計。
 既存契約は`HandBelief`と[手牌正解データ契約](hand-belief-accuracy-source.md)を正本とする。
-推論・学習・評価のcodeは実装済みだが、select・formal testは未実行である。
-この文書は精度合格・Issue完了を意味しない。
+推論・学習・評価のcodeは実装済みで、selectとformal testは2026-10-09に各1回実行した
+（結果は末尾の「実行結果」）。結果は推定精度の判定であり、強さの評価ではない。
 
 ## 現在地と実行の前提
 
@@ -13,9 +13,7 @@
 #259のselectを再実行せず、登録済みのselection fileをSHA-256で照合して使う。
 
 この文書が決めるのは対象、特徴量の範囲、比較baseline、整合性、形別評価条件である。
-selectの実行commitとformal testのseed予約は未確定なので、この文書だけでは
-実験開始用の事前登録は完了しない。実行commitを#260へ追記してからselectへ進み、
-testの予約を記録してから生成・評価へ進む。
+selectの実行commit、formal testのseed・producer・manifestは、それぞれ実行の前に#260へ記録した。
 
 | 待ち推定器 | 固定するもの | 現在の扱い |
 |---|---|---|
@@ -133,7 +131,7 @@ immutable snapshotとして保存し、コード・factory・任意callableを�
 
 規模はChampion×4、座席rotationなしの**200半荘**、1 seed=1半荘とする。
 #257と同じ#256 v1 / Arena #453のsource経路で全seedをtest分割へ記録する。
-具体的seedは未予約。lisbunの環境でlive ledgerの**全履歴**と照合・予約し、allocation、
+seedはlive ledgerの**全履歴**と照合・予約し、allocation、
 ledger revision、producer revision、正確なseed集合を#260へ記録してから生成する。
 既知の931000..931999、932000..932099、933000..933399だけを禁止一覧にするのでなく、
 #259で新しく使用・予約されたformal seedを含む全履歴を照合する。
@@ -220,3 +218,41 @@ source/結果digest、実行条件・終了コード・未実施確認をIssue�
 
 対象外: ロン合法の形別テーブル、#262の実装、門前非リーチ用の別population設計、
 Policyへの統合、#236/#249の再開、対局での強さの評価。
+
+## 実行結果（2026-10-09）
+
+経過と全数値の正本は#260のコメントと、repository外の結果fileである。ここには識別子と判定だけを残す。
+
+| 項目 | 値 |
+|---|---|
+| 実行commit | lisjong `a470f00667910b370418a320b9785ce2028886cc`（select・testとも） |
+| selection | SHA-256 `f48912fa4edfff26a5472c9fe3e9788a4f70f34d012e90754e54bd2109eccd66` |
+| test seed | 937000..937199（allocation `a03eb1fee7ea3a3b738e95b9eb9fcac5593547dbfe7bf1e8a89b580a96da6f44`、COMMITTED） |
+| test source | lisbun/lisjong-arena#473 の経路（Arena `04fdbab6b81f10669c0f842eb444b69fbb69d519`、lisjong `994f529`、engine `91af75e`）。manifest SHA-256 `5cb8368f…d663` / `96473469…9873` |
+| formal test用producerの登録 | SHA-256 `495bbe0ff5bccba532fad759d27fc80017a635867ecd1a3c934ff2164e5b005a`（lisjong#279 の方式。selectionのproducerとは実行revisionの3 fieldが違う） |
+| 結果file | `result-260.json` SHA-256 `0e2037fba76dc7087a34b6a127de30222ad0895294982ea99feb817428275214` |
+
+選ばれたL2は、単独リーチ者が両面low/highで0.1、他の5 channelで0.01。副露者はtanki・shanponで0.1、
+kanchan・両面low/highで0.01、penchanで1（国士はゼロモデル）。
+
+判定（`Δ = 推定器 − 出現率baseline`、静的slotのlog loss、95%区間）:
+
+| channel | 単独リーチ者（23,128行） | 副露者（30,588行） |
+|---|---|---|
+| tanki | 改善を確認 −0.00189 [−0.00236, −0.00143] | 改善を確認 −0.00105 [−0.00137, −0.00071] |
+| shanpon | 改善を確認 −0.00403 [−0.00467, −0.00342] | 改善を確認 −0.00258 [−0.00318, −0.00204] |
+| kanchan | 改善を確認 −0.00569 [−0.00631, −0.00504] | 改善を確認 −0.00342 [−0.00397, −0.00282] |
+| penchan | 改善を確認 −0.00739 [−0.00882, −0.00603] | 判定対象外（正例95 episode） |
+| ryanmen low-side | 改善を確認 −0.01349 [−0.01464, −0.01238] | 改善を確認 −0.00792 [−0.00897, −0.00692] |
+| ryanmen high-side | 改善を確認 −0.01336 [−0.01454, −0.01226] | 改善を確認 −0.00802 [−0.00910, −0.00702] |
+| kokushi | 判定対象外（正例を含む半荘が2） | 判定対象外（正例なし） |
+
+- 判定はpopulation×channelごとで、7channel全体・両population全体の改善、同時信頼区間は主張しない。
+- 判定対象外は、この標本では推定能力を評価できないという意味で、改善なしの意味ではない。
+- 上限処理後に`channel > wait`となるslotは0件。処理前に`q > w`だったslotは、推定するslotの
+  0.003%（リーチ者tanki）〜15.2%（副露者penchan）。
+- Champion自己対局の分布での結果である。門前非リーチ者とS1対象外のリーチ者は未提供のままで、
+  評価していない。
+- 学習sourceとtest sourceは実行revisionが異なる。同一性は使用済みseedの一部のbyte一致で
+  確認しただけで、全seedの証明ではない。
+- 937000..937199は調整用データとして再利用しない。933000..933399は後続の未使用formal testに使わない。
