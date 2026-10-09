@@ -185,8 +185,16 @@ static slot数で希釈しないようmask適用後に推定するslotの件数�
 （打牌を選んだ判断で合法打牌の牌種が2以上）に限る。
 
 ```text
-python -m lisjong.learning.wait_shape_evaluation select     --train 933000..933159 --valid 933160..933239 --dev-eval 933240..933399     --riichi-wait-selection FILE --riichi-wait-sha256 HEX     --open-wait-selection FILE --open-wait-sha256 HEX     --code-revision COMMIT --output SELECTION.json SOURCE [SOURCE ...]
-python -m lisjong.learning.wait_shape_evaluation test     --test A..B --selection SELECTION.json --selection-sha256 HEX     （Level 1の4引数と --code-revision は select と同じ）     [--test-producer FILE --test-producer-sha256 HEX]     --output RESULT.json SOURCE [SOURCE ...]
+python -m lisjong.learning.wait_shape_evaluation select \
+    --train 933000..933159 --valid 933160..933239 --dev-eval 933240..933399 \
+    --riichi-wait-selection FILE --riichi-wait-sha256 HEX \
+    --open-wait-selection FILE --open-wait-sha256 HEX \
+    --code-revision COMMIT --output SELECTION.json SOURCE [SOURCE ...]
+python -m lisjong.learning.wait_shape_evaluation test \
+    --test A..B --selection SELECTION.json --selection-sha256 HEX \
+    （Level 1の4引数と --code-revision は select と同じ） \
+    [--test-producer FILE --test-producer-sha256 HEX] \
+    --output RESULT.json SOURCE [SOURCE ...]
 ```
 
 selectionは両Level 1 selectionのSHA-256を記録し、testは同じSHA-256のfileでなければ拒否する。
