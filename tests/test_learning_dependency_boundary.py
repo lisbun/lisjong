@@ -93,6 +93,10 @@ _LEARNING_MODULES = (
     "lisjong.learning.riichi_deal_in_source",
     "lisjong.learning.riichi_wait_mawashi_policy",
     "lisjong.learning.source_record",
+    "lisjong.learning.tenpai_push_fold",
+    "lisjong.learning.tenpai_push_fold_evaluation",
+    "lisjong.learning.tenpai_push_fold_source",
+    "lisjong.learning.tenpai_push_fold_value",
     "lisjong.learning.training",
     "lisjong.learning.__main__",
 )
