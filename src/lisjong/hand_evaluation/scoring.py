@@ -494,6 +494,14 @@ def _load_native():
     return _lisjong_native
 
 
+def require_scoring_backend() -> None:
+    """native coreを利用できなければ`ScoringBackendUnavailableError`を送出する。
+
+    `evaluate_win()`を判断中に呼ぶcallerが、構築時に利用可否を確認するために使う。
+    """
+    _load_native()
+
+
 def evaluate_win(
     hand: WinningHand,
     context: WinContext,

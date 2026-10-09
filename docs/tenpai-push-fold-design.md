@@ -3,7 +3,9 @@
 Issue: [#254](https://github.com/lisbun/lisjong/issues/254)（親: lisbun/lisjong-project#84、前段: #236・#249）
 
 他家1人がリーチ中で、自分が未リーチ・聴牌を保てる判断（打牌と、追っかけリーチの宣言）について、
-押す行動と降りる打牌を同じ単位で比べる候補の設計である。**実装・対局実行・seed予約はまだ行っていない。**
+押す行動と降りる打牌を同じ単位で比べる候補の設計である。**候補Policyの実装・対局実行・seed予約はまだ行っていない。**
+5節のうちlisjong側（ゲート判定・候補選択・対比較用Policy・sourceの契約と表のfit・件数の確認）は#288で実装した
+（[対比較source v1](tenpai-push-fold-source.md)）。
 Championは書き換えない。本書の式・表・候補は設計案であり、強さや判断の質の主張ではない。
 
 ## 1. 現行経路（Championが聴牌時にしていること）
@@ -214,6 +216,8 @@ bucket `s` は次の公開情報だけで決める（境界は事前登録時に
    (B)(C)のゲート判断の件数を役の有無別に数える（役の判定にnativeが要るのでWSLで行う）。
    結果は規模の見積りにだけ使う。(A)の件数は、このsourceにリーチ宣言の判断が含まれていれば数え、
    なければ対照の対局で数える
+   → 2026-10-09に実施。(B) 30、(C) 1,104（うち役なし26）、降りる候補のある判断は770。(A)はこのsourceでは
+   数えられない（[結果](tenpai-push-fold-source.md#件数の確認設計5節の手順12026-10-09)）
 2. seed単位でtrain / validに分ける。trainで表を作り、bucketの境界・support不足で除外するbucketを固定する
 3. validで次を報告する（区間は半荘単位のbootstrap）
    - 降りる − 押す の局収支差の平均（(A)と(B)(C)の区分別に、全体、bucket別、役の有無別）
@@ -300,6 +304,7 @@ bucket `s` は次の公開情報だけで決める（境界は事前登録時に
 ## 8. 後続Issueの案（設計レビュー後に切り出す）
 
 1. lisjong: ゲート判定・`a_fold`選択・k番目だけ替えるPolicy・対比較sourceの契約と表のfit（5節）
+   → [#288](https://github.com/lisbun/lisjong/issues/288)、[対比較source v1](tenpai-push-fold-source.md)
 2. lisjong-arena: 対比較sourceのproducerと実行（5節。1のwire契約が決まってから）
 3. lisjong: 候補Policyの実装と境界テスト（5節の中止条件を通過した場合）
 4. lisjong: 開発比較の事前登録・実行・記録（6節）
