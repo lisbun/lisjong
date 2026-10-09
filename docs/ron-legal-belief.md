@@ -3,11 +3,14 @@
 [lisbun/lisjong#262](https://github.com/lisbun/lisjong/issues/262)（親: #255）の設計と実装状況。
 段階Aの表現追加・availability・raw整合性検証は実装済み。
 B1の正解計算・追加source reader・履歴検証は実装済み。
-producerと2半荘pilotはlisjong-arena#457で完了した。段階Cは測定moduleまで実装済みで、
-本測定（新seed sourceの生成はlisjong-arena#460）は未実施である。
+producerと2半荘pilotはlisjong-arena#457で完了した。段階Cの本測定は400半荘
+（seed 936000..936399、生成はlisjong-arena#460）で実施し、#262はcloseした。
+推定器（#277）は段階1（リーチ者）・段階2（副露者）とも同じsourceで測定し、成功条件を満たした。
+数値・digest・実行条件は[#262の結果](https://github.com/lisbun/lisjong/issues/262#issuecomment-6060675233)と
+[#277](https://github.com/lisbun/lisjong/issues/277)のコメントを正本とする。
+936000..936399のevalは段階1・2で使用済みであり、後続の最終確認には新seedのsourceが要る。
 [追加source v1のwire契約](ron-legal-source.md)を正本とする。
 #263は[役・符・点数計算](hand-scoring.md)として完成済みで、正解の役判定に利用する。
-#259のselectを再実行せず、#260のモデル固定も待機のままとする。
 
 ## テーブルの意味とcontext
 
@@ -321,3 +324,15 @@ python -m lisjong.learning.ron_legal_accuracy --train ... --valid ... --eval ...
 `--score valid`はevalの代わりにvalidを採点する（調整・診断用。evalのラベルは読まない）。
 診断として、行ごとの牌種の和（待ち推定値、ron推定値、実際の待ち、実際のロン合法、0にしなかった
 牌種の実際の待ち、0にした牌種の実際のロン合法）を同じ集約で出す。最後の値は変換が正しければ0になる。
+
+### 結果の要約（#277）
+
+eval（936240..936399）の提供行で、推定器 − wait_genbutsu baselineのlog loss差（95%区間）は、
+段階1（リーチ者、17,651行）で −0.00431 [−0.00503, −0.00354]、段階2（副露者、22,443行）で
+−0.00631 [−0.00718, −0.00541]。どちらも0にした牌種の実際のロン合法は0だった。
+これは推定精度の結果であり、強さの評価ではない。
+
+0にする変換で落とせない過大は、リーチ者で実際の待ちの約1%、副露者で約9%（主因は役なし）。
+副露者に一律・副露形別の割合を掛ける補正はvalidで効果がなく見送った。
+待ちモデルの学習source（lisjong `e6346ed` / engine `8735e89`）と測定source
+（lisjong `994f529` / engine `91af75e`）はrevisionが異なる点を制約として残す。
