@@ -1,28 +1,28 @@
 # 形別待ちテーブル（Level 2）の推定・評価設計（#260）
 
-[lisbun/lisjong#260](https://github.com/lisbun/lisjong/issues/260)（親: #255）の実装前設計。
+[lisbun/lisjong#260](https://github.com/lisbun/lisjong/issues/260)（親: #255）の設計。
 既存契約は`HandBelief`と[手牌正解データ契約](hand-belief-accuracy-source.md)を正本とする。
-この文書の追加は、推定器の実装・学習・精度合格・Issue完了を意味しない。
+推論・学習・評価のcodeは実装済みだが、select・formal testは未実行である。
+この文書は精度合格・Issue完了を意味しない。
 
 ## 現在地と実行の前提
 
 #257は開発用測定まで完了し、#259の副露者推定はPR #266でmainへ入った
-（merge commit `de786f75d2bd03d7943f621522c67ebd8545544c`）。この設計時点では
-#259のselect結果・selection identity・formal test結果は確認できていない。
-#259のselectを再実行せず、その担当から確定selectionと実行履歴を受け取る。
+（merge commit `de786f75d2bd03d7943f621522c67ebd8545544c`）。#259範囲1のformal testは
+2026-10-09に1回実行され、結果はpassだった（#259の結果コメント）。
+#259のselectを再実行せず、登録済みのselection fileをSHA-256で照合して使う。
 
-今回決めるのは対象、特徴量の範囲、比較baseline、整合性、形別評価条件である。
-下記の待ち推定器identityとformal testのseed予約が未確定なので、この文書だけでは
-実験開始用の事前登録は完了しない。実装後、実行commitと不足するidentityを#260へ
-追記してからselectへ進み、testの予約を記録してから生成・評価へ進む。
+この文書が決めるのは対象、特徴量の範囲、比較baseline、整合性、形別評価条件である。
+selectの実行commitとformal testのseed予約は未確定なので、この文書だけでは
+実験開始用の事前登録は完了しない。実行commitを#260へ追記してからselectへ進み、
+testの予約を記録してから生成・評価へ進む。
 
 | 待ち推定器 | 固定するもの | 現在の扱い |
 |---|---|---|
 | 単独リーチ者 | #245の凍結済みselection、`riichi-wait-features-v1`、L2=1.0 | #257で使ったSHA-256 `14475264d7fe4137a9ac8a23ee1d27b420bff2f4434c6e93ca72ecfcf24ccc38`を指定し、受領時に実体と照合する |
-| 副露者 | #259の`open-wait-features-v1`、修正後のselectのselection SHA-256・実行commit・選択L2 | 未受領。#259のformal結果を確認し、#260で使用するidentityを結果に基づく再調整なしで記録する |
+| 副露者 | #259の`open-wait-features-v1`、修正後のselectのselection SHA-256・実行commit・選択L2 | SHA-256 `92608e4df7bbce35c1df26942aec29e11efe88526efc62b0bb7fd934e88165f6`（select commit `804b42b49228769d7c8e1c45e0699f430ef6c519`、L2は聴牌段0.01・待ち段0.01）。受領時に実体と照合し、再調整しない |
 
-#259のmergeを精度合格と扱わない。#259で改善を確認できなかった場合も、その固定モデルを
-#260の上限に使うかはselect前に明記する。別モデルへの差し替えは登録を更新してから行う。
+#259のmergeを精度合格と扱わない。別モデルへの差し替えは登録を更新してから行う。
 #260の途中で#259のリーチ者改善モデルへ差し替えない。
 
 ## 対象とavailability
@@ -96,7 +96,10 @@ feature identityは`wait-shape-features-v1`とし、population・channel順・�
 定義上0なので係数学習へ寄与させない。静的slot数で行内平均を定義し、残るslot数で
 行ごとに再正規化しない。元のpopulation内episode重みを使う。
 L2は切片を含む全係数へ適用し、正例ゼロ・完全分離でも無正則化切片を発散させない。
-目的関数はこの重み付き平均binary cross entropy + `L2 * Σ係数² / 2`とする。
+目的関数は`Σ_行 episode重み × (静的slot内平均のbinary cross entropy) + L2 * Σ係数² / 2`とする。
+第1項はepisode数で割らない（#259と同じく、episode重みの和の尺度で持つ）。episode数で割ると
+格子の最小値0.01でも切片への罰則が損失より大きくなり、希少channelの確率を系統的に
+押し上げるためである。この尺度は実装時（select実行前、結果を見る前）に固定した。
 副露者の国士は構造上のゼロモデルとして明記し、係数fit・L2選択をしない。
 solver failureはbaselineへの自動置換や候補の黙示的除外をせず失敗にする。
 
@@ -172,9 +175,31 @@ static slot数で希釈しないようmask適用後に推定するslotの件数�
 ## 実装・引き継ぎの完了条件
 
 実装は推論用`lisjong.learning.wait_shape_estimator`と学習・評価用
-`lisjong.learning.wait_shape_evaluation`へ分ける。この名前は予定であり、現時点では未実装。
+`lisjong.learning.wait_shape_evaluation`へ分ける。
 既存source reader・canonical builderを再利用し、Arenaへのruntime依存を作らない。
-推論はML framework非依存とし、学習に必要なoptional依存は学習経路でだけimportする。
+推論・学習ともML frameworkに依存しない（当てはめは既存の`fit_logistic`を使う）。
+
+推論は`estimate_riichi_wait_shape_belief()` / `estimate_open_wait_shape_belief()`が
+`PolicyInput`・対象席・固定したLevel 1モデル・形別モデルを受け取り、Level 2の`HandBelief`を返す。
+提供範囲外の席は`ValueError`で拒否する。評価の行は、単独リーチ者では#257と同じS1対象の判断
+（打牌を選んだ判断で合法打牌の牌種が2以上）に限る。
+
+```text
+python -m lisjong.learning.wait_shape_evaluation select \
+    --train 933000..933159 --valid 933160..933239 --dev-eval 933240..933399 \
+    --riichi-wait-selection FILE --riichi-wait-sha256 HEX \
+    --open-wait-selection FILE --open-wait-sha256 HEX \
+    --code-revision COMMIT --output SELECTION.json SOURCE [SOURCE ...]
+python -m lisjong.learning.wait_shape_evaluation test \
+    --test A..B --selection SELECTION.json --selection-sha256 HEX \
+    （Level 1の4引数と --code-revision は select と同じ） \
+    [--test-producer FILE --test-producer-sha256 HEX] \
+    --output RESULT.json SOURCE [SOURCE ...]
+```
+
+selectionは両Level 1 selectionのSHA-256を記録し、testは同じSHA-256のfileでなければ拒否する。
+判定は結果の`verdicts`に、population×channelごとに`improved` / `not_confirmed` /
+`excluded`（判定対象外。理由は`reason`）で記録する。
 
 focused testで次を固定する。
 
@@ -188,7 +213,7 @@ focused testで次を固定する。
 - baselineのtrain限定fit、population内episode重み、静的slotの分母、独立半荘のsupport判定、
   同一行集合でのpaired比較、testとselect seed重複拒否を固定する。
 
-実装PRの品質確認後、selectのcommit・selection SHA-256を#260へ記録し、未使用seedの
+実装PRのmerge後、selectのcommit・selection SHA-256を#260へ記録し、未使用seedの
 formal testを1回実行する。両population×7channelの結果（判定対象外を含む）、
 source/結果digest、実行条件・終了コード・未実施確認をIssueへ記録して完了判断する。
 設計PRは`Refs #260`とし、Issueをcloseしない。
