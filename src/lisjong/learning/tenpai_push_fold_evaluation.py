@@ -4,8 +4,11 @@
 
 - `count`: 消費済みの開発source（#237 S1の`decisions.jsonl`）で、ゲート判断の件数を区分別・
   役の有無別に数える。新しい対局は使わない。S1は打牌判断だけを持つので(A)は数えられない
+- `support`: 対比較sourceのtrainの`decisions.jsonl`だけを読み、bucketの材料（残りツモ山・待ちの
+  枚数）の値ごとの件数を数える。局の結果のfileは開かない（#292の事前登録用）
 - `report`: 対比較sourceのtrainから表（`q`・`R_T`・`R_F`・`L`・`U`）を作り、validで
-  降りる − 押す の局収支差などを報告する
+  降りる − 押す の局収支差などを報告する。`--tables-output`を与えると、表をidentityつきの
+  canonical JSON（`TABLES_SCHEMA`）として書く
 
 表の作り方（すべて今の打牌が通った局だけを使う。`L`を除く）:
 
@@ -15,7 +18,7 @@
 - `U`: (A)の押す側で和了した局の、実際の和了点 − 判断時点の除外モードの和了点の加重平均
 
 役の判定と和了点の計算にnative拡張が要る。bucketの境界とsupportの下限は引数で与える
-（この値はまだ事前登録していない）。
+（#292で事前登録する）。
 """
 
 import argparse
@@ -28,6 +31,7 @@ from random import Random
 from lisjong.belief.fixed_point import raw_to_semantic
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.hand_evaluation.scoring import evaluate_win
+from lisjong.learning._canonical import canonical_json_text, seal
 from lisjong.learning.riichi_deal_in_source import read_decisions as read_s1_decisions
 from lisjong.learning.riichi_wait_estimator import LogisticWaitModel
 from lisjong.learning.riichi_wait_mawashi_policy import load_selected_wait_model
@@ -39,8 +43,10 @@ from lisjong.learning.tenpai_push_fold import (
     own_wait_value,
 )
 from lisjong.learning.tenpai_push_fold_source import (
+    GateDecisionRecord,
     PairRecord,
     RoundOutcome,
+    read_decisions,
     read_source,
 )
 from lisjong.learning.tenpai_push_fold_value import (
@@ -61,6 +67,7 @@ from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.structural_efficiency import post_discard_concealed_hand
 
+TABLES_SCHEMA = "lisjong-tenpai-push-fold-tables-v1"
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 288
 CALIBRATION_UPPER_BOUNDS = (0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 1.0)
@@ -97,7 +104,12 @@ def count_gate_decisions(
 
 def gate_from_record(pair: PairRecord, *, evaluate: EvaluateWin = evaluate_win):
     """記録された候補から、待ちの値を計算し直した`TenpaiGate`を作る（モデルは使わない）。"""
-    record = pair.decision
+    return _gate_from_decision(pair.decision, evaluate=evaluate)
+
+
+def _gate_from_decision(
+    record: GateDecisionRecord, *, evaluate: EvaluateWin
+) -> TenpaiGate:
     policy_input = record.policy_input
     riichi = record.kind is GateKind.RIICHI
     fold_keeps_tenpai = (
@@ -128,6 +140,55 @@ def gate_from_record(pair: PairRecord, *, evaluate: EvaluateWin = evaluate_win):
             else None
         ),
     )
+
+
+def support_counts(
+    records: Iterable[GateDecisionRecord],
+    buckets: BucketSpec | None = None,
+    *,
+    evaluate: EvaluateWin = evaluate_win,
+) -> dict[str, object]:
+    """ゲート判断の記録だけから、bucketの材料の値ごとの件数を区分別に数える。
+
+    局の結果は使わない。`buckets`を与えると、その境界での件数を`fit_tables()`の表の名前で返す。
+    表は今の打牌が通った局だけで作るので、この件数は表のsupportの上限である。
+    """
+    counts: defaultdict[str, Counter] = defaultdict(Counter)
+    for record in records:
+        gate = _gate_from_decision(record, evaluate=evaluate)
+        round_state = record.policy_input.round
+        wall = round_state.live_wall_tiles_remaining
+        group = gate_group(gate.kind)
+        wait = gate.push_wait
+        r_f = gate.has_fold_candidate and (
+            group == RIICHI_GROUP or not gate.fold_keeps_tenpai
+        )
+        counts["decisions"][group] += 1
+        counts["fold_candidates"][group] += gate.has_fold_candidate
+        counts["riichi_seat"][
+            DEALER if gate.riichi_seat is round_state.dealer_seat else NON_DEALER
+        ] += 1
+        counts[f"wall.{group}"][wall] += 1
+        counts[f"ron_count.{group}"][wait.ron_count] += 1
+        counts[f"tsumo_count.{group}"][wait.tsumo_count] += 1
+        if r_f:
+            counts[f"r_f_wall.{group}"][wall] += 1
+        if buckets is None:
+            continue
+        counts[f"bucket.tenpai.{group}.r_t"][
+            buckets.tenpai_key(wall, wait.tsumo_count)
+        ] += 1
+        for method, count in (("ron", wait.ron_count), ("tsumo", wait.tsumo_count)):
+            if count > 0:
+                counts[f"bucket.tenpai.{group}.q_{method}"][
+                    buckets.tenpai_key(wall, count)
+                ] += 1
+        if r_f:
+            counts[f"bucket.r_f.{group}"][buckets.wall_key(wall)] += 1
+    return {
+        name: {str(key): count for key, count in sorted(counter.items())}
+        for name, counter in sorted(counts.items())
+    }
 
 
 def _riichi_deal_in(pair: PairRecord, outcome: RoundOutcome) -> bool:
@@ -352,6 +413,20 @@ def valid_report(
     }
 
 
+def tables_document(
+    tables: PushFoldTables, *, minimum_support: int, source: dict[str, object]
+) -> dict[str, object]:
+    """表のfileの内容。`source`は対比較sourceのmanifestの`files`（digestと行数）。"""
+    return seal(
+        {
+            "schema": TABLES_SCHEMA,
+            "minimum_support": minimum_support,
+            "source": source,
+            "tables": tables.to_value(),
+        }
+    )
+
+
 def _bounds(text: str) -> tuple[int, int]:
     try:
         first, second = (int(part) for part in text.split(","))
@@ -366,11 +441,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     count_parser = commands.add_parser("count")
     count_parser.add_argument("--s1-source", type=Path, required=True)
     count_parser.add_argument("--selection", type=Path, required=True)
+    support_parser = commands.add_parser("support")
+    support_parser.add_argument("--source", type=Path, required=True)
+    support_parser.add_argument("--wall-upper-bounds", type=_bounds)
+    support_parser.add_argument("--count-upper-bounds", type=_bounds)
     report_parser = commands.add_parser("report")
     report_parser.add_argument("--source", type=Path, required=True)
     report_parser.add_argument("--wall-upper-bounds", type=_bounds, required=True)
     report_parser.add_argument("--count-upper-bounds", type=_bounds, required=True)
     report_parser.add_argument("--minimum-support", type=int, required=True)
+    report_parser.add_argument("--tables-output", type=Path)
     arguments = parser.parse_args(argv)
 
     if arguments.command == "count":
@@ -389,6 +469,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             load_selected_wait_model(arguments.selection),
         )
         result["games"] = sum(len(seeds) for seeds in manifest.splits.values())
+    elif arguments.command == "support":
+        bounds = (arguments.wall_upper_bounds, arguments.count_upper_bounds)
+        if (bounds[0] is None) != (bounds[1] is None):
+            parser.error("give both bucket bounds or neither")
+        manifest, decisions = read_decisions(arguments.source)
+        result = support_counts(
+            (
+                record
+                for record in decisions
+                if manifest.split_of(record.key.seed) == "train"
+            ),
+            None
+            if bounds[0] is None
+            else BucketSpec(wall_upper_bounds=bounds[0], count_upper_bounds=bounds[1]),
+        )
     else:
         manifest, records = read_source(arguments.source)
         by_split: dict[str, list] = {"train": [], "valid": []}
@@ -403,9 +498,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         tables, support = fit_tables(
             by_split["train"], buckets, minimum_support=arguments.minimum_support
         )
+        document = tables_document(
+            tables, minimum_support=arguments.minimum_support, source=manifest.files
+        )
+        if arguments.tables_output is not None:
+            arguments.tables_output.write_text(
+                canonical_json_text(document), encoding="utf-8", newline=""
+            )
         result = {
             "minimum_support": arguments.minimum_support,
             "tables": tables.to_value(),
+            "tables_identity": document["identity"],
             "train_support": support,
             "valid": valid_report(by_split["valid"], tables),
         }

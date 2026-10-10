@@ -18,13 +18,15 @@ from test_learning_tenpai_push_fold import (
 )
 from test_placement_aware_speed_call_policy import _chi_meld, _input, _pon_meld
 
-from lisjong.learning._canonical import canonical_json_line, file_digest
+from lisjong.learning._canonical import canonical_json_line, file_digest, unseal
 from lisjong.learning.riichi_wait_mawashi_policy import SELECTED_WAIT_MODEL_SHA256
 from lisjong.learning.tenpai_push_fold import GATE, GateKind, TenpaiGate
 from lisjong.learning.tenpai_push_fold_evaluation import (
     count_gate_decisions,
     fit_tables,
     gate_from_record,
+    support_counts,
+    tables_document,
     valid_report,
 )
 from lisjong.learning.tenpai_push_fold_source import (
@@ -406,6 +408,11 @@ class FitTablesTest(unittest.TestCase):
         self.assertEqual(tables.uplift, {"tsumo": 2000.0})
         self.assertEqual(support["tenpai.discard.r_t"], {"w2.c3": 3})
         self.assertEqual(tables.to_value()["loss"], {"dealer": 10000.0})
+        source = {"decisions": {"sha256": "d" * 64}}
+        document = tables_document(tables, minimum_support=1, source=source)
+        body = unseal(document, ValueError, "tables")
+        self.assertEqual(body["tables"], tables.to_value())
+        self.assertEqual((body["minimum_support"], body["source"]), (1, source))
 
     def test_buckets_below_the_minimum_support_are_left_out(self):
         pairs = [
@@ -500,6 +507,29 @@ class GateFromRecordAndCountTest(unittest.TestCase):
         riichi = _record(1, 1, 0, riichi=True, fold_action=_discard("1z"))
         gate = gate_from_record(replace(pair, decision=riichi), evaluate=_scored)
         self.assertIsNone(gate.fold_wait)
+
+    def test_support_counts_use_the_decision_records_only(self):
+        records = [
+            _record(1, 1, 0),
+            _record(1, 2, 1, fold_raw=20),
+            _record(1, 3, 2, fold_action=_discard("1z")),
+            _record(1, 4, 3, riichi=True, fold_action=_discard("1z")),
+        ]
+        counts = support_counts(records, evaluate=_scored)
+        self.assertEqual(counts["decisions"], {"discard": 3, "riichi": 1})
+        self.assertEqual(counts["fold_candidates"], {"discard": 2, "riichi": 1})
+        self.assertEqual(counts["riichi_seat"], {"dealer": 4})
+        self.assertEqual(counts["wall.discard"], {"50": 3})
+        self.assertEqual(counts["tsumo_count.discard"], {"8": 3})
+        # (B)(C)は聴牌を崩す降りる候補だけ、(A)は降りる候補のすべてがR_Fの材料になる。
+        self.assertEqual(counts["r_f_wall.discard"], {"50": 1})
+        self.assertEqual(counts["r_f_wall.riichi"], {"50": 1})
+        self.assertFalse(any(name.startswith("bucket.") for name in counts))
+
+        counts = support_counts(records, BUCKETS, evaluate=_scored)
+        self.assertEqual(counts["bucket.tenpai.discard.r_t"], {"w2.c3": 3})
+        self.assertEqual(counts["bucket.tenpai.riichi.q_ron"], {"w2.c3": 1})
+        self.assertEqual(counts["bucket.r_f.discard"], {"w2": 1})
 
     def test_counts_gate_decisions_by_kind_and_yaku(self):
         yakuless = _input(
