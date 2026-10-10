@@ -205,7 +205,8 @@ python -m lisjong.learning.tenpai_push_fold_evaluation count --s1-source <S1 sou
 ### 表
 
 ```text
-python -m lisjong.learning.tenpai_push_fold_evaluation report --source <dir>   --wall-upper-bounds 19,31 --count-upper-bounds 3,4 --minimum-support 20 --tables-output tables.json
+python -m lisjong.learning.tenpai_push_fold_evaluation report --source <dir> \
+  --wall-upper-bounds 19,31 --count-upper-bounds 3,4 --minimum-support 20 --tables-output tables.json
 ```
 
 | file | SHA-256 |
