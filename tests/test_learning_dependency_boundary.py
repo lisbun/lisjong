@@ -95,6 +95,7 @@ _LEARNING_MODULES = (
     "lisjong.learning.source_record",
     "lisjong.learning.tenpai_push_fold",
     "lisjong.learning.tenpai_push_fold_evaluation",
+    "lisjong.learning.tenpai_push_fold_policy",
     "lisjong.learning.tenpai_push_fold_source",
     "lisjong.learning.tenpai_push_fold_value",
     "lisjong.learning.training",

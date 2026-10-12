@@ -54,6 +54,7 @@ from lisjong.learning.tenpai_push_fold_value import (
     GROUPS,
     NON_DEALER,
     RIICHI_GROUP,
+    TABLES_SCHEMA,
     BucketSpec,
     PushFoldTables,
     TenpaiSideTable,
@@ -67,7 +68,6 @@ from lisjong.policy_contract.policy_decision import PolicyDecision
 from lisjong.policy_contract.policy_input import PolicyInput
 from lisjong.structural_efficiency import post_discard_concealed_hand
 
-TABLES_SCHEMA = "lisjong-tenpai-push-fold-tables-v1"
 BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 288
 CALIBRATION_UPPER_BOUNDS = (0.0, 0.01, 0.02, 0.05, 0.1, 0.2, 1.0)

@@ -3,9 +3,10 @@
 Issue: [#254](https://github.com/lisbun/lisjong/issues/254)（親: lisbun/lisjong-project#84、前段: #236・#249）
 
 他家1人がリーチ中で、自分が未リーチ・聴牌を保てる判断（打牌と、追っかけリーチの宣言）について、
-押す行動と降りる打牌を同じ単位で比べる候補の設計である。**候補Policyの実装・対局実行・seed予約はまだ行っていない。**
+押す行動と降りる打牌を同じ単位で比べる候補の設計である。
 5節のうちlisjong側（ゲート判定・候補選択・対比較用Policy・sourceの契約と表のfit・件数の確認）は#288で実装した
-（[対比較source v1](tenpai-push-fold-source.md)）。
+（[対比較source v1](tenpai-push-fold-source.md)）。5節の表のfitと中止条件の判定は#292で行い、候補Policyは#289で
+実装した（[9節](#9-候補policyの実装289)）。**半荘での開発比較（6節）と、そのseed予約はまだ行っていない。**
 Championは書き換えない。本書の式・表・候補は設計案であり、強さや判断の質の主張ではない。
 
 ## 1. 現行経路（Championが聴牌時にしていること）
@@ -311,4 +312,46 @@ bucket `s` は次の公開情報だけで決める（境界は事前登録時に
    → [#288](https://github.com/lisbun/lisjong/issues/288)、[対比較source v1](tenpai-push-fold-source.md)
 2. lisjong-arena: 対比較sourceのproducerと実行（5節。1のwire契約が決まってから）
 3. lisjong: 候補Policyの実装と境界テスト（5節の中止条件を通過した場合）
+   → [#289](https://github.com/lisbun/lisjong/issues/289)、[9節](#9-候補policyの実装289)
 4. lisjong: 開発比較の事前登録・実行・記録（6節）
+
+## 9. 候補Policyの実装（#289）
+
+`lisjong.learning.tenpai_push_fold_policy.TenpaiPushFoldPolicy`。`PlacementAwareSpeedCallPolicy`をexact parentとする
+未昇格の実験候補で、Championは変えていない。半荘での強さは測っていない。
+
+```python
+policy = TenpaiPushFoldPolicy.from_files(Path("selection.json"), Path("tables.json"))
+```
+
+| 項目 | 内容 |
+|---|---|
+| 待ちモデル | #245の`selection.json`。SHA-256 `14475264…ccc38`（`SELECTED_WAIT_MODEL_SHA256`）と照合する |
+| 表 | #292の`tables.json`。SHA-256 `9234480c…e730c`（`SELECTED_TABLES_SHA256`）と照合し、canonical形式・identity・schema・形も検査する（`load_tables()`）。境界は残りツモ山`19,31`・待ちの枚数`3,4` |
+| 対象の区分 | (A)と(B)(C)の両方。#292のvalidで両方が中止の条件を通過した |
+| 構築時のエラー | モデル・表のSHA-256の不一致、表の形式の不一致、native拡張が使えない場合。別のモデル・表・Championの挙動へ替えない |
+| fileの置き場所 | repositoryの外。モデル・表はGitへ置かない |
+
+判断の流れ（2〜4節のとおり。ゲート条件1〜7と2候補は対比較sourceの生成と同じ`evaluate_tenpai_gate()`、
+比較式は表のfit・validの報告と同じ関数を使う）:
+
+1. Championの決定C0を求める
+2. ゲート条件1〜7の外ならC0の`PolicyDecision`をそのまま返す
+3. `p(a_fold) >= p(a_push)`（より安全な牌がない）ならC0の`PolicyDecision`をそのまま返す
+4. 表にこの判断の区分・bucketがない（条件8）ならC0の`PolicyDecision`をそのまま返す
+5. `V(降りる) > V(押す)`なら`a_fold`を切る（(A)ではリーチしない）。それ以外はC0の行動を返す
+
+5まで進んだ判断では、押す場合も降りる場合も、`PolicyDecision.analysis`に`TenpaiPushFoldAnalysis`を返す
+（ゲートの内容と、2候補それぞれの`p`・放銃時の支出`L + 本場×300`・継続価値`C`・`V`）。このときChampionのanalysisは返さない。
+instanceは判断をまたぐ状態を持たない。
+
+### 確認
+
+- 6節の境界テストは`tests/test_learning_tenpai_push_fold.py`（ゲート条件・候補選択・待ちの値・比較式・宣言牌の予測）と
+  `tests/test_learning_tenpai_push_fold_policy.py`（行動の選択・Championとの一致・構築時の検査・表の読み込み・情報境界）にある
+- 登録したモデルと表で、対比較sourceのvalidのゲート判断1,937件（`decisions.jsonl`だけを読む）へ候補を適用した（WSL、
+  lisjong `6be9b90`のCI wheel）。`V`の判定の件数は#292の報告と一致した: (A) 降りる候補なし90・降りる14・押す534、
+  (B)(C) 降りる候補なし374・表なし22・降りる122・押す781。`V`を計算しなかった判断はChampionの`PolicyDecision`と一致し、
+  選んだ打牌は記録された`a_fold`・C0と一致した
+- 同じ実行での1判断あたりの時間（参考。1回の実行、予算の判定は6節の事前登録で行う）: 候補 p50 91ms・p95 230ms・最大664ms、
+  Championだけ p50 49ms・p95 157ms・最大460ms。候補の時間はChampionの決定の計算を含む
