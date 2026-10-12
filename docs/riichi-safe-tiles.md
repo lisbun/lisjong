@@ -83,19 +83,66 @@ passed(r)  r のリーチ宣言牌より後に、r 以外の席（自席を含�
 
 ### 環境ごとの確認状況
 
-| 環境 | 規則1（見逃しのフリテン継続） | 規則2（待ちの不変） | 状態 |
-|---|---|---|---|
-| project標準のRuleSet（lisjongの定義） | [riichi-deal-in-label.md](riichi-deal-in-label.md) の「リーチ後の見逃しフリテン」：宣言打牌より後に和了できた牌を和了しなければ、以後すべての待ちでロンできない | 同文書はリーチ後の手牌不変を前提に待ちを定める | 規則文書で確認 |
-| lisjong-engine `91af75e` | `src/lisjong_engine/furiten.py`：`next_missed_ron_reason` は立直成立後の見逃しを `RIICHI` とし、`cleared_temporary_reason` は自分のツモ番でも `RIICHI` を解除しない | `docs/rules.md` の「RiichiAnkanPolicy」：送り槓禁止と待ち牌種類の不変は全policy共通の必須条件 | 規則文書と実装で確認 |
-| RiichiEnv 0.4.10 | `riichienv-core` の合法手生成が `riichi_declared && missed_agari_riichi` をフリテンとして扱う（lisbun/lisjong-arena#247 の調査）。replayのforward stateがこのflagを更新しない既知の差があり、Arena側で補っている | 未確認 | **局面テストで確認中**（lisbun/lisjong-arena#493） |
-| RiichiLab（対局server） | 未確認 | 未確認 | **未確認**。候補を稼働・評価する前に確認する |
+基盤を適用してよいのは、下の「状態」が**確認済み**の環境だけである。**未確認の環境は、
+基盤の自動適用の対象に含めない。** 確認できない点を推測で埋めない。
 
-RiichiEnvとRiichiLabの確認は、環境に依存する局面テストとしてlisjong-arena側に置く。
-確認できた時点で、この表を更新する。
+| 環境 | 確認した version / revision | 状態 |
+|---|---|---|
+| project標準のRuleSet（規則の定義） | lisjong `85c81f5` の規則文書 | 規則1は確認済み。規則2は規則文書に明文がなく、engineの規則で確認 |
+| lisjong-engine | `91af75e3aa11520c3b0543719dc74bb4c517ee06` | 確認済み（規則文書と実装の確認。局面テストは本Issueでは実行していない） |
+| RiichiEnv | 0.4.10 | 確認済み（局面テスト） |
+| RiichiLab（対局server） | — | **未確認** |
 
-補助証拠として、Champion実戦423席（lisbun/lisjong-arena#489）では、通った牌を切った
+#### project標準のRuleSet
+
+- **採用規則**：[riichi-deal-in-label.md](riichi-deal-in-label.md) のフリテンの定義。
+- **規則1の根拠**：同文書の「リーチ後の見逃しフリテン」。リーチ宣言打牌より後に、和了できた牌
+  （他家の打牌・加槓牌・自摸牌）を和了しなかった場合、以後すべての待ちでロンできない。
+- **規則2の根拠**：lisjongの規則文書には、リーチ後の暗槓の条件の明文がない。下のlisjong-engineの
+  規則（待ち牌種類の不変は必須条件）で確認する。
+- **確認方法**：公開仕様（規則文書）。
+
+#### lisjong-engine `91af75e`
+
+- **採用規則**：`docs/rules.md`（RuleSet）。`riichi_ankan_policy` の既定は
+  `PRESERVE_WAIT_AND_DECOMPOSITION`。
+- **規則1の根拠**：`src/lisjong_engine/furiten.py`。`next_missed_ron_reason` は立直成立後の
+  見逃しを `RIICHI` とし、一度 `RIICHI` になった席を `TEMPORARY` へ弱めない。
+  `cleared_temporary_reason` は自分のツモ番で同巡フリテンだけを解除し、`RIICHI` を維持する。
+- **規則2の根拠**：`docs/rules.md` の「RiichiAnkanPolicy」。送り槓禁止（暗槓にツモ牌を含むこと）と
+  待ち牌種類の不変は、全policy共通の必須条件である。
+- **確認方法**：公開仕様（規則文書）と実装確認。局面テストは本Issueでは実行していない。
+
+#### RiichiEnv 0.4.10
+
+- **採用規則**：RiichiEnv 0.4.10の合法手生成（MJAI replayの `Kyoku.steps()` が各判断時点で
+  提示する合法手）。
+- **規則1の根拠**：リーチ後に待ち牌を見逃すと、同じ牌種が再び切られても、別の待ち牌が
+  切られても、リーチ者自身のツモ番を挟んだ後でも、ロンが合法手に提示されない。見逃しの前は
+  提示される。
+- **規則2の根拠**：リーチ後、待ちを変えない暗槓は合法手に出るが、待ちを変える暗槓は出ない。
+  リーチ後のツモで、打牌の合法手はツモ牌の1つだけである。
+- **確認方法**：局面テスト。lisjong-arenaの `tests/test_riichienv_riichi_safe_tile_rules.py`
+  （lisbun/lisjong-arena#494）が、`riichienv.MjaiReplay` の `Kyoku.steps()` が提示する合法手を
+  合成局面で確かめる。versionが0.4.10であることもtestで確認する。
+- **確認していない範囲**：局面テストはreplayの経路で行った。対局を進める `RiichiEnv` の
+  step経路は、同じ合法手生成の条件を共有していると把握している（lisbun/lisjong-arena#247の
+  調査）が、同じ局面テストを別には行っていない。
+- **既知の差**：MJAI logを `RiichiEnv.apply_event()` で進めるforward stateは、見逃しによる
+  フリテンのflagを更新しない（lisbun/lisjong-arena#247）。これはreplay経路の再現の差であり、
+  対局中の規則の差ではない。Arena側のreplayが補っている。
+
+#### RiichiLab（対局server）
+
+- **未確認。** serverが採用する規則の公開仕様と、server実装のversionを確認できていない。
+- 確認できるまで、基盤の自動適用の対象に含めない。候補をRiichiLabで稼働・評価する前に、
+  確認方法（公開仕様の確認、または規則が現れる局面の対局記録の照合）を別に決める。
+
+### 補助証拠
+
+Champion実戦423席（RiichiLabでの対局。lisbun/lisjong-arena#489）では、通った牌を切った
 710 打牌のうち、ロンされたものは0件だった。0件であることは規則の成立を証明しないので、
-主な根拠にはしない。
+主な根拠にはしない。RiichiLabを確認済みとする根拠にもしない。
 
 ## 情報境界
 
