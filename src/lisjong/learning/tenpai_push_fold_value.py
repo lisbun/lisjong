@@ -2,7 +2,10 @@
 
 設計は`docs/tenpai-push-fold-design.md`の4節。表（`q`・`R_T`・`R_F`・`L`・`U`）は
 `lisjong.learning.tenpai_push_fold_evaluation`が対比較sourceのtrainから作る。このmoduleは
-表の形と、表を使った`V`の計算だけを持ち、sourceも正解も読まない。
+表の形、表のfileの読み込み、表を使った`V`の計算だけを持ち、sourceも正解も読まない。
+
+表のfileは`load_tables()`で読む。fileのSHA-256が`SELECTED_TABLES_SHA256`（#292で登録した表）と
+一致しなければ読み込まない。fileはrepositoryの外に置く。
 
 ```text
 V(a) = − p(a) · L  +  (1 − p(a)) · C(a)
@@ -12,7 +15,7 @@ C(a) = q_ron · G_ron(a) + q_tsumo · G_tsumo(a) + R_T      a が聴牌を保つ
 
 `V`は表と仮定に依存する比較用の値であり、期待収支ではない。
 
-bucketのキー（境界は`BucketSpec`で与える。この値はまだ事前登録していない）:
+bucketのキー（境界は`BucketSpec`で与える。#292で登録した値は`19,31`と`3,4`）:
 
 - 残りツモ山は3区分（`w0`〜`w2`）
 - 役がある待ちの残り枚数は、0枚の`c0`と、1枚以上の3区分（`c1`〜`c3`）
@@ -21,9 +24,19 @@ bucketのキー（境界は`BucketSpec`で与える。この値はまだ事前�
 - `R_F`は残りツモ山の区分だけで引く
 """
 
+import hashlib
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from lisjong.belief.fixed_point import raw_to_semantic
+from lisjong.learning._canonical import (
+    canonical_json_text,
+    expect_object,
+    parse_json_text,
+    unseal,
+)
+from lisjong.learning.errors import LearningError
 from lisjong.learning.tenpai_push_fold import GateKind, OwnWaitValue, TenpaiGate
 from lisjong.policy_contract.policy_input import PolicyInput
 
@@ -35,6 +48,17 @@ GROUPS = (RIICHI_GROUP, DISCARD_GROUP)
 
 DEALER = "dealer"
 NON_DEALER = "non_dealer"
+
+TABLES_SCHEMA = "lisjong-tenpai-push-fold-tables-v1"
+SELECTED_TABLES_SHA256 = (
+    "9234480ce3bed2f0b6e976cb853de9597f515f0d39b3fcbc35b534dc6efe730c"
+)
+"""#292で事前登録してfitした`tables.json`のSHA-256。"""
+
+_WIN_METHODS = ("ron", "tsumo")
+_WALL_KEY = re.compile(r"w[0-2]")
+_TENPAI_KEY = re.compile(r"w[0-2]\.c[0-3]")
+_Q_KEY = re.compile(r"w[0-2]\.c[1-3]")
 
 _STICK_POINTS = 1000
 _HONBA_POINTS = 300
@@ -117,14 +141,135 @@ class PushFoldTables:
         }
 
 
+class TenpaiPushFoldTablesError(LearningError):
+    """表のfileを、登録した条件どおりに読めない場合。"""
+
+
+_E = TenpaiPushFoldTablesError
+
+
+def _table(
+    value: object, key: re.Pattern[str], context: str, *, probability: bool = False
+) -> dict[str, float]:
+    if type(value) is not dict:
+        raise _E(f"{context} must be a JSON object")
+    table = {}
+    for name, number in value.items():
+        if key.fullmatch(name) is None:
+            raise _E(f"{context} has an unexpected key {name!r}")
+        if type(number) not in (int, float):
+            raise _E(f"{context}.{name} must be a number")
+        if probability and not 0 <= number <= 1:
+            raise _E(f"{context}.{name} must be a probability")
+        table[name] = float(number)
+    return table
+
+
+def tables_from_value(value: object) -> PushFoldTables:
+    """`PushFoldTables.to_value()`の逆。形・キー・値の型が違えば拒否する。"""
+    raw = expect_object(
+        value, frozenset({"buckets", "loss", "r_f", "tenpai", "uplift"}), _E, "tables"
+    )
+    bounds = expect_object(
+        raw["buckets"],
+        frozenset({"count_upper_bounds", "wall_upper_bounds"}),
+        _E,
+        "tables.buckets",
+    )
+    try:
+        buckets = BucketSpec(
+            wall_upper_bounds=bounds["wall_upper_bounds"],
+            count_upper_bounds=bounds["count_upper_bounds"],
+        )
+    except (TypeError, ValueError) as error:
+        raise _E(f"tables.buckets: {error}") from error
+    groups = frozenset(GROUPS)
+    r_f = expect_object(raw["r_f"], groups, _E, "tables.r_f")
+    tenpai = expect_object(raw["tenpai"], groups, _E, "tables.tenpai")
+    sides = {}
+    for group in GROUPS:
+        context = f"tables.tenpai.{group}"
+        side = expect_object(
+            tenpai[group], frozenset({"q_ron", "q_tsumo", "r_t"}), _E, context
+        )
+        sides[group] = TenpaiSideTable(
+            q_ron=_table(side["q_ron"], _Q_KEY, f"{context}.q_ron", probability=True),
+            q_tsumo=_table(
+                side["q_tsumo"], _Q_KEY, f"{context}.q_tsumo", probability=True
+            ),
+            r_t=_table(side["r_t"], _TENPAI_KEY, f"{context}.r_t"),
+        )
+    return PushFoldTables(
+        buckets=buckets,
+        loss=_table(raw["loss"], re.compile(f"{DEALER}|{NON_DEALER}"), "tables.loss"),
+        tenpai=sides,
+        r_f={
+            group: _table(r_f[group], _WALL_KEY, f"tables.r_f.{group}")
+            for group in GROUPS
+        },
+        uplift=_table(
+            raw["uplift"], re.compile("|".join(_WIN_METHODS)), "tables.uplift"
+        ),
+    )
+
+
+def load_tables(
+    path: Path, *, expected_sha256: str = SELECTED_TABLES_SHA256
+) -> PushFoldTables:
+    """表のfileを読む。fileのSHA-256・canonical形式・identity・schema・形が違えば拒否する。"""
+    content = Path(path).read_bytes()
+    actual = hashlib.sha256(content).hexdigest()
+    if actual != expected_sha256:
+        raise _E(f"tables SHA-256 {actual} differs from the expected {expected_sha256}")
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise _E(f"tables file is not UTF-8: {error}") from error
+    document = parse_json_text(text, _E, "tables file")
+    if text != canonical_json_text(document):
+        raise _E("tables file is not canonical JSON")
+    body = expect_object(
+        unseal(document, _E, "tables file"),
+        frozenset({"schema", "minimum_support", "source", "tables"}),
+        _E,
+        "tables file",
+    )
+    if body["schema"] != TABLES_SCHEMA:
+        raise _E("tables file has an unsupported schema")
+    return tables_from_value(body["tables"])
+
+
 def gate_group(kind: GateKind) -> str:
     return RIICHI_GROUP if kind is GateKind.RIICHI else DISCARD_GROUP
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateValue:
+    """1候補の`V`の内訳。`value = −p · deal_in_loss + (1 − p) · continuation`。
+
+    `deal_in_loss`は`L`に本場分を足した支出、`continuation`は`C(a)`である。
+    """
+
+    ron_legal_probability: float
+    deal_in_loss: float
+    continuation: float
+    value: float
 
 
 def comparison_values(
     policy_input: PolicyInput, gate: TenpaiGate, tables: PushFoldTables
 ) -> tuple[float, float] | None:
-    """`(V(押す), V(降りる))`を返す。必要なbucketが表になければ`None`（ゲート条件8）。
+    """`(V(押す), V(降りる))`を返す。必要なbucketが表になければ`None`（ゲート条件8）。"""
+    breakdown = comparison_breakdown(policy_input, gate, tables)
+    if breakdown is None:
+        return None
+    return breakdown[0].value, breakdown[1].value
+
+
+def comparison_breakdown(
+    policy_input: PolicyInput, gate: TenpaiGate, tables: PushFoldTables
+) -> tuple[CandidateValue, CandidateValue] | None:
+    """（押す側、降りる側）の`V`の内訳を返す。必要なbucketが表になければ`None`（ゲート条件8）。
 
     (A)の押す側は`gate.push_wait`（リーチ役を含む裏ドラ除外モード）に上乗せ`U`を足す。
     自分のリーチ棒は`G`に入れない。降りる側は、(B)(C)で`a_fold`が聴牌を保つ場合だけ
@@ -146,9 +291,14 @@ def comparison_values(
     if loss is None or push is None or fold is None:
         return None
 
-    def value(ron_legal_raw: int, continuation: float) -> float:
+    def value(ron_legal_raw: int, continuation: float) -> CandidateValue:
         p = raw_to_semantic(ron_legal_raw)
-        return -p * (loss + honba) + (1 - p) * continuation
+        return CandidateValue(
+            ron_legal_probability=p,
+            deal_in_loss=loss + honba,
+            continuation=continuation,
+            value=-p * (loss + honba) + (1 - p) * continuation,
+        )
 
     return (
         value(gate.push_ron_legal_raw, push),
@@ -186,9 +336,16 @@ __all__ = [
     "GROUPS",
     "NON_DEALER",
     "RIICHI_GROUP",
+    "SELECTED_TABLES_SHA256",
+    "TABLES_SCHEMA",
     "BucketSpec",
+    "CandidateValue",
     "PushFoldTables",
+    "TenpaiPushFoldTablesError",
     "TenpaiSideTable",
+    "comparison_breakdown",
     "comparison_values",
     "gate_group",
+    "load_tables",
+    "tables_from_value",
 ]
