@@ -402,8 +402,10 @@ MJAI表現では`reach`の直後の、そのseatの`dahai`が宣言牌である�
 `lisjong.learning._typed_values`のsource record wire shape（v1）はこの値を持たない。
 **値を持つ`PolicyInput`のv1保存は拒否する。** 値を落とした記録を黙って作らない。
 全seatで値が`None`の入力は従来どおり保存でき、既存v1の読み込みとbyte列は変わらない。
-この値を保持する保存形式は、Adapterからの供給開始に合わせて新しいschema versionとして
-追加する。
+この値を保持する保存形式は、`policy_input_to_value_v2()` / `parse_policy_input_v2()`
+（Issue #305）である。v1の全fieldに加え、各playerの`riichi_declaration_discard_order`を
+必ず持つ。v1とv2は互いの値を読まない。個々のsource schemaをv2へ移すときは、その
+sourceのschema versionを上げる。
 
 `ippatsu_active`等の拡張は引き続き未確定である。
 
