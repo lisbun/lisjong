@@ -16,6 +16,14 @@ round tripすることを要求する（`source_record.py`）。将来source sch
 shapeが変わる場合は、schema versionごとのcodecとして分岐させ、既存versionの
 意味を書き換えない。
 
+このwire shape（v1）は`PlayerPublicState.riichi_declaration_discard_order`
+（Issue #301）を持たない。**値を持つ`PolicyInput`の射影は拒否する。** 値を落として
+保存すると、読み戻した入力から導く確定安全牌の集合が元の入力と変わりうるためである。
+全seatで値が`None`の入力は従来どおり射影し、既存v1のbyte列と読み込みは変えない。
+この値を保持するsourceは、新しいschema versionのcodecとして追加する。値を落とした
+v1への変換が必要な場合は、用途を限定した明示的な変換として別に用意し、この射影の
+既定の動作にはしない。
+
 `vocabulary_fingerprint()`は、この射影を使ってfixed-size action vocabulary
 全indexのcanonical descriptionをdigestする。index layout、block順序、field
 encodingのいずれが変わってもfingerprintが変わるため、dataset / model artifact
@@ -253,9 +261,19 @@ def policy_input_to_value(
     `PolicyInput`自体が当該seatの観測可能範囲しか持たないため、この射影は
     privileged情報を追加しない。逆にfieldを落とすこともせず、round trip
     可能な全semantic fieldだけを含める。
+
+    このwire shape（v1）は`PlayerPublicState.riichi_declaration_discard_order`を
+    持たない。いずれかのseatがこの値を持つ入力は、値を落とさず`error`で拒否する
+    （module docstring参照）。
     """
     if not isinstance(policy_input, PolicyInput):
         raise error(f"{context} must be a PolicyInput")
+    for seat, player in enumerate(policy_input.players):
+        if player.riichi_declaration_discard_order is not None:
+            raise error(
+                f"{context}.players[{seat}].riichi_declaration_discard_order cannot be "
+                "stored in this wire shape"
+            )
     round_state = policy_input.round
     return {
         "own_hand": {
