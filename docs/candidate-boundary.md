@@ -29,6 +29,7 @@ assert imports.passed and purity.passed
 | `import-not-allowlisted` | 直接importできるのは、許可した標準library（`dataclasses`・`typing`・`math`・`collections`等）、`lisjong.policy_contract`・`lisjong.policies`・`lisjong.belief`・`lisjong.hand_evaluation`・`lisjong.structural_efficiency`・`lisjong.action_vocabulary`、候補package自身の配下だけ。`sys`・`inspect`・`gc`・`importlib`・`os`等は含めない |
 | `forbidden-import` | `lisjong_arena`・`lisjong_engine`・`riichienv`、`lisjong.learning`、training-only truth（`lisjong.belief.exact_wait_ground_truth`・`riichi_ron_label`・`ron_legal_ground_truth`） |
 | `forbidden-origin` | `from M import name`や`m.name`で取り込んだobjectの定義元が上の禁止module。`lisjong.belief`からのre-export等を拒否する |
+| `unresolved-import` | `from M import name`の`name`がallowlist上のmoduleに存在しない |
 | `star-import` | `from M import *`（取り込む名前を検査できない） |
 | `forbidden-builtin` | `getattr`・`eval`・`exec`・`__import__`・`globals`・`vars`・`open`等 |
 | `forbidden-attribute` | `_getframe`・`f_back`・`f_globals`等のframe参照と、`__globals__`・`__dict__`・`__subclasses__`等のobject graph走査 |

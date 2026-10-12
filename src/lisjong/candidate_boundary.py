@@ -277,7 +277,11 @@ class _ImportChecker(ast.NodeVisitor):
                 continue
             if module in ALLOWED_STDLIB_MODULES:
                 continue
-            value = _imported_value(module, alias.name)
+            try:
+                value = _imported_value(module, alias.name)
+            except ImportError:
+                self._add(node, "unresolved-import", f"{module}.{alias.name}")
+                continue
             origin = _origin(value)
             if origin is not None and _is_forbidden_origin(origin):
                 self._add(

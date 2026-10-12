@@ -88,6 +88,12 @@ class ImportBoundaryTests(unittest.TestCase):
         (runtime,) = [v for v in report.violations if v.rule == "runtime-import"]
         self.assertIn("lisjong_engine", runtime.detail)
 
+    def test_unresolved_name_is_reported_not_raised(self) -> None:
+        report = check_candidate_imports(f"{_FIXTURES}.unresolved_name")
+
+        self.assertFalse(report.passed)
+        self.assertIn("unresolved-import", _rules(report.violations))
+
     def test_module_without_python_source_fails_closed(self) -> None:
         with self.assertRaises(ValueError):
             check_candidate_imports(f"{_FIXTURES}.does_not_exist")
