@@ -93,42 +93,76 @@ class RiichiDeclarationDiscardOrderTest(unittest.TestCase):
 
 
 class SourceRecordWireShapeTest(unittest.TestCase):
-    """v1のwire shapeは値を持たない。既存versionのbyte列を変えない。"""
+    """v1のwire shapeは値を持たない。値を持つ入力は落とさずに拒否する。"""
 
-    def _inputs(self):
+    def _inputs(self, riichi=RiichiState.ACCEPTED):
         policy_input = fixture_policy_input()
         seat = (int(policy_input.self_seat) + 1) % 4
         players = list(policy_input.players)
         discard = Discard(tile=MANZU_4, tsumogiri=False, order=0, called_by=None)
-        base = replace(players[seat], discards=(discard,), riichi=RiichiState.ACCEPTED)
+        base = replace(players[seat], discards=(discard,), riichi=riichi)
         players[seat] = base
         without = replace(policy_input, players=tuple(players))
         players[seat] = replace(base, riichi_declaration_discard_order=0)
         return without, replace(policy_input, players=tuple(players)), seat
 
-    def test_projection_is_unchanged_by_the_value(self) -> None:
-        without, with_order, seat = self._inputs()
+    def test_input_with_a_declaration_order_is_rejected(self) -> None:
+        for riichi in (RiichiState.DECLARED, RiichiState.ACCEPTED):
+            with self.subTest(riichi=riichi):
+                _without, with_order, seat = self._inputs(riichi)
+                with self.assertRaises(_ValueError) as raised:
+                    policy_input_to_value(with_order, _ValueError, "input")
+                self.assertIn(
+                    f"input.players[{seat}].riichi_declaration_discard_order",
+                    str(raised.exception),
+                )
 
-        projected = policy_input_to_value(with_order, _ValueError, "input")
-
-        self.assertEqual(
-            projected, policy_input_to_value(without, _ValueError, "input")
+    def test_own_seat_declaration_order_is_rejected_too(self) -> None:
+        policy_input = fixture_policy_input()
+        seat = int(policy_input.self_seat)
+        players = list(policy_input.players)
+        discard = Discard(tile=MANZU_4, tsumogiri=False, order=0, called_by=None)
+        players[seat] = replace(
+            players[seat],
+            discards=(discard,),
+            riichi=RiichiState.DECLARED,
+            riichi_declaration_discard_order=0,
         )
+        with self.assertRaises(_ValueError):
+            policy_input_to_value(
+                replace(policy_input, players=tuple(players)), _ValueError, "input"
+            )
+
+    def test_input_without_any_declaration_order_keeps_the_v1_projection(self) -> None:
+        # ACCEPTEDで値がNone（古い記録と同じ形）は、従来どおり保存できる。
+        without, _with_order, seat = self._inputs()
+
+        projected = policy_input_to_value(without, _ValueError, "input")
+
         self.assertEqual(
             set(projected["players"][seat]), {"discards", "melds", "riichi", "score"}
         )
+        self.assertEqual(projected["players"][seat]["riichi"], "accepted")
+        for player in projected["players"]:
+            self.assertNotIn("riichi_declaration_discard_order", player)
 
-    def test_parsed_policy_input_has_no_declaration_order(self) -> None:
-        without, with_order, seat = self._inputs()
+    def test_existing_v1_value_round_trips_unchanged(self) -> None:
+        without, _with_order, seat = self._inputs()
+        projected = policy_input_to_value(without, _ValueError, "input")
 
-        parsed = parse_policy_input(
-            policy_input_to_value(with_order, _ValueError, "input"),
-            _ValueError,
-            "input",
-        )
+        parsed = parse_policy_input(projected, _ValueError, "input")
 
-        self.assertIsNone(parsed.players[seat].riichi_declaration_discard_order)
         self.assertEqual(parsed, without)
+        self.assertIsNone(parsed.players[seat].riichi_declaration_discard_order)
+        self.assertEqual(policy_input_to_value(parsed, _ValueError, "input"), projected)
+
+    def test_v1_reader_rejects_a_value_carrying_the_new_field(self) -> None:
+        without, _with_order, seat = self._inputs()
+        projected = policy_input_to_value(without, _ValueError, "input")
+        projected["players"][seat]["riichi_declaration_discard_order"] = 0
+
+        with self.assertRaises(_ValueError):
+            parse_policy_input(projected, _ValueError, "input")
 
 
 if __name__ == "__main__":
