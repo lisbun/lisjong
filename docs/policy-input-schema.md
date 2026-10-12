@@ -75,7 +75,8 @@ PolicyInput
 │   │   ├── from_seat
 │   │   └── called_tile
 │   │
-│   └── riichi
+│   ├── riichi
+│   └── riichi_declaration_discard_order
 │
 └── own_hand
     ├── concealed_tiles
@@ -208,7 +209,8 @@ PlayerPublicState
 ├── score
 ├── discards
 ├── melds
-└── riichi
+├── riichi
+└── riichi_declaration_discard_order
 ```
 
 他家のconcealed handを保持するfieldは設けない。
@@ -362,12 +364,45 @@ Observationを確認した。
 
 ### リーチ宣言牌位置
 
-`riichi_sutehais`は追加実測で更新を確認できなかったため、取得元として依存しない。
-初期`RiichiState`へ`declaration_discard_order`をrequired fieldとして追加しない。
+リーチ宣言牌の位置は、`RiichiState`ではなく`PlayerPublicState`の
+`riichi_declaration_discard_order: int | None`で表す（Issue #301、設計は
+[riichi-passed-tile-genbutsu-design.md](riichi-passed-tile-genbutsu-design.md) 3.4節）。
 
-将来`ippatsu_active`等を追加する場合は、リーチ宣言牌位置または
-`declaration_discard_order`相当が必要になる可能性がある。これは後続拡張へ
-引き継ぐ既知依存である。
+- 値は、そのseatのリーチ宣言牌の`Discard.order`である。**局内の打牌の通し番号を
+  参照する値であり、そのseatの何打目かではない。**
+- 公開情報である。リーチ宣言と宣言牌は全seatに見える。hidden informationを増やさない。
+- 既定値は`None`である。
+
+`riichi`と値の組合せは次のとおり。
+
+| `riichi` | 値 | 扱い |
+| --- | --- | --- |
+| `NONE` | `None` | 正常 |
+| `NONE` | あり | 構築時に拒否する |
+| `DECLARED` | `None` | 正常。宣言牌をまだ切っていない |
+| `DECLARED` | あり | 正常。宣言牌を切った直後で、成立前 |
+| `ACCEPTED` | あり | 正常 |
+| `ACCEPTED` | `None` | 値としては表現できる。古い記録の明示的な互換読み込みでだけ生じてよい |
+
+`PlayerPublicState`は構築時に次を例外で拒否し、値を捨てたり補正したりしない。
+
+- `riichi`が`NONE`なのに値がある
+- 値があるのに、その`order`を持つ打牌がそのseatの`discards`にない
+
+次は`PlayerPublicState`では検証しない。Adapterの整合検証の責務とする。
+
+- 宣言牌より後のそのseatの打牌が、すべてツモ切りであること（採用規則と外部表現に依存する）
+- 対応済みのAdapterが、`ACCEPTED`のseatの値を必ず供給すること。供給できない場合は
+  停止し、`None`を出して互換処理へ流さない
+- seatをまたぐ`order`の一意性
+
+`riichi_sutehais`は追加実測で更新を確認できなかったため、取得元として依存しない。
+MJAI表現では`reach`の直後の、そのseatの`dahai`が宣言牌である。
+
+`lisjong.learning._typed_values`のsource record wire shape（v1）はこの値を持たない。
+この値が必要なsourceは、新しいschema versionとして追加する。
+
+`ippatsu_active`等の拡張は引き続き未確定である。
 
 ## OwnHandState
 
@@ -644,7 +679,6 @@ Adapter等の後続実装では、少なくとも次を確認する。
 
 次は後続設計または実装で確定する。
 
-- 将来`ippatsu_active`等を追加する場合のリーチ宣言牌位置の表現
 - `live_wall_tiles_remaining`を実際のRiichiLabオンライン経路、3人麻雀でも
   同一algorithmで再構成できるか(RiichiEnv Adapter側は#28で確定済み)
 - materialized stateと`legal_actions`の同期を機械的に検証する方法

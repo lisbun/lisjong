@@ -16,6 +16,11 @@ round tripすることを要求する（`source_record.py`）。将来source sch
 shapeが変わる場合は、schema versionごとのcodecとして分岐させ、既存versionの
 意味を書き換えない。
 
+このwire shapeは`PlayerPublicState.riichi_declaration_discard_order`（Issue #301）を
+持たない。射影はこの値を書き出さず、parseした`PolicyInput`では`None`になる。
+既存versionのbyte列を変えないための意図的な範囲であり、この値が必要なsourceは
+新しいschema versionのcodecとして追加する。
+
 `vocabulary_fingerprint()`は、この射影を使ってfixed-size action vocabulary
 全indexのcanonical descriptionをdigestする。index layout、block順序、field
 encodingのいずれが変わってもfingerprintが変わるため、dataset / model artifact
@@ -251,8 +256,10 @@ def policy_input_to_value(
     """player-safe PolicyInputをcanonical JSON objectへ射影する。
 
     `PolicyInput`自体が当該seatの観測可能範囲しか持たないため、この射影は
-    privileged情報を追加しない。逆にfieldを落とすこともせず、round trip
-    可能な全semantic fieldだけを含める。
+    privileged情報を追加しない。このwire shapeが持つsemantic fieldはすべて含める。
+
+    例外は`PlayerPublicState.riichi_declaration_discard_order`で、このwire shape
+    （v1）は持たないため書き出さない（module docstring参照）。
     """
     if not isinstance(policy_input, PolicyInput):
         raise error(f"{context} must be a PolicyInput")

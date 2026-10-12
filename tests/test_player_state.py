@@ -148,7 +148,16 @@ class PlayerPublicStateTest(unittest.TestCase):
 
     def test_has_no_hidden_or_owner_fields(self) -> None:
         field_names = {field.name for field in fields(PlayerPublicState)}
-        self.assertEqual(field_names, {"score", "discards", "melds", "riichi"})
+        self.assertEqual(
+            field_names,
+            {
+                "score",
+                "discards",
+                "melds",
+                "riichi",
+                "riichi_declaration_discard_order",
+            },
+        )
         for forbidden in (
             "seat",
             "concealed_tiles",
