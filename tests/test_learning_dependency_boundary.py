@@ -59,6 +59,7 @@ _CORE_MODULES = (
     "lisjong",
     "lisjong.action_vocabulary",
     "lisjong.belief",
+    "lisjong.candidate_boundary",
     "lisjong.hand_evaluation",
     "lisjong.policies",
     "lisjong.policy_contract",
