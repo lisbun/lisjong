@@ -153,18 +153,26 @@ class DefenseFilterEvaluation:
 def _evaluate_defense_filter(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
+    *,
+    genbutsu_tile_types: frozenset[TileType] | None = None,
 ) -> DefenseFilterEvaluation:
     """Push/Fold・Safety semanticsのsingle-source typed評価。
 
     production `_defense_eligible_actions()`とIssue #172診断seamの両方が
     このhelperからeligible setとbranch classificationを得る。filtering logicは
     ここに1回だけ実装する。
+
+    `genbutsu_tile_types`が`None`ならChampionと同じく全リーチ者の共通現物を使う。
+    Issue #312の候補だけが、確定安全牌の集合を明示的に渡す。
     """
     if _decide_push_fold(policy_input, discard_actions) is _PushFoldDecision.PUSH:
         return DefenseFilterEvaluation(DefenseFilterBranch.PUSH, discard_actions)
 
-    riichi_players = _opponent_riichi_players(policy_input)
-    common_tile_types = _common_genbutsu_tile_types(riichi_players)
+    common_tile_types = genbutsu_tile_types
+    if common_tile_types is None:
+        common_tile_types = _common_genbutsu_tile_types(
+            _opponent_riichi_players(policy_input)
+        )
     genbutsu_actions = tuple(
         action
         for action in discard_actions
@@ -182,13 +190,17 @@ def _evaluate_defense_filter(
 def _defense_eligible_actions(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
+    *,
+    genbutsu_tile_types: frozenset[TileType] | None = None,
 ) -> tuple[DiscardAction, ...]:
     """Push/Fold・Safetyの2段decisionでFiniteHorizonのeligible setを返す。
 
     PUSHでは全legal discardをそのまま返す。FOLDではCOMMON_GENBUTSUの候補だけへ
     絞り、1件もなければ既存Combinedと同じく全legal discardへfallbackする。
     """
-    return _evaluate_defense_filter(policy_input, discard_actions).eligible_actions
+    return _evaluate_defense_filter(
+        policy_input, discard_actions, genbutsu_tile_types=genbutsu_tile_types
+    ).eligible_actions
 
 
 def _hand_value_aware_fallback(
@@ -205,9 +217,13 @@ def _hand_value_aware_fallback(
 def _evaluate_and_choose_discard(
     policy_input: PolicyInput,
     discard_actions: tuple[DiscardAction, ...],
+    *,
+    genbutsu_tile_types: frozenset[TileType] | None = None,
 ) -> DiscardAction:
     """Issue #143の4-stage compositionを1回のselection pathで実行する。"""
-    eligible_actions = _defense_eligible_actions(policy_input, discard_actions)
+    eligible_actions = _defense_eligible_actions(
+        policy_input, discard_actions, genbutsu_tile_types=genbutsu_tile_types
+    )
 
     remaining_counts = _root_remaining_counts(policy_input)
     hidden_tile_count = sum(remaining_counts)

@@ -15,7 +15,9 @@ for player in safe_tiles.by_riichi_player:  # リーチ者ごと（席の順）
 safe_tiles.safe_against_all_riichi_players  # すべてのリーチ者にロンされない牌種
 ```
 
-この関数を使うPolicyはまだない。現Championの行動は変わらない。
+この関数を使うのは、未昇格の候補 `PassedTileGenbutsuPlacementAwareSpeedCallPolicy`
+（[passed-tile-genbutsu-candidate.md](passed-tile-genbutsu-candidate.md)）だけである。
+現Championの行動は変わらない。
 
 ## 意味
 
