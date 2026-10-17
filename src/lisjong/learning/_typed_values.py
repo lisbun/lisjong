@@ -613,3 +613,16 @@ def vocabulary_fingerprint() -> str:
         "size": ACTION_VOCABULARY_SIZE,
     }
     return value_digest(description)
+
+
+def policy_input_codec(wire_version: int):
+    """`PolicyInput`の保存形式のversionに対応する(parse, 射影)の組を返す。
+
+    1は宣言牌の位置を持たないv1（値を持つ入力を拒否する）、2はv2（#305）。
+    派生sourceが自分のschema versionごとに形式を明示的に選ぶために使う。
+    """
+    if wire_version == 1:
+        return parse_policy_input, policy_input_to_value
+    if wire_version == 2:
+        return parse_policy_input_v2, policy_input_to_value_v2
+    raise ValueError(f"unsupported PolicyInput wire version: {wire_version!r}")

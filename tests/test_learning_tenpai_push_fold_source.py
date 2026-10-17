@@ -30,6 +30,8 @@ from lisjong.learning.tenpai_push_fold_evaluation import (
     valid_report,
 )
 from lisjong.learning.tenpai_push_fold_source import (
+    DECISION_SCHEMA,
+    DECISION_SCHEMA_V2,
     DECISIONS_FILENAME,
     FOLD,
     MANIFEST_FILENAME,
@@ -96,7 +98,7 @@ def _outcome(record, side, round_delta=0, **changes) -> RoundOutcome:
     return replace(outcome, **changes)
 
 
-def _default_source():
+def _default_records():
     """seed 1（train）に(B)と(A)、seed 2（valid）に降りる候補のない(B)。"""
     first = _record(1, 10, 0)
     second = _record(1, 30, 1, riichi=True)
@@ -116,9 +118,27 @@ def _default_source():
         _outcome(second, FOLD, 0),
         _outcome(third, PUSH, 1500, exhaustive_draw_tenpai=True),
     ]
+    return decisions, outcomes
+
+
+def _default_source(schema=DECISION_SCHEMA, *, declared=False):
+    decisions, outcomes = _default_records()
+    if declared:
+        decisions = [_declared(record) for record in decisions]
     return (
-        [decision_to_value(record) for record in decisions],
+        [decision_to_value(record, schema=schema) for record in decisions],
         [outcome_to_value(outcome) for outcome in outcomes],
+    )
+
+
+def _declared(record):
+    """リーチ者（players[1]）に、最初の捨て牌を宣言牌とする位置を持たせる。"""
+    players = list(record.policy_input.players)
+    players[1] = replace(
+        players[1], riichi_declaration_discard_order=players[1].discards[0].order
+    )
+    return replace(
+        record, policy_input=replace(record.policy_input, players=tuple(players))
     )
 
 
@@ -559,6 +579,70 @@ class GateFromRecordAndCountTest(unittest.TestCase):
         self.assertEqual(set(result["by_kind"]), {"closed_discard", "open_discard"})
         self.assertEqual(set(result["by_kind"]["closed_discard"]), {"yaku"})
         self.assertEqual(set(result["by_kind"]["open_discard"]), {"no_yaku"})
+
+
+class DecisionSchemaV2Test(unittest.TestCase):
+    """#309: 宣言牌の位置を保存できるv2と、既存のv1の扱い。"""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+
+    def test_v2_keeps_the_declaration_order_through_save_and_read(self):
+        records, _outcomes = _default_records()
+        expected = tuple(_declared(record) for record in records)
+        _write(self.root, *_default_source(DECISION_SCHEMA_V2, declared=True))
+        _, decisions = read_decisions(self.root)
+        self.assertEqual(decisions, expected)
+        for record in decisions:
+            self.assertEqual(
+                record.policy_input.players[1].riichi_declaration_discard_order,
+                record.policy_input.players[1].discards[0].order,
+            )
+        _, pairs = read_source(self.root)
+        self.assertEqual(tuple(pair.decision for pair in pairs), expected)
+
+    def test_v1_output_is_unchanged_and_rejects_the_declaration_order(self):
+        record = _default_records()[0][0]
+        value = decision_to_value(record)
+        self.assertEqual(value, decision_to_value(record, schema=DECISION_SCHEMA))
+        self.assertEqual(value["schema"], DECISION_SCHEMA)
+        for player in value["policy_input"]["players"]:
+            self.assertNotIn("riichi_declaration_discard_order", player)
+        with self.assertRaises(TenpaiPushFoldSourceError):
+            decision_to_value(_declared(record))
+
+    def test_the_writer_never_switches_schema_by_value(self):
+        record = _default_records()[0][0]
+        self.assertEqual(
+            decision_to_value(record, schema=DECISION_SCHEMA_V2)["schema"],
+            DECISION_SCHEMA_V2,
+        )
+        with self.assertRaises(TenpaiPushFoldSourceError):
+            decision_to_value(
+                record, schema="lisjong-tenpai-push-fold-decision-record-v3"
+            )
+
+    def test_v1_and_v2_reject_each_other(self):
+        for written, relabelled in (
+            (DECISION_SCHEMA, DECISION_SCHEMA_V2),
+            (DECISION_SCHEMA_V2, DECISION_SCHEMA),
+        ):
+            with self.subTest(written=written):
+                decisions, outcomes = _default_source(written)
+                for row in decisions:
+                    row["schema"] = relabelled
+                _write(self.root, decisions, outcomes)
+                with self.assertRaisesRegex(TenpaiPushFoldSourceError, "fields"):
+                    read_decisions(self.root)
+
+    def test_a_file_must_not_mix_schemas(self):
+        v1_rows, outcomes = _default_source()
+        v2_rows, _ = _default_source(DECISION_SCHEMA_V2)
+        _write(self.root, [v1_rows[0], v2_rows[1], v1_rows[2]], outcomes)
+        with self.assertRaisesRegex(TenpaiPushFoldSourceError, "mixes record schemas"):
+            read_decisions(self.root)
 
 
 if __name__ == "__main__":

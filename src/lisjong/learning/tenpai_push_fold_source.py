@@ -42,8 +42,7 @@ from lisjong.learning._typed_values import (
     _parse_seat,
     action_to_value,
     parse_action,
-    parse_policy_input,
-    policy_input_to_value,
+    policy_input_codec,
 )
 from lisjong.learning.riichi_wait_mawashi_policy import SELECTED_WAIT_MODEL_SHA256
 from lisjong.learning.ron_legal_estimator import in_riichi_scope
@@ -56,6 +55,10 @@ from lisjong.policy_contract.seat import Seat
 
 MANIFEST_SCHEMA = "lisjong-tenpai-push-fold-source-manifest-v1"
 DECISION_SCHEMA = "lisjong-tenpai-push-fold-decision-record-v1"
+DECISION_SCHEMA_V2 = "lisjong-tenpai-push-fold-decision-record-v2"
+"""判断記録のv2。`policy_input`を保存形式v2（各playerに
+`riichi_declaration_discard_order`を持つ、#305）で表す。他のfieldはv1と同じ（#309）。"""
+_DECISION_WIRE_VERSIONS = {DECISION_SCHEMA: 1, DECISION_SCHEMA_V2: 2}
 OUTCOME_SCHEMA = "lisjong-tenpai-push-fold-outcome-record-v1"
 
 MANIFEST_FILENAME = "manifest.json"
@@ -210,7 +213,16 @@ def _key_to_value(key: GateDecisionKey) -> dict[str, int]:
     return {"seat": key.seat, "seed": key.seed, "sequence": key.sequence}
 
 
-def decision_to_value(record: GateDecisionRecord) -> dict[str, object]:
+def decision_to_value(
+    record: GateDecisionRecord, *, schema: str = DECISION_SCHEMA
+) -> dict[str, object]:
+    """判断記録の射影。`schema`は呼び出し側が明示的に選ぶ（既定はv1）。
+
+    v1は宣言牌の位置を持つ入力を拒否する。入力の値の有無で形式を切り替えない。
+    """
+    if schema not in _DECISION_WIRE_VERSIONS:
+        raise _E(f"unsupported decision schema: {schema!r}")
+    _parse_input, to_value = policy_input_codec(_DECISION_WIRE_VERSIONS[schema])
     return {
         "c0_action": action_to_value(record.c0_action, _E, "c0_action"),
         "fold_action": action_to_value(record.fold_action, _E, "fold_action"),
@@ -222,11 +234,11 @@ def decision_to_value(record: GateDecisionRecord) -> dict[str, object]:
             for index, action in enumerate(record.legal_actions)
         ],
         "ordinal": record.ordinal,
-        "policy_input": policy_input_to_value(record.policy_input, _E, "input"),
+        "policy_input": to_value(record.policy_input, _E, "input"),
         "push_action": action_to_value(record.push_action, _E, "push_action"),
         "push_ron_legal_raw": record.push_ron_legal_raw,
         "riichi_seat": int(record.riichi_seat),
-        "schema": DECISION_SCHEMA,
+        "schema": schema,
     }
 
 
@@ -313,17 +325,25 @@ def _parse_ron_legal_raw(value: object, context: str) -> int:
     return raw
 
 
+def _one_schema(lines: list[tuple[int, object]], filename: str) -> None:
+    """1 fileの全行が同じschemaであることを確かめる（各行の検証後に呼ぶ）。"""
+    if len({value["schema"] for _number, value in lines}) > 1:
+        raise _E(f"{filename} mixes record schemas")
+
+
 def _parse_decision(value: object, context: str) -> GateDecisionRecord:
     raw = expect_object(value, _DECISION_FIELDS, _E, context)
-    if raw["schema"] != DECISION_SCHEMA:
+    schema = raw["schema"]
+    if not isinstance(schema, str) or schema not in _DECISION_WIRE_VERSIONS:
         raise _E(f"{context} has an unsupported schema")
+    parse_input, _to_value = policy_input_codec(_DECISION_WIRE_VERSIONS[schema])
     c0_action = parse_action(raw["c0_action"], _E, f"{context}.c0_action")
     if not isinstance(c0_action, (RiichiAction, DiscardAction)):
         raise _E(f"{context}.c0_action must be a riichi declaration or a discard")
     record = GateDecisionRecord(
         key=_parse_key(raw["key"], f"{context}.key"),
         ordinal=expect_non_negative_int(raw["ordinal"], _E, f"{context}.ordinal"),
-        policy_input=parse_policy_input(raw["policy_input"], _E, f"{context}.input"),
+        policy_input=parse_input(raw["policy_input"], _E, f"{context}.input"),
         legal_actions=tuple(
             parse_action(item, _E, f"{context}.legal_actions[{index}]")
             for index, item in enumerate(
@@ -342,7 +362,7 @@ def _parse_decision(value: object, context: str) -> GateDecisionRecord:
             raw["fold_ron_legal_raw"], f"{context}.fold_ron_legal_raw"
         ),
     )
-    if decision_to_value(record) != value:
+    if decision_to_value(record, schema=schema) != value:
         raise _E(f"{context} does not round-trip through the canonical projection")
     _check_decision(record, context)
     return record
@@ -491,10 +511,9 @@ def _read_file(root: Path, filename: str, entry: dict[str, object], parse) -> tu
     digest = file_digest(root / filename)
     if digest != {"bytes": entry["bytes"], "sha256": entry["sha256"]}:
         raise _E(f"{filename} does not match the manifest digest")
-    rows = tuple(
-        parse(value, f"{filename}:{number}")
-        for number, value in _read_lines(root / filename)
-    )
+    lines = _read_lines(root / filename)
+    rows = tuple(parse(value, f"{filename}:{number}") for number, value in lines)
+    _one_schema(lines, filename)
     if len(rows) != entry["rows"]:
         raise _E(f"{filename} row count does not match the manifest")
     return rows
@@ -583,6 +602,7 @@ def read_source(
 
 __all__ = [
     "DECISION_SCHEMA",
+    "DECISION_SCHEMA_V2",
     "DECISIONS_FILENAME",
     "FOLD",
     "MANIFEST_FILENAME",

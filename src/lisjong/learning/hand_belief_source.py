@@ -58,9 +58,8 @@ from lisjong.learning._typed_values import (
     meld_to_value,
     parse_action,
     parse_meld,
-    parse_policy_input,
     parse_tiles,
-    policy_input_to_value,
+    policy_input_codec,
     tiles_to_value,
 )
 from lisjong.learning.riichi_deal_in_source import DecisionKey
@@ -71,6 +70,10 @@ from lisjong.policy_contract.tile import Tile, TileCategory, TileType
 
 MANIFEST_SCHEMA = "lisjong-hand-belief-source-manifest-v1"
 DECISION_SCHEMA = "lisjong-hand-belief-decision-record-v1"
+DECISION_SCHEMA_V2 = "lisjong-hand-belief-decision-record-v2"
+"""判断記録のv2。`policy_input`を保存形式v2（各playerに
+`riichi_declaration_discard_order`を持つ、#305）で表す。他のfieldはv1と同じ（#309）。"""
+_DECISION_WIRE_VERSIONS = {DECISION_SCHEMA: 1, DECISION_SCHEMA_V2: 2}
 HAND_FACT_SCHEMA = "lisjong-hand-belief-hand-fact-record-v1"
 SCOPE = "all-observer-discard-decisions.v1"
 
@@ -165,15 +168,24 @@ def _key_to_value(key: DecisionKey) -> dict[str, int]:
     return {"seat": key.seat, "seed": key.seed, "sequence": key.sequence}
 
 
-def decision_to_value(decision: HandBeliefDecision) -> dict[str, object]:
+def decision_to_value(
+    decision: HandBeliefDecision, *, schema: str = DECISION_SCHEMA
+) -> dict[str, object]:
+    """判断記録の射影。`schema`は呼び出し側が明示的に選ぶ（既定はv1）。
+
+    v1は宣言牌の位置を持つ入力を拒否する。入力の値の有無で形式を切り替えない。
+    """
+    if schema not in _DECISION_WIRE_VERSIONS:
+        raise _E(f"unsupported decision schema: {schema!r}")
+    _parse_input, to_value = policy_input_codec(_DECISION_WIRE_VERSIONS[schema])
     return {
         "key": _key_to_value(decision.key),
         "legal_actions": [
             action_to_value(action, _E, f"legal_actions[{index}]")
             for index, action in enumerate(decision.legal_actions)
         ],
-        "policy_input": policy_input_to_value(decision.policy_input, _E, "input"),
-        "schema": DECISION_SCHEMA,
+        "policy_input": to_value(decision.policy_input, _E, "input"),
+        "schema": schema,
         "selected_action": action_to_value(decision.selected_action, _E, "selected"),
     }
 
@@ -233,13 +245,21 @@ def _check_decision(decision: HandBeliefDecision, context: str) -> None:
         raise _E(f"{context} is outside the scope: no legal discard")
 
 
+def _one_schema(lines: list[tuple[int, object]], filename: str) -> None:
+    """1 fileの全行が同じschemaであることを確かめる（各行の検証後に呼ぶ）。"""
+    if len({value["schema"] for _number, value in lines}) > 1:
+        raise _E(f"{filename} mixes record schemas")
+
+
 def _parse_decision(value: object, context: str) -> HandBeliefDecision:
     raw = expect_object(value, _DECISION_FIELDS, _E, context)
-    if raw["schema"] != DECISION_SCHEMA:
+    schema = raw["schema"]
+    if not isinstance(schema, str) or schema not in _DECISION_WIRE_VERSIONS:
         raise _E(f"{context} has an unsupported schema")
+    parse_input, _to_value = policy_input_codec(_DECISION_WIRE_VERSIONS[schema])
     decision = HandBeliefDecision(
         key=_parse_key(raw["key"], f"{context}.key"),
-        policy_input=parse_policy_input(raw["policy_input"], _E, f"{context}.input"),
+        policy_input=parse_input(raw["policy_input"], _E, f"{context}.input"),
         legal_actions=tuple(
             parse_action(item, _E, f"{context}.legal_actions[{index}]")
             for index, item in enumerate(
@@ -248,7 +268,7 @@ def _parse_decision(value: object, context: str) -> HandBeliefDecision:
         ),
         selected_action=parse_action(raw["selected_action"], _E, f"{context}.selected"),
     )
-    if decision_to_value(decision) != value:
+    if decision_to_value(decision, schema=schema) != value:
         raise _E(f"{context} does not round-trip through the canonical projection")
     _check_decision(decision, context)
     return decision
@@ -357,10 +377,12 @@ def read_decisions(
     root = Path(directory)
     manifest = read_manifest(root)
     _check_file(root, DECISIONS_FILENAME, manifest.files["decisions"])
+    lines = _read_lines(root / DECISIONS_FILENAME)
     decisions = tuple(
         _parse_decision(value, f"{DECISIONS_FILENAME}:{number}")
-        for number, value in _read_lines(root / DECISIONS_FILENAME)
+        for number, value in lines
     )
+    _one_schema(lines, DECISIONS_FILENAME)
     if len(decisions) != manifest.files["decisions"]["rows"]:
         raise _E("decision row count does not match the manifest")
     _unique_by_key(decisions, "decision")
@@ -482,6 +504,7 @@ def manifest_text(
 
 __all__ = [
     "DECISION_SCHEMA",
+    "DECISION_SCHEMA_V2",
     "DECISIONS_FILENAME",
     "HAND_FACT_SCHEMA",
     "HAND_FACTS_FILENAME",

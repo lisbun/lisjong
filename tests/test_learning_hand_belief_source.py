@@ -7,6 +7,8 @@ from unittest import mock
 from lisjong.belief.canonical_axes import tile_type_from_index
 from lisjong.learning._canonical import canonical_json_line, file_digest
 from lisjong.learning.hand_belief_source import (
+    DECISION_SCHEMA,
+    DECISION_SCHEMA_V2,
     DECISIONS_FILENAME,
     HAND_FACTS_FILENAME,
     MANIFEST_FILENAME,
@@ -372,9 +374,9 @@ class JoinChecksTest(unittest.TestCase):
             write_and_read([outside], [make_facts(20, A_HANDS)])
 
 
-def write_source(root: Path, decisions, facts, *, splits=None):
+def write_source(root: Path, decisions, facts, *, splits=None, schema=DECISION_SCHEMA):
     lines = {
-        DECISIONS_FILENAME: [decision_to_value(d) for d in decisions],
+        DECISIONS_FILENAME: [decision_to_value(d, schema=schema) for d in decisions],
         HAND_FACTS_FILENAME: [hand_facts_to_value(f) for f in facts],
     }
     files = {}
@@ -455,7 +457,7 @@ class SourceFilesTest(unittest.TestCase):
         for filename, old, new in (
             (MANIFEST_FILENAME, "source-manifest-v1", "source-manifest-v2"),
             (MANIFEST_FILENAME, "decisions.v1", "decisions.v2"),
-            (DECISIONS_FILENAME, "decision-record-v1", "decision-record-v2"),
+            (DECISIONS_FILENAME, "decision-record-v1", "decision-record-v3"),
             (HAND_FACTS_FILENAME, "hand-fact-record-v1", "hand-fact-record-v2"),
         ):
             with self.subTest(filename=filename, new=new):
@@ -502,6 +504,105 @@ def _refresh_digests(root: Path) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def with_declaration(decision):
+    """ACCEPTEDのplayerに、最初の捨て牌を宣言牌とする位置を持たせる。"""
+    players = tuple(
+        replace(player, riichi_declaration_discard_order=player.discards[0].order)
+        if player.riichi is RiichiState.ACCEPTED
+        else player
+        for player in decision.policy_input.players
+    )
+    return replace(
+        decision, policy_input=replace(decision.policy_input, players=players)
+    )
+
+
+def declared_decisions():
+    decisions = [with_declaration(decision) for decision in all_decisions()]
+    assert any(
+        player.riichi_declaration_discard_order is not None
+        for decision in decisions
+        for player in decision.policy_input.players
+    )
+    return decisions
+
+
+class DecisionSchemaV2Test(unittest.TestCase):
+    """#309: 宣言牌の位置を保存できるv2と、既存のv1の扱い。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _rows(self):
+        text = (self.root / DECISIONS_FILENAME).read_text(encoding="utf-8")
+        return text.splitlines(keepends=True)
+
+    def test_v2_keeps_the_declaration_order_through_save_and_read(self):
+        decisions = declared_decisions()
+        write_source(self.root, decisions, all_facts(), schema=DECISION_SCHEMA_V2)
+        _, read = read_decisions(self.root)
+        self.assertEqual(list(read), decisions)
+        _, labelled = read_labelled_source(self.root)
+        self.assertEqual([item.decision for item in labelled], decisions)
+        self.assertTrue(
+            all(DECISION_SCHEMA_V2 in row for row in self._rows()), self._rows()
+        )
+
+    def test_v1_output_is_unchanged_and_rejects_the_declaration_order(self):
+        decision = all_decisions()[0]
+        self.assertEqual(
+            decision_to_value(decision),
+            decision_to_value(decision, schema=DECISION_SCHEMA),
+        )
+        self.assertEqual(decision_to_value(decision)["schema"], DECISION_SCHEMA)
+        for player in decision_to_value(decision)["policy_input"]["players"]:
+            self.assertNotIn("riichi_declaration_discard_order", player)
+        with self.assertRaises(HandBeliefSourceError):
+            decision_to_value(declared_decisions()[2])
+
+    def test_the_writer_never_switches_schema_by_value(self):
+        # 値を持たない入力でもv2を選べばv2、値を持つ入力でもv1を選べば拒否する。
+        decision = all_decisions()[0]
+        self.assertEqual(
+            decision_to_value(decision, schema=DECISION_SCHEMA_V2)["schema"],
+            DECISION_SCHEMA_V2,
+        )
+        with self.assertRaises(HandBeliefSourceError):
+            decision_to_value(decision, schema="lisjong-hand-belief-decision-record-v3")
+
+    def test_v1_and_v2_reject_each_other(self):
+        for written, relabelled in (
+            (DECISION_SCHEMA, DECISION_SCHEMA_V2),
+            (DECISION_SCHEMA_V2, DECISION_SCHEMA),
+        ):
+            with self.subTest(written=written):
+                write_source(self.root, all_decisions(), all_facts(), schema=written)
+                path = self.root / DECISIONS_FILENAME
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(written, relabelled),
+                    encoding="utf-8",
+                )
+                _refresh_digests(self.root)
+                with self.assertRaises(HandBeliefSourceError):
+                    read_decisions(self.root)
+
+    def test_a_file_must_not_mix_schemas(self):
+        write_source(self.root, all_decisions(), all_facts(), schema=DECISION_SCHEMA_V2)
+        v2_rows = self._rows()
+        write_source(self.root, all_decisions(), all_facts())
+        v1_rows = self._rows()
+        (self.root / DECISIONS_FILENAME).write_text(
+            "".join([v1_rows[0], v2_rows[1], v1_rows[2]]), encoding="utf-8"
+        )
+        _refresh_digests(self.root)
+        with self.assertRaisesRegex(HandBeliefSourceError, "mixes record schemas"):
+            read_decisions(self.root)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,8 @@ compact / LF、UTF-8）。producerは`manifest_text()`・`decision_to_value()`�
 同じshapeで書く。牌・行動・`PolicyInput`の値は`lisjong.learning._typed_values`のprojectionである。
 他家の手牌・山などの隠し情報は、どのfileにも入れない。
 
+判断記録のschemaは2つある（#309）。`lisjong-tenpai-push-fold-decision-record-v1`は宣言牌の位置を持たない従来の形式で、`PolicyInput`の保存形式v1を使い、各playerの`riichi_declaration_discard_order`が値を持つ入力を拒否する。`lisjong-tenpai-push-fold-decision-record-v2`は保存形式v2（#305）で各playerに`riichi_declaration_discard_order`を持つ。他のfieldは同じ。writerは`decision_to_value(..., schema=...)`で形式を明示的に選び（既定はv1）、入力の値の有無で切り替えない。readerは各行のschemaで読み分け、v1とv2は互いの行を読まない。1つのfileに2つのschemaを混在させるとエラーにする。既存のv1の出力・意味・拒否は変えない。
+
 ### manifest.json
 
 | field | 値 |
@@ -66,7 +68,7 @@ compact / LF、UTF-8）。producerは`manifest_text()`・`decision_to_value()`�
 
 | field | 値 |
 |---|---|
-| `schema` | `lisjong-tenpai-push-fold-decision-record-v1` |
+| `schema` | `lisjong-tenpai-push-fold-decision-record-v1`または`-v2` |
 | `key` | `seed`, `sequence`（半荘内の全席を通した判断の通し番号）, `seat`（判断者） |
 | `ordinal` | 半荘内のゲート判断の通し番号（0始まり、`sequence`順） |
 | `policy_input`, `legal_actions` | 判断者から見える入力と合法手。降りる側の`fold_target`はこの2つから作る |

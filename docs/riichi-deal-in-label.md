@@ -69,7 +69,7 @@ lisjongはArenaのmoduleをimportしない。
 | file | schema | 内容 | 読む経路 |
 |---|---|---|---|
 | `manifest.json` | `lisjong-riichi-deal-in-source-manifest-v1` | 対象範囲、producerのrevision、seedの分割、各fileのbytes・SHA-256・行数 | 両方 |
-| `decisions.jsonl` | `lisjong-riichi-deal-in-decision-record-v1` | player-safeな判断（`PolicyInput`・合法手・選んだ打牌） | `read_decisions()`（推論入力の経路。ラベルのfileを開かない） |
+| `decisions.jsonl` | `lisjong-riichi-deal-in-decision-record-v1`または`-v2` | player-safeな判断（`PolicyInput`・合法手・選んだ打牌） | `read_decisions()`（推論入力の経路。ラベルのfileを開かない） |
 | `label_facts.jsonl` | `lisjong-riichi-deal-in-label-fact-record-v1` | 学習専用の観測事実（リーチ者の13枚相当の手牌、リーチ宣言打牌の時点、和了の選択肢が提示された時点・対象牌・選んだ行動、選んだ打牌への提示・放銃） | `read_labelled_source()`（学習専用） |
 
 - 2つの記録は`DecisionKey`（seed、半荘内の判断の通し番号、席）で結合する。キーの欠落・重複・不一致はエラー
@@ -77,6 +77,8 @@ lisjongはArenaのmoduleをimportしない。
 - 時点の検査: リーチ者の手牌はリーチ宣言打牌以後かつ対象判断より前、和了の選択肢はリーチ宣言打牌より後かつ対象判断より前でなければエラー
 - engineとの照合: 選んだ打牌について、ラベルAとリーチ者へのRonActionの提示が一致しなければエラー。選ばなかった候補には照合値を持たせない
 - 各行は正準JSONで、`PolicyInput`・行動の射影は`lisjong.learning._typed_values`と一致しなければエラー
+
+判断記録のschemaは2つある（#309）。`lisjong-riichi-deal-in-decision-record-v1`は宣言牌の位置を持たない従来の形式で、`PolicyInput`の保存形式v1を使い、各playerの`riichi_declaration_discard_order`が値を持つ入力を拒否する。`lisjong-riichi-deal-in-decision-record-v2`は保存形式v2（#305）で各playerに`riichi_declaration_discard_order`を持つ。他のfieldは同じ。writerは`decision_to_value(..., schema=...)`で形式を明示的に選び（既定はv1）、入力の値の有無で切り替えない。readerは各行のschemaで読み分け、v1とv2は互いの行を読まない。1つのfileに2つのschemaを混在させるとエラーにする。既存のv1の出力・意味・拒否は変えない。
 
 ## データ分割と評価の使い方（2026-10-03に固定）
 
