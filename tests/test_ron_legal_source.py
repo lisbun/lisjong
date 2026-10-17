@@ -303,8 +303,8 @@ class SourceTest(unittest.TestCase):
         self.addCleanup(self.yaku.stop)
         self.addCleanup(self.tmp.cleanup)
 
-    def write(self):
-        write_source(self.base, self.decisions, self.hands)
+    def write(self, *, decision_schema=source.base.DECISION_SCHEMA):
+        write_source(self.base, self.decisions, self.hands, schema=decision_schema)
         files = {}
         for name, filename, rows in (
             ("ron_facts", source.FACTS_FILENAME, self.facts),
@@ -395,7 +395,7 @@ class SourceTest(unittest.TestCase):
             with self.subTest(mutate=mutate):
                 self.history = fixture()[3]
                 mutate(self.history)
-                self.assert_bad("contiguous|end checkpoint|terminal")
+                self.assert_bad("schema|contiguous|end checkpoint|terminal")
 
     def test_independent_coverage_mismatch_is_rejected(self):
         for field in ("transitions", "reactions", "decisions", "selectors"):
@@ -668,6 +668,199 @@ def riichi_journal(*, pass_after_riichi=True):
         }
     ]
     return history, coverage
+
+
+def declared_history():
+    """Convert known development facts, explicitly selecting history v2."""
+    history, coverage = riichi_journal()
+    for row in history:
+        row["schema"] = source.HISTORY_SCHEMA_V2
+        for step in row["steps"]:
+            checkpoint = source._checkpoint(step["checkpoint"], "fixture")
+            views = tuple(
+                replace(
+                    view,
+                    players=tuple(
+                        replace(
+                            player,
+                            riichi_declaration_discard_order=player.discards[0].order,
+                        )
+                        if player.riichi is not RiichiState.NONE and player.discards
+                        else player
+                        for player in view.players
+                    ),
+                )
+                for view in checkpoint.views
+            )
+            step["checkpoint"] = source.checkpoint_to_value(
+                replace(checkpoint, views=views), schema=source.HISTORY_SCHEMA_V2
+            )
+    return history, coverage
+
+
+class HistorySchemaV2Test(unittest.TestCase):
+    def setUp(self):
+        # Native CI validates these same v2 fixtures with the real scorer.
+        if HAS_NATIVE or os.environ.get("LISJONG_REQUIRE_NATIVE") == "1":
+            return
+        for target in (
+            "lisjong.belief.ron_legal_ground_truth.require_scoring_backend",
+            "lisjong.learning.ron_legal_source.require_scoring_backend",
+        ):
+            stub = patch(target)
+            stub.start()
+            self.addCleanup(stub.stop)
+        yaku = patch(
+            "lisjong.belief.ron_legal_ground_truth._has_yaku", return_value=True
+        )
+        yaku.start()
+        self.addCleanup(yaku.stop)
+
+    def test_explicit_writer_preserves_v1_and_never_switches_by_value(self):
+        raw = World().checkpoint()
+        checkpoint = source._checkpoint(raw, "v1")
+        self.assertEqual(source.checkpoint_to_value(checkpoint), raw)
+        self.assertEqual(
+            source.checkpoint_to_value(checkpoint, schema=source.HISTORY_SCHEMA), raw
+        )
+        value = source.checkpoint_to_value(checkpoint, schema=source.HISTORY_SCHEMA_V2)
+        self.assertTrue(
+            all(
+                "riichi_declaration_discard_order" in player
+                for view in value["views"]
+                for player in view["players"]
+            )
+        )
+        history, _ = declared_history()
+        checkpoint = source._checkpoint(
+            history[4]["steps"][-1]["checkpoint"],
+            "declared",
+            schema=source.HISTORY_SCHEMA_V2,
+        )
+        with self.assertRaises(source.RonLegalSourceError):
+            source.checkpoint_to_value(checkpoint)
+        for schema in ("unknown", [], {}, None, True):
+            with self.subTest(schema=schema):
+                with self.assertRaises(source.RonLegalSourceError):
+                    source.checkpoint_to_value(checkpoint, schema=schema)
+
+    def test_v2_retains_orders_in_compound_commits_and_later_draws(self):
+        history, coverage = declared_history()
+        states, _, _ = source._replay(history, coverage)
+        states = states[SEED, "riichi-round"]
+        self.assertEqual(states[3].views[0].players[2].riichi, RiichiState.DECLARED)
+        self.assertEqual(states[4].views[0].players[2].riichi, RiichiState.ACCEPTED)
+        for checkpoint in states[3:]:
+            for view in checkpoint.views:
+                self.assertEqual(view.players[2].riichi_declaration_discard_order, 0)
+        self.assertEqual(states[-1].contexts[2].missed_ron_state, MissedRonState.RIICHI)
+
+    def test_v1_and_v2_reject_each_others_payload(self):
+        for history, coverage, relabelled in (
+            (*riichi_journal(), source.HISTORY_SCHEMA_V2),
+            (*declared_history(), source.HISTORY_SCHEMA),
+        ):
+            with self.subTest(schema=relabelled):
+                for row in history:
+                    row["schema"] = relabelled
+                with self.assertRaisesRegex(source.RonLegalSourceError, "fields"):
+                    source._replay(history, coverage)
+
+    def test_mixed_history_schemas_and_unknown_versions_fail_closed(self):
+        for schema, pattern in (
+            (source.HISTORY_SCHEMA, "mixes record schemas"),
+            ("lisjong-ron-legal-history-record-v3", "unsupported history schema"),
+            ([], "unsupported history schema"),
+            ({}, "unsupported history schema"),
+            (None, "unsupported history schema"),
+        ):
+            with self.subTest(schema=schema):
+                history, coverage = declared_history()
+                history[-1]["schema"] = schema
+                with self.assertRaisesRegex(source.RonLegalSourceError, pattern):
+                    source._replay(history, coverage)
+
+    def test_one_v1_checkpoint_inside_a_v2_commit_is_rejected(self):
+        history, coverage = declared_history()
+        original, _ = riichi_journal()
+        history[4]["steps"][0]["checkpoint"] = original[4]["steps"][0]["checkpoint"]
+        with self.assertRaisesRegex(source.RonLegalSourceError, "fields"):
+            source._replay(history, coverage)
+
+    def test_save_read_and_label_preserve_the_exact_declared_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.base, self.extra = root / "base", root / "extra"
+            self.base.mkdir()
+            self.extra.mkdir()
+            self.history, self.coverage = declared_history()
+            # The next committed action discards 3m from seat 0 at sequence 3.
+            checkpoint = source._checkpoint(
+                self.history[5]["steps"][-1]["checkpoint"],
+                "snapshot",
+                schema=source.HISTORY_SCHEMA_V2,
+            )
+            action = DiscardAction(Seat.SEAT_0, tiles("3m")[0], True)
+            decision = replace(
+                make_decision(
+                    3,
+                    "345m678p567s888m44z",
+                    B_PLAYERS,
+                    legal=(action,),
+                    selected=action,
+                ),
+                policy_input=checkpoint.views[0],
+            )
+            self.decisions = [decision]
+            self.hands = [
+                source.base.HandBeliefHandFacts(
+                    decision.key,
+                    tuple(
+                        source.base.OpponentHand(
+                            seat,
+                            3,
+                            checkpoint.views[seat].own_hand.concealed_tiles,
+                            checkpoint.views[seat].players[seat].melds,
+                        )
+                        for seat in range(1, 4)
+                    ),
+                )
+            ]
+            self.facts = [
+                {
+                    "schema": source.FACT_SCHEMA,
+                    "key": {"seed": SEED, "sequence": 3, "seat": 0},
+                    "round_id": "riichi-round",
+                    "history_boundary": 6,
+                    "opponents": [
+                        {
+                            "seat": seat,
+                            "sequence": 3,
+                            "context": context_value(checkpoint.contexts[seat]),
+                        }
+                        for seat in range(1, 4)
+                    ],
+                }
+            ]
+            self.coverage[0]["decisions"] = 1
+            SourceTest.write(self, decision_schema=source.base.DECISION_SCHEMA_V2)
+            result = source.read_ron_source(self.extra, base_directory=self.base)
+            self.assertEqual(result.decisions, (decision,))
+            self.assertEqual(result.checkpoints, (checkpoint,))
+            _, labelled = source.read_labelled_ron_source(
+                self.extra, base_directory=self.base
+            )
+            self.assertEqual(labelled[0].decision, decision)
+            self.assertEqual(
+                labelled[0]
+                .decision.policy_input.players[2]
+                .riichi_declaration_discard_order,
+                0,
+            )
+            # Public-only inference still works with no privileged extension.
+            for path in self.extra.iterdir():
+                path.unlink()
+            self.assertEqual(read_decisions(self.base)[1], (decision,))
 
 
 class ContextReplayTest(unittest.TestCase):

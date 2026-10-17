@@ -1,4 +1,4 @@
-"""Strict offline extension of the unchanged hand-belief v1 source (#262).
+"""Strict offline extension of the hand-belief source (#262, #309).
 
 The journal contains producer facts, not serialized engine objects. Replay owns
 only AI label semantics (missed ron and scoring context); game transitions remain
@@ -34,9 +34,8 @@ from lisjong.learning._typed_values import (
     _parse_enum,
     _parse_seat,
     parse_action,
-    parse_policy_input,
     parse_tile,
-    policy_input_to_value,
+    policy_input_codec,
 )
 from lisjong.policy_contract import (
     AnkanAction,
@@ -61,6 +60,8 @@ from lisjong.policy_contract import (
 MANIFEST_SCHEMA = "lisjong-ron-legal-source-manifest-v1"
 FACT_SCHEMA = "lisjong-ron-legal-fact-record-v1"
 HISTORY_SCHEMA = "lisjong-ron-legal-history-record-v1"
+HISTORY_SCHEMA_V2 = "lisjong-ron-legal-history-record-v2"
+_HISTORY_WIRE_VERSIONS = {HISTORY_SCHEMA: 1, HISTORY_SCHEMA_V2: 2}
 FACTS_FILENAME = "ron_facts.jsonl"
 HISTORY_FILENAME = "ron_history.jsonl"
 
@@ -145,17 +146,46 @@ def _hand(view):
     return view.own_hand.concealed_tiles
 
 
-def _checkpoint(value, context):
+def _history_codec(schema):
+    if not isinstance(schema, str) or schema not in _HISTORY_WIRE_VERSIONS:
+        raise _E(f"unsupported history schema: {schema!r}")
+    return policy_input_codec(_HISTORY_WIRE_VERSIONS[schema])
+
+
+def checkpoint_to_value(
+    checkpoint: RonCheckpoint, *, schema: str = HISTORY_SCHEMA
+) -> dict[str, object]:
+    """Project offline facts using the explicitly selected history schema.
+
+    The default remains v1 and rejects declaration orders. This does not expose
+    the four privileged hands to the online player-safe decision path.
+    """
+    _parse_input, to_value = _history_codec(schema)
+    return {
+        "views": [to_value(view, _E, "checkpoint view") for view in checkpoint.views],
+        "contexts": [
+            {
+                "missed_ron_state": context.missed_ron_state.value,
+                "riichi_status": context.riichi_status.value,
+                "is_ippatsu": context.is_ippatsu,
+            }
+            for context in checkpoint.contexts
+        ],
+    }
+
+
+def _checkpoint(value, context, *, schema=HISTORY_SCHEMA):
+    parse_input, to_value = _history_codec(schema)
     raw = _object(value, "views contexts", context)
     views = tuple(
-        parse_policy_input(view, _E, context)
+        parse_input(view, _E, context)
         for view in expect_list(raw["views"], _E, context)
     )
     contexts = _contexts(raw["contexts"], context)
     if len(views) != 4 or len(contexts) != 4:
         raise _E(f"{context}: checkpoint requires four seats")
     for seat, (view, fact) in enumerate(zip(views, contexts)):
-        if raw["views"][seat] != policy_input_to_value(view, _E, context):
+        if raw["views"][seat] != to_value(view, _E, context):
             raise _E(f"{context}: view does not round-trip canonically")
         if view.self_seat != Seat(seat):
             raise _E(f"{context}: views must be in seat order")
@@ -586,7 +616,7 @@ def _board_change(before, after, event, kan_action=None):
             raise _E("checkpoint meld/river changed without its recorded call/discard")
 
 
-def _replay_steps(rows, coverage):
+def _replay_steps(rows, coverage, *, schema=HISTORY_SCHEMA):
     checkpoints = {}
     selector_commits = {}
     previous_sequence = {}
@@ -630,7 +660,7 @@ def _replay_steps(rows, coverage):
                 "history",
             )
             if (
-                raw["schema"] != HISTORY_SCHEMA
+                raw["schema"] != schema
                 or _integer(raw["seed"], "seed") != seed
                 or raw["round_id"] != round_id
                 or _integer(raw["index"], "index") != index
@@ -652,7 +682,7 @@ def _replay_steps(rows, coverage):
             if selectors:
                 previous_sequence[seed] = selectors[-1]
             commit_selectors.append(selectors)
-            after = _checkpoint(raw["checkpoint"], "history checkpoint")
+            after = _checkpoint(raw["checkpoint"], "history checkpoint", schema=schema)
             event = raw["event"]
             if type(event) is not dict or "kind" not in event:
                 raise _E("history event must have a kind")
@@ -902,6 +932,13 @@ def _replay(rows, coverage):
     intermediate checkpoints are verification evidence, never selector snapshots.
     Producer hooks needed to obtain them belong to the later Arena work.
     """
+    schema = None
+    for value in rows:
+        raw = _object(value, "schema seed round_id index steps", "history commit")
+        _history_codec(raw["schema"])
+        if schema is not None and raw["schema"] != schema:
+            raise _E("ron_history.jsonl mixes record schemas")
+        schema = raw["schema"]
     expanded, expanded_coverage = [], []
     boundaries, grouped_selectors = {}, {}
     offset = 0
@@ -919,7 +956,7 @@ def _replay(rows, coverage):
         for commit, value in enumerate(rows[offset : offset + length]):
             raw = _object(value, "schema seed round_id index steps", "history commit")
             if (
-                raw["schema"] != HISTORY_SCHEMA
+                raw["schema"] != schema
                 or _integer(raw["seed"], "seed") != seed
                 or raw["round_id"] != round_id
                 or _integer(raw["index"], "index") != commit
@@ -938,7 +975,7 @@ def _replay(rows, coverage):
                 )
                 expanded.append(
                     {
-                        "schema": HISTORY_SCHEMA,
+                        "schema": schema,
                         "seed": seed,
                         "round_id": round_id,
                         "index": index,
@@ -959,7 +996,7 @@ def _replay(rows, coverage):
         offset += length
     if offset != len(rows):
         raise _E("history has transactions outside coverage")
-    checkpoints, _, seeds = _replay_steps(expanded, expanded_coverage)
+    checkpoints, _, seeds = _replay_steps(expanded, expanded_coverage, schema=schema)
     return (
         {
             key: tuple(checkpoints[key][index] for index in limits)

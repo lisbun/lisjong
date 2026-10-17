@@ -1,4 +1,4 @@
-# ロン合法source v1（#262 B1）
+# ロン合法source（#262 B1、#309）
 
 [意味・採用ルール・後続測定](ron-legal-belief.md)に従う、学習専用の追加契約。
 `lisjong.learning.ron_legal_source.read_ron_source(extension, base_directory=base)`が
@@ -7,7 +7,9 @@
 `exact_hand_belief_with_ron()`は検証済みの具体的手牌・河・contextを受ける正解計算器で、
 履歴の欠測を補う入口ではない。Cは`project-standard-normal-discard-ron-v1`。
 
-旧v1 sourceは変更しない。以下は別directoryに置く。場所をmanifestから探索しない。
+既存sourceは変更しない。以下はhand belief sourceとは別directoryに置く。場所をmanifestから探索しない。
+本書の「元v1」は従来のhand belief sourceを指す。#309以降は判断記録v2も明示的に選べる。
+生成済みsource・固定population・評価結果の再生成やformal評価の再実行は本変更に含めない。
 JSONの正準形式は既存Learning sourceと同じ。manifestはsorted/indent=2/LF、
 JSONLはsorted/compact/LF。未知field、重複key、欠測、未知enum、bool/intの混同を拒否する。
 
@@ -76,7 +78,21 @@ boundary=kは外側journalのprefix `[0,k)`であり、最後のcheckpointは行
 
 ## ron_history.jsonl
 
-schemaは`lisjong-ron-legal-history-record-v1`。
+schemaは`lisjong-ron-legal-history-record-v1`または`lisjong-ron-legal-history-record-v2`（#309）。
+1つのfile内では同じschemaにそろえ、混在・未知versionを拒否する。
+v1は`PolicyInput`の保存形式v1であり、宣言牌位置を持つ入力を拒否する。
+v2は保存形式v2で、checkpointの各viewの各playerに
+`riichi_declaration_discard_order`（intまたはnull）を必ず持つ。他のfield・context・replayの意味は同じ。
+readerは外側のhistory schemaでcodecを選び、v1とv2のcheckpointは相互に拒否する。
+複数stepを持つcommitも全checkpointで同じcodecを使う。
+
+writerは`checkpoint_to_value(RonCheckpoint(...), schema=HISTORY_SCHEMA_V2)`で明示的に選ぶ。
+既定は`HISTORY_SCHEMA`（v1）のままで、入力の値による自動切り替えや位置の除去はしない。
+producerは外側の行のschemaも同じversionで記録する。manifestとron factのschemaはv1を維持する。
+hand belief判断記録v2とのjoinでも`PolicyInput`全体を比較するので、宣言牌位置の不一致は拒否する。
+4席分のviewは学習専用であり、player-safeな`read_decisions()`は追加directoryを開かない。
+Arenaのproducer切り替えはlisjong-arena#493で、対応revisionへのpin更新後に行う。
+
 各行は`schema`, `seed`, `round_id`, `index`, `steps`だけ。
 indexは局ごとの0始まり連続int。開始・終端marker以外は実際のcommitを1行として記録し、
 そのcommitで生じたsemantic stepを順に並べる。例えばreaction解決とリーチ成立は
