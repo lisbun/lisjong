@@ -16,8 +16,10 @@ Arenaが観測事実（判断時点の`PolicyInput`と他家の手牌）を記�
 | ファイル | schema | 内容 | 読む関数 |
 |---|---|---|---|
 | `manifest.json` | `lisjong-hand-belief-source-manifest-v1` | producer revision、split別seed、各ファイルのbytes / sha256 / 行数 | `read_manifest()` |
-| `decisions.jsonl` | `lisjong-hand-belief-decision-record-v1` | player-safe。`DecisionKey`、観測者の判断時点の`PolicyInput`、合法手、選んだ行動 | `read_decisions()`（推論入力の経路） |
+| `decisions.jsonl` | `lisjong-hand-belief-decision-record-v1`または`-v2` | player-safe。`DecisionKey`、観測者の判断時点の`PolicyInput`、合法手、選んだ行動 | `read_decisions()`（推論入力の経路） |
 | `hand_facts.jsonl` | `lisjong-hand-belief-hand-fact-record-v1` | 学習専用。他家3席それぞれの`seat`・`sequence`・concealed tiles（赤5を区別）・副露 | `read_labelled_source()`（学習専用） |
+
+判断記録のschemaは2つある（#309）。`lisjong-hand-belief-decision-record-v1`は宣言牌の位置を持たない従来の形式で、`PolicyInput`の保存形式v1を使い、各playerの`riichi_declaration_discard_order`が値を持つ入力を拒否する。`lisjong-hand-belief-decision-record-v2`は保存形式v2（#305）で各playerに`riichi_declaration_discard_order`を持つ。他のfieldは同じ。writerは`decision_to_value(..., schema=...)`で形式を明示的に選び（既定はv1）、入力の値の有無で切り替えない。readerは各行のschemaで読み分け、v1とv2は互いの行を読まない。1つのfileに2つのschemaを混在させるとエラーにする。既存のv1の出力・意味・拒否は変えない。
 
 `SCOPE`は`all-observer-discard-decisions.v1`で、合法手に打牌を1つ以上含む観測者の判断すべてを
 対象にする。リーチの有無や選んだ行動の種類では絞らない。

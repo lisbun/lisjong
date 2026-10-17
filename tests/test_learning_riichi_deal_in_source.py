@@ -6,6 +6,8 @@ from pathlib import Path
 from lisjong.belief.riichi_ron_label import RiichiFuritenReason
 from lisjong.learning._canonical import canonical_json_line, file_digest
 from lisjong.learning.riichi_deal_in_source import (
+    DECISION_SCHEMA,
+    DECISION_SCHEMA_V2,
     DECISIONS_FILENAME,
     LABEL_FACTS_FILENAME,
     MANIFEST_FILENAME,
@@ -257,9 +259,12 @@ class LabelDecisionsTest(unittest.TestCase):
                 label_decisions([decision], [facts])
 
 
-def write_source(root: Path, decisions, facts, *, splits=None):
+def write_source(
+    root: Path, decisions, facts, *, splits=None, schema=DECISION_SCHEMA, rows=None
+):
     lines = {
-        DECISIONS_FILENAME: [decision_to_value(d) for d in decisions],
+        DECISIONS_FILENAME: rows
+        or [decision_to_value(d, schema=schema) for d in decisions],
         LABEL_FACTS_FILENAME: [label_facts_to_value(f) for f in facts],
     }
     files = {}
@@ -327,6 +332,95 @@ class SourceFilesTest(unittest.TestCase):
             splits={"train": [931000], "valid": [931000], "test": []},
         )
         with self.assertRaises(RiichiDealInSourceError):
+            read_decisions(self.root)
+
+
+def declared(decision):
+    """リーチ者（players[1]）に、最初の捨て牌を宣言牌とする位置を持たせる。"""
+    players = list(decision.policy_input.players)
+    players[1] = replace(players[1], riichi_declaration_discard_order=0)
+    return replace(
+        decision, policy_input=replace(decision.policy_input, players=tuple(players))
+    )
+
+
+def keyed(sequence):
+    key = DecisionKey(seed=931000, sequence=sequence, seat=0)
+    return make_decision(key=key), make_facts(key=key)
+
+
+class DecisionSchemaV2Test(unittest.TestCase):
+    """#309: 宣言牌の位置を保存できるv2と、既存のv1の扱い。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_v2_keeps_the_declaration_order_through_save_and_read(self):
+        decision = declared(make_decision())
+        write_source(self.root, [decision], [make_facts()], schema=DECISION_SCHEMA_V2)
+        _, decisions = read_decisions(self.root)
+        self.assertEqual(decisions, (decision,))
+        self.assertEqual(
+            decisions[0].policy_input.players[1].riichi_declaration_discard_order, 0
+        )
+        _, labelled = read_labelled_source(self.root)
+        self.assertEqual(len(labelled), 1)
+        text = (self.root / DECISIONS_FILENAME).read_text(encoding="utf-8")
+        self.assertIn(DECISION_SCHEMA_V2, text)
+
+    def test_v1_output_is_unchanged_and_rejects_the_declaration_order(self):
+        decision = make_decision()
+        value = decision_to_value(decision)
+        self.assertEqual(value, decision_to_value(decision, schema=DECISION_SCHEMA))
+        self.assertEqual(value["schema"], DECISION_SCHEMA)
+        for player in value["policy_input"]["players"]:
+            self.assertNotIn("riichi_declaration_discard_order", player)
+        with self.assertRaises(RiichiDealInSourceError):
+            decision_to_value(declared(decision))
+
+    def test_the_writer_never_switches_schema_by_value(self):
+        decision = make_decision()
+        self.assertEqual(
+            decision_to_value(decision, schema=DECISION_SCHEMA_V2)["schema"],
+            DECISION_SCHEMA_V2,
+        )
+        with self.assertRaises(RiichiDealInSourceError):
+            decision_to_value(
+                decision, schema="lisjong-riichi-deal-in-decision-record-v3"
+            )
+
+    def test_v1_and_v2_reject_each_other(self):
+        for written, relabelled in (
+            (DECISION_SCHEMA, DECISION_SCHEMA_V2),
+            (DECISION_SCHEMA_V2, DECISION_SCHEMA),
+        ):
+            with self.subTest(written=written):
+                value = decision_to_value(make_decision(), schema=written)
+                write_source(
+                    self.root,
+                    [],
+                    [make_facts()],
+                    rows=[{**value, "schema": relabelled}],
+                )
+                with self.assertRaises(RiichiDealInSourceError):
+                    read_decisions(self.root)
+
+    def test_a_file_must_not_mix_schemas(self):
+        (first, first_facts), (second, second_facts) = keyed(20), keyed(30)
+        write_source(
+            self.root,
+            [],
+            [first_facts, second_facts],
+            rows=[
+                decision_to_value(first),
+                decision_to_value(second, schema=DECISION_SCHEMA_V2),
+            ],
+        )
+        with self.assertRaisesRegex(RiichiDealInSourceError, "mixes record schemas"):
             read_decisions(self.root)
 
 
