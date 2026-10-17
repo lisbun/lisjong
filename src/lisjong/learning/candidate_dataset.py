@@ -428,13 +428,15 @@ def _write_decisions(
     return decision_count, candidate_total
 
 
-def _materialize_shard(root: str, summary: dict[str, object], shard: str) -> dict:
+def _materialize_shard(
+    root: str, summary: dict[str, object], shard: str, schema: str
+) -> dict:
     """1 game（shard）をstrict readし、shard directoryへ変換結果を書く。
 
     worker processで実行する。candidate_offsetはshard内の相対値であり、
     親processが連結時にgame順の通し番号へ直す。
     """
-    game = read_source_game(Path(root), summary)
+    game = read_source_game(Path(root), summary, schema=schema)
     split_counts: dict[str, dict[str, int]] = {}
     with _payload_streams(Path(shard)) as streams:
         decisions, candidates = _write_decisions(game.decisions, streams, split_counts)
@@ -496,7 +498,11 @@ def _write_shards(
                 shard = shard_root / f"game-{summary['game_ordinal']:03d}"
                 shard.mkdir()
                 future = pool.submit(
-                    _materialize_shard, str(source.root), summary, str(shard)
+                    _materialize_shard,
+                    str(source.root),
+                    summary,
+                    str(shard),
+                    source.schema,
                 )
                 pending.append((shard, future))
             if not pending:

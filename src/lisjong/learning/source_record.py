@@ -72,7 +72,9 @@ from lisjong.learning._typed_values import (
     action_to_value,
     parse_action,
     parse_policy_input,
+    parse_policy_input_v2,
     policy_input_to_value,
+    policy_input_to_value_v2,
 )
 from lisjong.learning.errors import SourceRecordError, UnsupportedSourceSchemaError
 from lisjong.policy_contract import InternalAction, PolicyInput, Seat
@@ -96,8 +98,26 @@ rowの形はv2と同じだが、manifestは#331 protocol lock / scientific corpu
 教師identityはArenaの記述をそのまま保持し、lisjongが再解釈しない。
 """
 
+POLICY_SOURCE_RECORD_SCHEMA_V2 = "arena-policy-source-record-v2"
+"""policy source recordのv2（Arena-owned contract、lisjong #307 / lisjong-arena #493）。
+
+manifestとrowの形はv1と同じ。rowの`policy_input`だけを`PolicyInput`の保存形式v2
+（各playerに`riichi_declaration_discard_order`を持つ、lisjong #305）で表す。v1の意味は
+変更しない。
+"""
+
+POLICY_SOURCE_RECORD_SCHEMAS = frozenset(
+    {POLICY_SOURCE_RECORD_SCHEMA_V1, POLICY_SOURCE_RECORD_SCHEMA_V2}
+)
+"""policy source recordのschema集合。manifestとrowの検証は共通である。"""
+
 SUPPORTED_SOURCE_RECORD_SCHEMAS = frozenset(
-    {SOURCE_RECORD_SCHEMA_V1, SOURCE_RECORD_SCHEMA_V2, POLICY_SOURCE_RECORD_SCHEMA_V1}
+    {
+        SOURCE_RECORD_SCHEMA_V1,
+        SOURCE_RECORD_SCHEMA_V2,
+        POLICY_SOURCE_RECORD_SCHEMA_V1,
+        POLICY_SOURCE_RECORD_SCHEMA_V2,
+    }
 )
 """対応schemaの集合。ここに無いschemaはfail closedとする。"""
 
@@ -399,7 +419,7 @@ class StreamingSourceRecord:
     def games(self) -> Iterator[SourceGame]:
         """population順に1 gameずつstrict readして列挙する。"""
         for summary in self.summaries:
-            yield read_source_game(self.root, summary)
+            yield read_source_game(self.root, summary, schema=self.schema)
 
     def decisions(self) -> Iterator[SourceDecision]:
         """population順（game順、game内はdecision_ordinal順）に列挙する。"""
@@ -439,7 +459,7 @@ def _provenance(
             for split, binding in record.allocation_bindings.items()
         }
     )
-    if record.schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
+    if record.schema in POLICY_SOURCE_RECORD_SCHEMAS:
         return {
             "allocation_bindings": allocation_bindings,
             "decision_count": record.decision_count,
@@ -483,7 +503,7 @@ def _read_manifest(path: Path) -> dict[str, object]:
             f"unsupported source record schema: {schema!r}; "
             f"this implementation consumes {sorted(SUPPORTED_SOURCE_RECORD_SCHEMAS)}"
         )
-    if schema == POLICY_SOURCE_RECORD_SCHEMA_V1:
+    if schema in POLICY_SOURCE_RECORD_SCHEMAS:
         return _read_policy_manifest(manifest, body)
     expected_fields = (
         _MANIFEST_FIELDS_V2
@@ -552,7 +572,7 @@ def _read_game_summary(
 ) -> dict[str, object]:
     context = f"manifest.games[{game_ordinal}]"
     body = unseal(value, SourceRecordError, context)
-    policy = manifest["schema"] == POLICY_SOURCE_RECORD_SCHEMA_V1
+    policy = manifest["schema"] in POLICY_SOURCE_RECORD_SCHEMAS
     expect_object(
         body,
         _POLICY_GAME_FIELDS if policy else _GAME_FIELDS,
@@ -587,7 +607,18 @@ def _read_game_summary(
     return body
 
 
-def _read_row(line: str, *, context: str) -> tuple[dict[str, object], SourceDecision]:
+def _policy_input_codec(schema: object):
+    """schemaに対応する`PolicyInput`のparseと射影。未知のschemaは拒否する。"""
+    if schema == POLICY_SOURCE_RECORD_SCHEMA_V2:
+        return parse_policy_input_v2, policy_input_to_value_v2
+    if schema in SUPPORTED_SOURCE_RECORD_SCHEMAS:
+        return parse_policy_input, policy_input_to_value
+    raise UnsupportedSourceSchemaError(f"unsupported source record schema: {schema!r}")
+
+
+def _read_row(
+    line: str, *, context: str, schema: str
+) -> tuple[dict[str, object], SourceDecision]:
     row = parse_json_text(line, SourceRecordError, context)
     if line != canonical_json_line(row):
         raise SourceRecordError(f"{context} is not canonical JSON")
@@ -602,13 +633,12 @@ def _read_row(line: str, *, context: str) -> tuple[dict[str, object], SourceDeci
         expect_non_negative_int(row[field], SourceRecordError, f"{context}.{field}")
     expect_str(row["split"], SourceRecordError, f"{context}.split")
 
-    policy_input = parse_policy_input(
+    parse_value, to_value = _policy_input_codec(schema)
+    policy_input = parse_value(
         row["policy_input"], SourceRecordError, f"{context}.policy_input"
     )
     if (
-        policy_input_to_value(
-            policy_input, SourceRecordError, f"{context}.policy_input"
-        )
+        to_value(policy_input, SourceRecordError, f"{context}.policy_input")
         != row["policy_input"]
     ):
         raise SourceRecordError(f"{context}.policy_input does not round trip")
@@ -675,7 +705,8 @@ def _read_row(line: str, *, context: str) -> tuple[dict[str, object], SourceDeci
     return row, decision
 
 
-def _read_game(path: Path, summary: dict[str, object]) -> SourceGame:
+def _read_game(path: Path, summary: dict[str, object], *, schema: str) -> SourceGame:
+    _policy_input_codec(schema)
     game_ordinal = summary["game_ordinal"]
     context = f"game-{game_ordinal:03d}"
     if not path.is_dir():
@@ -691,7 +722,9 @@ def _read_game(path: Path, summary: dict[str, object]) -> SourceGame:
     last_seat = -1
     with payload.open(encoding="utf-8", newline="\n") as stream:
         for index, line in enumerate(stream):
-            row, decision = _read_row(line, context=f"{context}.rows[{index}]")
+            row, decision = _read_row(
+                line, context=f"{context}.rows[{index}]", schema=schema
+            )
             if (
                 decision.game_ordinal != game_ordinal
                 or decision.seed != summary["seed"]
@@ -760,7 +793,7 @@ def _open_validated(
         seeds.add(summary["seed"])
         seeds_by_split.setdefault(summary["split"], []).append(summary["seed"])
 
-    if manifest["schema"] == POLICY_SOURCE_RECORD_SCHEMA_V1:
+    if manifest["schema"] in POLICY_SOURCE_RECORD_SCHEMAS:
         header = _policy_header(manifest, summaries, seeds_by_split)
     else:
         allocation_bindings: dict[str, dict[str, str]] | None = None
@@ -782,14 +815,21 @@ def _open_validated(
     return summaries, header
 
 
-def read_source_game(root: Path, summary: Mapping[str, object]) -> SourceGame:
+def read_source_game(
+    root: Path, summary: Mapping[str, object], *, schema: str
+) -> SourceGame:
     """`open_source_record()`で検証したgame summaryの1 gameをstrict readする。
 
     `summary`は`StreamingSourceRecord.summaries`の要素である。payloadは
     summaryのbyte長・SHA-256・decision数と照合する。worker processから
     1 gameずつ読む用途（Issue #248）にも使う。
+
+    `schema`はrecordのschema（`StreamingSourceRecord.schema`）である。rowの
+    `PolicyInput`をschemaに応じた形式でだけ読むため、省略できない（lisjong #307）。
     """
-    return _read_game(Path(root) / f"game-{summary['game_ordinal']:03d}", summary)
+    return _read_game(
+        Path(root) / f"game-{summary['game_ordinal']:03d}", summary, schema=schema
+    )
 
 
 def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
@@ -802,7 +842,11 @@ def read_source_record(path: str | Path) -> PlayerSafeSourceRecord:
     root = Path(path)
     summaries, header = _open_validated(root)
     games = tuple(
-        _read_game(root / f"game-{summary['game_ordinal']:03d}", summary)
+        _read_game(
+            root / f"game-{summary['game_ordinal']:03d}",
+            summary,
+            schema=header["schema"],
+        )
         for summary in summaries
     )
     return PlayerSafeSourceRecord(**header, games=games)
@@ -872,6 +916,8 @@ __all__ = [
     "EXPECTED_ALLOCATION_OWNER_REPOSITORY",
     "POLICY_SOURCE_RECORD_KIND",
     "POLICY_SOURCE_RECORD_SCHEMA_V1",
+    "POLICY_SOURCE_RECORD_SCHEMA_V2",
+    "POLICY_SOURCE_RECORD_SCHEMAS",
     "POLICY_SOURCE_SPLITS",
     "SCIENTIFIC_PURPOSE",
     "GAME_PAYLOAD_FILENAME",
