@@ -103,6 +103,24 @@ datasetは、v2に加えてこのschemaを受け付ける（`DEVELOPMENT`はbind
 datasetとartifactの`source`に`purpose`が残るため、`DEVELOPMENT`由来の
 modelを正式評価の入力と取り違えない。
 
+
+### policy source record v2（宣言牌の位置、lisjong #307）
+
+```text
+schema      arena-policy-source-record-v2
+```
+
+manifestとrowの形はv1と同じで、rowの`policy_input`だけを`PolicyInput`の保存形式v2
+（`policy_input_to_value_v2()`、各playerに`riichi_declaration_discard_order`を必ず持つ、
+#305）で表す。リーチ宣言牌の位置を保持したまま読める。
+
+- v1のrowはv1の形式、v2のrowはv2の形式でだけ読む。v1のrecordにfieldがあれば、v2の
+  recordにfieldがなければ拒否する。形式を読み替えない。
+- game単位の読み込み`read_source_game(root, summary, *, schema)`はschemaを必須とする。
+  `StreamingSourceRecord.games()`とcandidate datasetの並列変換は、recordのschemaを渡す。
+- v1の意味と拒否動作は変えない。Arena側のproducerがv2を書くようになるのは、
+  lisjong-arena #493の4段目である。
+
 ## Canonical player-safe feature representation
 
 ```text
