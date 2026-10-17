@@ -20,7 +20,10 @@ shapeが変わる場合は、schema versionごとのcodecとして分岐させ�
 （Issue #301）を持たない。**値を持つ`PolicyInput`の射影は拒否する。** 値を落として
 保存すると、読み戻した入力から導く確定安全牌の集合が元の入力と変わりうるためである。
 全seatで値が`None`の入力は従来どおり射影し、既存v1のbyte列と読み込みは変えない。
-この値を保持するsourceは、新しいschema versionのcodecとして追加する。値を落とした
+この値を保持する射影は`policy_input_to_value_v2()` / `parse_policy_input_v2()`
+（Issue #305）である。v2はv1の全fieldに加え、各playerの
+`riichi_declaration_discard_order`を必ず持つ。v1とv2は互いの値を読まない。
+既存のsource schemaをv2へ移すときは、そのsourceのschema versionを上げる。値を落とした
 v1への変換が必要な場合は、用途を限定した明示的な変換として別に用意し、この射影の
 既定の動作にはしない。
 
@@ -31,6 +34,7 @@ encodingのいずれが変わってもfingerprintが変わるため、dataset / 
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from functools import cache
 
 from lisjong.action_vocabulary import (
@@ -79,6 +83,8 @@ _DISCARD_FIELDS = frozenset({"called_by", "order", "tile", "tsumogiri"})
 _MELD_FIELDS = frozenset({"called_tile", "from_seat", "kind", "tiles"})
 _OWN_HAND_FIELDS = frozenset({"concealed_tiles", "drawn_tile"})
 _PLAYER_FIELDS = frozenset({"discards", "melds", "riichi", "score"})
+_DECLARATION_ORDER_FIELD = "riichi_declaration_discard_order"
+_PLAYER_FIELDS_V2 = _PLAYER_FIELDS | {_DECLARATION_ORDER_FIELD}
 _ROUND_FIELDS = frozenset(
     {
         "dealer_seat",
@@ -410,6 +416,76 @@ def parse_policy_input(
             if drawn is None
             else parse_tile(drawn, error, f"{context}.own_hand.drawn_tile"),
         ),
+    )
+
+
+def policy_input_to_value_v2(
+    policy_input: object, error: type[Exception], context: str
+) -> dict:
+    """リーチ宣言牌の位置を保持する`PolicyInput`の射影（v2）。
+
+    v1の全fieldに加え、各playerに`riichi_declaration_discard_order`
+    （`int`または`None`）を必ず持つ。`PolicyInput`のsemantic fieldを落とさない。
+    """
+    if not isinstance(policy_input, PolicyInput):
+        raise error(f"{context} must be a PolicyInput")
+    without_orders = replace(
+        policy_input,
+        players=tuple(
+            replace(player, riichi_declaration_discard_order=None)
+            for player in policy_input.players
+        ),
+    )
+    value = policy_input_to_value(without_orders, error, context)
+    for projected, player in zip(value["players"], policy_input.players, strict=True):
+        projected[_DECLARATION_ORDER_FIELD] = player.riichi_declaration_discard_order
+    return value
+
+
+def parse_policy_input_v2(
+    value: object, error: type[Exception], context: str
+) -> PolicyInput:
+    """`policy_input_to_value_v2()`の値を厳密にparseする。
+
+    各playerのfield集合を検査するので、v1の値（宣言牌位置のfieldがない）は拒否する。
+    契約の構築時検証に反する値も拒否する。
+    """
+    raw = expect_object(value, _POLICY_INPUT_FIELDS, error, context)
+    players_raw = expect_list(raw["players"], error, f"{context}.players")
+    orders: list[int | None] = []
+    v1_players = []
+    for index, item in enumerate(players_raw):
+        player_context = f"{context}.players[{index}]"
+        player = expect_object(item, _PLAYER_FIELDS_V2, error, player_context)
+        order = player[_DECLARATION_ORDER_FIELD]
+        if order is not None:
+            order = expect_int(
+                order, error, f"{player_context}.{_DECLARATION_ORDER_FIELD}"
+            )
+        orders.append(order)
+        v1_players.append({name: player[name] for name in _PLAYER_FIELDS})
+    base = parse_policy_input({**raw, "players": v1_players}, error, context)
+    players = tuple(
+        _construct(
+            PlayerPublicState,
+            error,
+            f"{context}.players[{index}]",
+            score=player.score,
+            discards=player.discards,
+            melds=player.melds,
+            riichi=player.riichi,
+            riichi_declaration_discard_order=order,
+        )
+        for index, (player, order) in enumerate(zip(base.players, orders, strict=True))
+    )
+    return _construct(
+        PolicyInput,
+        error,
+        context,
+        self_seat=base.self_seat,
+        round=base.round,
+        players=players,
+        own_hand=base.own_hand,
     )
 
 
