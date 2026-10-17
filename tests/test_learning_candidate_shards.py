@@ -88,7 +88,7 @@ class CandidateShardTests(unittest.TestCase):
         lock = threading.Lock()
         original = module._materialize_shard
 
-        def slow_head(root, summary, shard):
+        def slow_head(root, summary, shard, schema):
             with lock:
                 started.append(summary["game_ordinal"])
             if summary["game_ordinal"] == 0:
@@ -96,7 +96,7 @@ class CandidateShardTests(unittest.TestCase):
                 time.sleep(0.5)
                 with lock:
                     seen_at_head_release.extend(started)
-            return original(root, summary, shard)
+            return original(root, summary, shard, schema)
 
         with (
             mock.patch.object(
