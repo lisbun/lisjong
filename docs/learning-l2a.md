@@ -297,7 +297,7 @@ M1の追加は「不足はデータ量より、C0の守備・打点・役の判�
 |---|---|
 | 合法性 | OFFLINE-EVALの全行 |
 | guardの一致（和了・リーチ・Pass・槓等を選ばない） | WIN / RIICHI / PASS_RESPONSE行と、DISCARD / CALL行で槓・九種九牌を選ばないこと |
-| train-serve一致 | OFFLINE-EVALの全DISCARD / CALL行で、servingの経路で作ったencodingとdatasetの値が一致 |
+| train-serve一致 | OFFLINE-EVALの単一候補行（2.1）を除く全DISCARD / CALL行で、servingの経路で作ったencodingとdatasetの値が一致（単一候補行はdatasetを作らない） |
 | 情報境界 | 候補Policy・Learning runtimeのimport制限testが通る |
 
 ### 5.2 学習の成立（6節で判定に使う）
