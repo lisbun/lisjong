@@ -84,6 +84,8 @@ L2A_DATASET_KIND = "l2a-candidate-scorer-dataset"
 L2A_LABEL_SEMANTICS = "lisjong-l2a-teacher-selected-scorer-candidate-v1"
 """labelは`teacher_selected_action`がcanonical候補順の何番目かを表すindex。"""
 L2A_TRAINING_OBJECTIVE = "per-decision-legal-candidate-softmax-cross-entropy"
+L2A_HELD_OUT_SPLIT = "OFFLINE-EVAL"
+"""凍結後に1回だけ使うsplit。学習にもepoch選択にも使わない（設計3.1節）。"""
 
 MANIFEST_FILENAME = "manifest.json"
 DECISIONS_FILENAME = "decisions.jsonl"
@@ -765,6 +767,7 @@ def read_l2a_dataset(path: str | Path) -> L2aDataset:
 __all__ = [
     "L2A_DATASET_KIND",
     "L2A_DATASET_SCHEMA",
+    "L2A_HELD_OUT_SPLIT",
     "L2A_LABEL_SEMANTICS",
     "L2A_TRAINING_OBJECTIVE",
     "L2aDataset",

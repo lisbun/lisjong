@@ -31,7 +31,11 @@ from lisjong.learning.candidate_training import (
 from lisjong.learning.errors import TrainingError
 from lisjong.learning.features import FEATURE_DIMENSION
 from lisjong.learning.l2a_artifact import LoadedL2aScorerArtifact, write_l2a_artifact
-from lisjong.learning.l2a_dataset import L2A_TRAINING_OBJECTIVE, L2aDataset
+from lisjong.learning.l2a_dataset import (
+    L2A_HELD_OUT_SPLIT,
+    L2A_TRAINING_OBJECTIVE,
+    L2aDataset,
+)
 from lisjong.learning.l2a_model import L2aScorerConfig, build_l2a_scorer_module
 from lisjong.learning.model import require_torch
 from lisjong.learning.training import (
@@ -67,6 +71,10 @@ class L2aTrainingConfig:
             raise ValueError("train_splits and select_splits must not be empty")
         if set(train_splits) & set(select_splits):
             raise ValueError("train_splits and select_splits must be disjoint")
+        if L2A_HELD_OUT_SPLIT in (*train_splits, *select_splits):
+            raise ValueError(
+                f"{L2A_HELD_OUT_SPLIT} must not be used for training or selection"
+            )
         if type(self.epochs) is not int or not 1 <= self.epochs <= MAX_EPOCHS:
             raise ValueError(f"epochs must be an int in 1..{MAX_EPOCHS}")
         if type(self.batch_size) is not int or self.batch_size < 1:

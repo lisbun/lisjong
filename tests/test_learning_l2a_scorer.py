@@ -594,9 +594,59 @@ class ArtifactTests(unittest.TestCase):
                 weights=fixtures.zero_weights(config),
             )
 
+    def test_held_out_split_is_rejected_by_artifact_write_and_load(self) -> None:
+        objective = "per-decision-legal-candidate-softmax-cross-entropy"
+        config = L2aScorerConfig(encoding=ENCODING_M1, hidden_width=64)
+        for field in ("train_splits", "validation_splits"):
+            with self.subTest(field=field):
+                training = fixtures.training_block(
+                    objective=objective, **{field: ["OFFLINE-EVAL"]}
+                )
+                with self.assertRaises(ModelArtifactError):
+                    write_l2a_artifact(
+                        self.root / f"held-out-{field}",
+                        dataset=self.dataset,
+                        model_config=config,
+                        training=training,
+                        weights=fixtures.zero_weights(config),
+                    )
+                self.assertFalse((self.root / f"held-out-{field}").exists())
+
+                self._write(f"valid-{field}")
+                path = self.root / f"valid-{field}"
+                body = fixtures.read_manifest_body(path)
+                body["training"][field] = ["OFFLINE-EVAL"]
+                (path / "manifest.json").write_text(
+                    canonical_json_text(seal(body)), encoding="utf-8", newline="\n"
+                )
+                with self.assertRaises(ModelArtifactError):
+                    load_l2a_artifact(path)
+
     def test_unregistered_width_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             L2aScorerConfig(encoding=ENCODING_M1, hidden_width=128)
+
+
+class TrainingConfigTests(unittest.TestCase):
+    def test_train_and_select_splits_are_accepted(self) -> None:
+        from lisjong.learning.l2a_training import L2aTrainingConfig
+
+        config = L2aTrainingConfig(train_splits=("TRAIN",), select_splits=("SELECT",))
+        self.assertEqual(
+            (config.train_splits, config.select_splits), (("TRAIN",), ("SELECT",))
+        )
+
+    def test_offline_eval_is_rejected_for_training_and_selection(self) -> None:
+        from lisjong.learning.l2a_training import L2aTrainingConfig
+
+        for train, select in (
+            (("TRAIN",), ("OFFLINE-EVAL",)),
+            (("OFFLINE-EVAL",), ("SELECT",)),
+            (("TRAIN", "OFFLINE-EVAL"), ("SELECT",)),
+        ):
+            with self.subTest(train=train, select=select):
+                with self.assertRaises(ValueError):
+                    L2aTrainingConfig(train_splits=train, select_splits=select)
 
 
 class _RecordingScorer:

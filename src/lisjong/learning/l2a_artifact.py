@@ -53,6 +53,7 @@ from lisjong.learning.dataset import feature_block, validate_source_block
 from lisjong.learning.errors import DatasetError, ModelArtifactError
 from lisjong.learning.l2a_dataset import (
     L2A_DATASET_SCHEMA,
+    L2A_HELD_OUT_SPLIT,
     L2A_TRAINING_OBJECTIVE,
     L2aDataset,
     l2a_label_block,
@@ -121,6 +122,13 @@ def _validate_l2a_training(value: object) -> dict[str, object]:
         raise ModelArtifactError("artifact training objective mismatch")
     if not 1 <= training["selected_epoch"] <= training["epochs"]:
         raise ModelArtifactError("artifact selected epoch is outside the epoch budget")
+    if L2A_HELD_OUT_SPLIT in (
+        *training["train_splits"],
+        *training["validation_splits"],
+    ):
+        raise ModelArtifactError(
+            f"artifact used {L2A_HELD_OUT_SPLIT} for training or selection"
+        )
     return training
 
 
