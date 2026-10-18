@@ -92,8 +92,14 @@ sourceで例外0件であることを確かめてから使う（[2.3](#23-教師
 - 上記のどれにも入らない行が出たら、推測で振り分けずfail closedする
 - Ankan / Kakan / 九種九牌は、合法でも打牌などの他の合法手と同時にしか出ないため、該当行はDISCARDに入り、
   guardはそれらを候補から外す。CALL行に同時に出るDaiminkanも反応scorerの候補に入れずguardで外す
-- リーチ宣言後の打牌（宣言牌）とリーチ中のツモ切りは、合法打牌が2つ以上ならDISCARD、1つならFORCED。宣言牌は
-  DISCARDの層（2.5）として別に報告する
+- 分類は必ず上の表どおりに`legal_actions`全体で行う。FORCEDは「合法手が1つ」だけであり、合法打牌が1つでも
+  暗槓・ツモ等が同時に合法なら表の次の行（WIN / DISCARD等）へ進む
+- **単一候補行**：DISCARD / CALL行のうち、guardが槓・九種九牌・Daiminkanを外した後にscorerの候補が1つだけになる行
+  （例：リーチ中で、ツモ切り1つと暗槓が合法）。scorerを呼ばずその候補を返す。学習datasetには入れず、評価では
+  分母から外して件数とguard一致だけを別に集計する。自明な正解で一致率が上がることを防ぐためである。CALL行は
+  Passと1つ以上のChi / Ponを必ず持つため、単一候補行になるのは実際にはDISCARDだけである
+- リーチ宣言後の打牌（宣言牌）は、候補が2つ以上ならDISCARDの層（2.5）として別に報告する。リーチ中のツモ切りは、
+  合法手が1つならFORCED、暗槓等が同時に合法なら単一候補行になる
 - 打牌scorerは全合法打牌を候補にする。L0.2aのsemantic envelope（最小向聴→最大受入→最大2段目）は**使わない**。
   C0は守備・打点・么九整理・route保持で牌効率の順序を破るため、envelopeを掛けるとC0の行動を表現できない。
   牌効率との一致はgateではなく層別の診断（5.3）として測る
@@ -148,6 +154,7 @@ labelどおりに学ぶ。局素点を目的にする後段では、オーラス
 DecisionContext（PolicyInput + legal_actions）
     -> 分類（2.1）
     -> FORCED / WIN / RIICHI / PASS_RESPONSE : 教師規則guard
+    -> 単一候補行（2.1）: その候補
     -> DISCARD : 共有context（#184） + 打牌候補encoding -> 打牌scorer -> argmax（同点はcanonical順）
     -> CALL    : 共有context（#184） + 反応候補encoding -> 反応scorer -> argmax（同点はcanonical順）
     -> decision.legal_actions側のcanonical objectを返す
@@ -176,25 +183,31 @@ DecisionContext（PolicyInput + legal_actions）
 | DISCARD全体 | 20,000 | 100 |
 | DISCARDのC0固有層（TwoStepと不一致） | 2,000 | 80 |
 | CALL全体 | 2,000 | 80 |
-| CALLで教師が鳴いた行 | 300 | 60 |
+| Chiが合法なCALL行 / うち教師がChiを選んだ行 | 1,000 / 300 | 80 / 60 |
+| Ponが合法なCALL行 / うち教師がPonを選んだ行 | 1,000 / 300 | 80 / 60 |
 | オーラス相当局のDISCARD（報告のみ） | 1,000 | 30 |
 | WIN / RIICHI guard | 各30 | — |
 
 - 半荘clusterの区間推定は、半荘をresampling単位とするbootstrap（10,000回、seed固定）で求める。行を独立標本として
   区間を作らない
 - 1半荘に同じ行動が多数あっても、半荘supportは1と数える。下限は行数と半荘supportの両方で判定する
+- Chi / Ponは種別ごとに下限を判定し、足りない種別はその種別だけ判定保留にする。合算の件数で片方の不足を補わない
+- これらの下限は判定を始めるための出発点であり、指標の精度を保証する根拠ではない。精度は半荘cluster bootstrapの
+  区間として報告する
+- 単一候補行（2.1）はどの下限の行数にも数えない
 
 ### 3.3 support計数のpilotと規模の固定
 
 学習の前に、DEVELOPMENT sourceを50半荘生成し（seedは実行計画で決める）、次を数える。
 
 - 分類別・行動別（打牌・リーチ・Chi・Pon・各槓・九種九牌・和了・Pass）の行数と半荘support
-- CALL行のうち教師が鳴いた行、オーラス相当局の行、DISCARDのC0固有層の行
+- CALL行のうちChi / Ponそれぞれが合法な行と教師がそれを選んだ行、オーラス相当局の行、DISCARDのC0固有層の行、
+  単一候補行
 - 教師規則の例外（2.3）
 
 本番の規模は、pilotの1半荘あたりの値から3.2の下限を満たすOFFLINE-EVAL半荘数を求めて決める。初期案は
-TRAIN 600 / SELECT 100 / OFFLINE-EVAL 150半荘とし、OFFLINE-EVALは最大250半荘まで増やせる。250半荘でもCALLの
-下限に届かない見込みなら、CALLの判定を学習前に**判定保留（support不足）**と宣言して進める。黙って除外しない。
+TRAIN 600 / SELECT 100 / OFFLINE-EVAL 150半荘とし、OFFLINE-EVALは最大250半荘まで増やせる。250半荘でもChi / Ponの
+どちらかの下限に届かない見込みなら、その種別の判定を学習前に**判定保留（support不足）**と宣言して進める。黙って除外しない。
 pilotでは一致率などの学習結果を見ない。
 
 ### 3.4 判定保留とSTOP
@@ -228,7 +241,21 @@ score  = output_layer(hidden)
 |---|---|
 | 打牌（M0） | L0.2の`lisjong-offense-l0.2-discard-candidate-encoding-v1`を無変更で使う（牌種・赤・ツモ切り・打牌後向聴・受入・2段目） |
 | 打牌（M1、提案） | M0に次のplayer-safe解析値を加える：リーチ者ごとの現物・確定安全牌（#302）、筋・壁などの公開mechanism危険度、打牌後に残るdora / 赤の枚数、么九・役牌・字牌の区別、副露時のTanyao / Honitsu route向聴（打牌後） |
-| 反応（R1、提案） | 行動種別（Pass / Chi / Pon）、鳴く牌・消費牌、鳴いた後に喰い替え規則内で最良の打牌をした場合の通常向聴とroute向聴、現在向聴との差、役牌の副露・暗刻の有無 |
+| 反応（R1、提案） | 下の「反応候補の値」 |
+
+反応候補の値（R1）。配列の配置は実装Issueで固定するが、値の意味は次で固定する。
+
+- routeは通常形（制限なし）、Tanyao、Honitsu（萬・筒・索の3つ、Chinitsuを含む）の5つ。route向聴は
+  `lisjong.hand_evaluation.shanten.calculate_restricted_standard_shanten`による、route外の牌を浮き牌とする通常形向聴とする。
+  route定義はLearningのfeature moduleが独自に持ち、Policy moduleのprivate定数をimportしない
+- **Chi / Pon候補**：消費牌を除いた手牌から、喰い替え規則で許される打牌をそれぞれ1枚行った手を列挙し、routeごとに
+  **独立した最小値**を取る（routeごとに最小を与える打牌は異なってよい。同じ打牌での評価値には揃えない）
+- **Pass候補**：鳴かない現在の手（打牌前の13枚相当）の各route向聴
+- 共通の値：行動種別one-hot（Pass / Chi / Pon）、鳴く牌の牌種と赤、消費牌、各routeの値とPass候補の値との差、
+  その鳴きで役牌の刻子ができるか、自席に役牌の副露・暗刻があるか。Pass候補では鳴く牌・消費牌の欄を0にする
+- **routeが成立しない場合**（既存の副露・鳴く牌・消費牌がそのrouteと矛盾する。例：么九牌を含む副露とTanyao）は、
+  そのrouteの成立maskを0、値を0にする。成立しない場合を大きな向聴で代用しない。差の欄も、どちらかが不成立なら
+  maskを0、値を0にする
 
 M1・R1の値は、C0が規則で参照する情報の族（守備・打点・役のroute）をplayer-safeな解析値として渡すものである。
 値を渡すだけで、制約（envelope）にはしない。C0の内部値（`GameSituationMode`、危険度の順位、選択branch）は渡さない。
@@ -236,7 +263,8 @@ M1・R1の値は、C0が規則で参照する情報の族（守備・打点・�
 
 #442の校正（record200、DEVELOPMENT、M0相当のencoding）では、C0教師に対するSELECTの打牌top-1は65.16%だった。
 M1の追加は「不足はデータ量より、C0の守備・打点・役の判断に使われる情報がencodingに無いこと」という仮説である。
-データ量だけでは解消すると仮定しないため、同じデータでM0とM1を比べる。
+データ量だけでは解消すると仮定しないため、同じデータでM0とM1を比べる。この比較で分かるのは**追加した特徴量一式**の
+効果であり、現物・危険度・ドラ等それぞれの寄与ではない。個別の寄与は必要になったら別Issueで調べる。
 
 ### 4.3 学習目的と選択
 
@@ -278,8 +306,10 @@ M1の追加は「不足はデータ量より、C0の守備・打点・役の判�
 |---|---|---|
 | DISCARD | 打牌一致率 | 学習器と教師の打牌が同じ牌（牌種と赤の有無）。ツモ切り / 手出しの区別は診断として別に報告 |
 | DISCARD | C0固有層の一致率 | C0固有層（2.5）での打牌一致率 |
-| CALL | 鳴く/鳴かないのbalanced accuracy | 教師が鳴いた行の再現率と、鳴かなかった行の再現率の平均 |
-| CALL | 鳴き行動の一致率 | 教師が鳴いた行のうち、学習器が同じ行動（同じ種別・消費牌）を選んだ割合 |
+| CALL（Chi / Ponごと） | 種別Tのbalanced accuracy | Tが合法なCALL行で、「教師がTを選んだ行で学習器もTを選んだ割合」と「教師がTを選ばなかった行で学習器もTを選ばなかった割合」の平均 |
+| CALL（Chi / Ponごと） | 種別Tの鳴き行動の一致率 | 教師がTを選んだ行のうち、学習器が同じ行動（同じ種別・消費牌）を選んだ割合 |
+
+CALL全体（Chi / Pon合算）の鳴く/鳴かないのbalanced accuracyと鳴き行動の一致率は、診断として報告する。
 
 ### 5.3 診断（判定に使わない）
 
@@ -296,16 +326,21 @@ M1の追加は「不足はデータ量より、C0の守備・打点・役の判�
 ## 6. 成立条件（OFFLINE-EVAL、結果を見る前に固定）
 
 5.1がすべて1.000で、3.2のsupportを満たした行動について、次で判定する。区間は半荘cluster bootstrapの95%区間。
+**「≥ 0.85」は点推定、「区間下限」と書いたものは95%区間の下限**で判定する（区間は全指標で報告する）。
+閾値は今回の探索的な成立目標であり、0.85 / 0.40という値そのものに外部の根拠はない。
 
 | 行動 | ESTABLISHED（成立）の条件 |
 |---|---|
-| DISCARD | (1) M1の打牌一致率 ≥ 0.85、(2) M1のC0固有層の一致率がB-TSより高い（B-TSは定義上0なので、区間下限 ≥ 0.40）、(3) M1−M0の打牌一致率の差（半荘単位の対）の区間下限 > 0 |
-| CALL | (1) R1のbalanced accuracy ≥ 0.85（B-PASSは0.50）、(2) R1の鳴き行動の一致率 ≥ 0.85 |
+| DISCARD | (1) M1の打牌一致率 ≥ 0.85（点推定）、(2) M1のC0固有層の一致率の区間下限 ≥ 0.40（B-TSは定義上0）、(3) M1−M0の打牌一致率の差（半荘単位の対）の区間下限 > 0 |
+| Chi | (1) R1のChiのbalanced accuracy ≥ 0.85（点推定。B-PASSは0.50）、(2) R1のChiの鳴き行動の一致率 ≥ 0.85（点推定） |
+| Pon | (1) R1のPonのbalanced accuracy ≥ 0.85（点推定。B-PASSは0.50）、(2) R1のPonの鳴き行動の一致率 ≥ 0.85（点推定） |
 
 - 各行動について、全条件を満たせばESTABLISHED、(1)を満たさなければNOT ESTABLISHED、(1)は満たすが他の条件を
   満たさなければPARTIAL（記録上の区別。成立とは呼ばない）
 - DISCARDの(3)だけを満たさない場合は「C0の打牌は学べたが、encoding追加の効果は示せない」と記録する
-- 全体の結論は行動別の結果の組で書き、2.2の表を必ず付ける。DISCARDとCALLの両方がESTABLISHEDのときだけ
+- CALLはChiとPonの両方がESTABLISHEDのときだけ「鳴き判断の蒸留が成立」と呼ぶ。片方だけなら「Ponの鳴き判断は成立、
+  Chiは判定保留」のように種別ごとに書き、CALL全体の成立とは呼ばない
+- 全体の結論は行動別の結果の組で書き、2.2の表を必ず付ける。DISCARD・Chi・PonがすべてESTABLISHEDのときだけ
   「L2a: C0の打牌・鳴き判断の蒸留が成立」と呼ぶ
 - 閾値の根拠：L0.2（TwoStep教師）の打牌top-1は0.854、#442（C0教師、200半荘、M0相当）のSELECT top-1は0.652だった。
   0.85は「TwoStep教師を模倣したときの水準をC0教師でも出せる」ことを、0.40は「C0固有の判断の少なくとも
@@ -334,10 +369,10 @@ M1の追加は「不足はデータ量より、C0の守備・打点・役の判�
 | 項目 | 見積り |
 |---|---|
 | CPU | 850 × 約285 s + pilot 50半荘（生成・replay 約185 s/半荘）+ 動作確認16半荘 ≈ 約70 vCPU-h |
-| 費用（AWS） | 4 vCPUへ詰めた下限で約USD 4.7（USD 0.0673/vCPU-h）。#442ではwallがCPU下限の約1.3倍だったため、約USD 6を上限の目安とする。OFFLINE-EVALを250半荘にすると約USD 7 |
+| 費用（AWS） | 4 vCPUへ詰めた下限で約USD 4.7（USD 0.0673/vCPU-h）。#442ではwallがCPU下限の約1.3倍だったため、概算で約USD 6、OFFLINE-EVALを250半荘にすると約USD 7。上限ではなく、M1 / R1の処理時間・RSSを実装Issueで実測した後に更新する |
 | wall | m7i.xlargeで約18〜23 h。vCPUの多い型なら比例して短くなる（型と単価は実行計画で確認） |
-| RSS | 変換はworker数で決まり半荘数に依存しない（#247 / #248、workerあたり約50 MiB）。学習は全件読込みで候補学習約6 MiB/半荘 → 850半荘で約5 GiB。16 GiB機に収まる |
-| 保存 | source archive約69 KB/半荘（gzip）→ 約60 MB、保存費は無視できる。dataset（約4.5 MB/半荘 → 約4 GB）は既定では保存せず、sourceから再生成する |
+| RSS | 変換はworker数で決まり半荘数に依存しない（#247 / #248、workerあたり約50 MiB）。学習は全件読込みで、旧候補学習の約6 MiB/半荘を当てると850半荘で約5 GiB。M1はcandidateあたりの次元が増えるため、実装Issueで実測して改訂する |
+| 保存 | source archive約69 KB/半荘（gzip）→ 約60 MB、保存費は無視できる。datasetは既定では保存せず、sourceから再生成する。#442の4.54 MB/半荘は旧BC＋旧候補datasetの合計であり、M0＋M1＋R1の容量には使えない。M0は旧候補と同じencodingなので約3.0 MB/半荘、M1・R1は未計測で、実装Issueで実測する |
 | 回収 | source archive・`evidence.json`・replay summary・dataset / artifactのmanifest・artifact（weights含む）・評価report・環境記録。datasetは回収しない |
 
 - 月USD 20は既支出込みであり、C0生成・Learningの暫定枠はUSD 8（#84）。当月の支出（例：arena #503の上限見積り
@@ -360,8 +395,8 @@ M1の追加は「不足はデータ量より、C0の守備・打点・役の判�
 | 分割 | 半荘単位、TRAIN / SELECT / OFFLINE-EVAL、pilotは別seed |
 | モデル | L0.2形の小MLP、幅{64, 256}、weights.f32、Rustで推論できる規模 |
 | baseline | B-TS、B-PASS、M0 |
-| 成立条件 | 6節。support不足は判定保留 |
-| 規模・費用 | 初期案850半荘、約70 vCPU-h、AWSなら約USD 5〜7。実行前に当月残額を確認 |
+| 成立条件 | 6節（DISCARD・Chi・Ponを別に判定）。0.85は点推定、0.40は95%区間下限。support不足は種別ごとに判定保留 |
+| 規模・費用 | 初期案850半荘、約70 vCPU-h、AWSなら概算USD 5〜7（M1 / R1の実測後に更新）。実行前に当月残額を確認 |
 
 ## 9. 担当と後続Issue
 
