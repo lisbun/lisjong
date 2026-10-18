@@ -31,7 +31,7 @@ retained_dora           1  打牌後の純手牌のドラ枚数（表示牌の�
 retained_red            1  打牌後の純手牌の赤5枚数 / 3
 tile_class              3  么九（数牌の1・9）、字牌、役牌の翻数（連風牌は2）/ 2
 open_route_<r>          2  r = Tanyao / Honitsu萬 / 筒 / 索。副露時（暗槓以外の副露あり）
-  x 4                      かつ既存の副露がrouteと矛盾しないときmask 1と打牌後のroute向聴 / 8。
+  x 4                      かつ既存の副露がrouteと矛盾しないときmask 1と打牌後のroute向聴 / 13。
                            それ以外はmask 0・値0
 ```
 
@@ -46,8 +46,8 @@ called_red           1  鳴く牌が赤5
 consumed_tile_type  34  消費牌の牌種ごとの枚数 / 2（Passは0）
 consumed_red         1  消費牌の赤5枚数
 route_<r>            4  r = 通常 / Tanyao / Honitsu萬 / 筒 / 索。
-  x 5                   成立mask、route向聴 / 8、差の成立mask、
-                        (route向聴 - Pass候補のroute向聴) / 8
+  x 5                   成立mask、route向聴 / 13、差の成立mask、
+                        (route向聴 - Pass候補のroute向聴) / 13
 yakuhai_triplet      1  その鳴きで役牌の刻子ができる（役牌のPon）
 own_yakuhai          1  自席に役牌の副露（Pon・槓）または純手牌の暗刻がある（判断で共通）
 ```
@@ -111,9 +111,10 @@ M1_ENCODING_IDENTITY = "lisjong-l2a-discard-candidate-encoding-m1-v1"
 R1_ENCODING_IDENTITY = "lisjong-l2a-reaction-candidate-encoding-r1-v1"
 
 TILE_TYPE_AXIS_SIZE = 34
-ROUTE_SHANTEN_SCALE = 8.0
-MAX_ROUTE_SHANTEN = 8
-"""13枚以下の純手牌の通常形向聴の物理上限。範囲外はfail closedする。"""
+ROUTE_SHANTEN_SCALE = 13.0
+MAX_ROUTE_SHANTEN = 13
+"""route向聴の上限。route外の牌は浮き牌なので、使える牌が無い14枚の手で13になる
+（通常形の上限8より大きい）。範囲外はfail closedする。"""
 REMAINING_SCALE = 4.0
 DISCARD_DORA_SCALE = 4.0
 RETAINED_DORA_SCALE = 8.0

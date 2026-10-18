@@ -390,7 +390,17 @@ class R1EncodingTests(unittest.TestCase):
                 calculate_restricted_standard_shanten(hand, route.usable_tile_types)
                 for hand in hands
             )
-            self.assertEqual(vector[base + 1], expected / 8)
+            self.assertEqual(vector[base + 1], expected / 13)
+
+    def test_route_shanten_above_the_standard_bound_is_encodable(self) -> None:
+        # 么九牌と字牌だけの手はTanyaoで使える牌が無く、route向聴が8を超える。
+        hand = cf.hand("19m19p19s1234567z")
+        tanyao = encoding_module._TANYAO_ROUTE.usable_tile_types
+        self.assertGreater(encoding_module._route_shanten(hand, tanyao), 8)
+        decision = _call("19m19p9s11234567z", _pon("1z"))
+        passed = ENCODING_R1.encode(decision).vectors[0]
+        base = R1_BLOCK_OFFSETS["route_tanyao"]
+        self.assertGreater(passed[base + 1], 8 / 13)
 
     def test_kuikae_rules(self) -> None:
         forbidden = encoding_module._kuikae_forbidden
