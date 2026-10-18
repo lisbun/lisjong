@@ -27,6 +27,12 @@ python -m lisjong.learning verify-candidate-artifact --artifact <artifact>
 python -m lisjong.learning evaluate-candidate-scorer     --artifact <artifact> --source-record <source-record> --split OFFLINE-EVAL
 ```
 
+Issue #315のL2a support計数（設計`docs/learning-l2a.md` 2.3・3.3節）。
+
+```text
+python -m lisjong.learning l2a-source-support --source-record <source-record>
+```
+
 `train` / `train-candidate-scorer` / `evaluate-candidate-scorer`だけがoptional
 ML runtimeを必要とする。dataset materializationとartifact検証はML runtimeなしで
 実行できる。
@@ -54,6 +60,7 @@ from lisjong.learning.candidate_training import (
 )
 from lisjong.learning.dataset import publish_dataset, read_dataset
 from lisjong.learning.errors import LearningError
+from lisjong.learning.l2a_support import count_source_support
 from lisjong.learning.model import ModelConfig
 from lisjong.learning.source_record import open_source_record, read_source_record
 from lisjong.learning.training import BehaviorCloningConfig, train_behavior_cloning
@@ -141,6 +148,12 @@ def _build_parser() -> argparse.ArgumentParser:
     candidate_evaluate.add_argument("--artifact", required=True)
     candidate_evaluate.add_argument("--source-record", required=True)
     candidate_evaluate.add_argument("--split", required=True, action="append")
+
+    l2a_support = commands.add_parser(
+        "l2a-source-support",
+        help="count L2a decision kinds, action support and teacher-rule exceptions",
+    )
+    l2a_support.add_argument("--source-record", required=True)
 
     return parser
 
@@ -265,6 +278,11 @@ def _evaluate_candidates(arguments) -> dict[str, object]:
     }
 
 
+def _l2a_source_support(arguments) -> dict[str, object]:
+    # gameを1つずつ読み、保持する判断を半荘数から切り離す。
+    return count_source_support(open_source_record(arguments.source_record))
+
+
 def _emit(summary: dict[str, object]) -> None:
     """summaryをUTF-8のcanonical JSONとしてstdoutへ書く。
 
@@ -291,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         "train-candidate-scorer": _train_candidates,
         "verify-candidate-artifact": _verify_candidates,
         "evaluate-candidate-scorer": _evaluate_candidates,
+        "l2a-source-support": _l2a_source_support,
     }
     try:
         summary = handlers[arguments.command](arguments)
