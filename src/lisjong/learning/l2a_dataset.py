@@ -745,6 +745,51 @@ def verify_l2a_dataset(path: str | Path) -> dict[str, object]:
     return manifest
 
 
+@dataclass(frozen=True, slots=True)
+class L2aPayloadRow:
+    """1 scorer判断のrowと、そのshared context / 候補vectorのfloat32 bytes。"""
+
+    row: L2aDecisionRow
+    context: bytes
+    candidates: bytes
+
+
+def read_l2a_dataset_manifest(path: str | Path) -> dict[str, object]:
+    """manifestとpayloadのbyte長・digestを照合し、manifestを返す。"""
+    manifest, _encoding = _open_checked(Path(path))
+    return manifest
+
+
+def iter_l2a_dataset_payload(
+    path: str | Path, *, splits: tuple[str, ...]
+) -> Iterator[L2aPayloadRow]:
+    """指定splitのrowとpayload bytesを、全体を保持せずsource順に列挙する。
+
+    OFFLINE-EVALのtrain-serve一致（設計5.1節）で、servingの経路で作った値と
+    byte単位で照合するために使う。rowの勘定照合は最後まで列挙したときに行う。
+    """
+    root = Path(path)
+    manifest, encoding = _open_checked(root)
+    selected = frozenset(splits)
+    context_bytes = FEATURE_DIMENSION * _FLOAT32_BYTES
+    candidate_bytes = encoding.dimension * _FLOAT32_BYTES
+    with (
+        (root / CONTEXT_FILENAME).open("rb") as context,
+        (root / CANDIDATES_FILENAME).open("rb") as candidates,
+    ):
+        rows = _iter_rows(root / DECISIONS_FILENAME, manifest, encoding)
+        for index, row in enumerate(rows):
+            if row.split not in selected:
+                continue
+            context.seek(index * context_bytes)
+            candidates.seek(row.candidate_offset * candidate_bytes)
+            yield L2aPayloadRow(
+                row=row,
+                context=context.read(context_bytes),
+                candidates=candidates.read(row.candidate_count * candidate_bytes),
+            )
+
+
 def read_l2a_dataset(path: str | Path) -> L2aDataset:
     """L2a dataset directoryをstrict readする。1つでも合わなければfail closed。"""
     root = Path(path)
@@ -772,9 +817,12 @@ __all__ = [
     "L2A_TRAINING_OBJECTIVE",
     "L2aDataset",
     "L2aDecisionRow",
+    "L2aPayloadRow",
+    "iter_l2a_dataset_payload",
     "l2a_label_block",
     "publish_l2a_dataset",
     "read_l2a_dataset",
+    "read_l2a_dataset_manifest",
     "resolve_teacher_index",
     "verify_l2a_dataset",
 ]

@@ -359,6 +359,22 @@ CALL全体（Chi / Pon合算）の鳴く/鳴かないのbalanced accuracyと鳴�
   0.85は「TwoStep教師を模倣したときの水準をC0教師でも出せる」ことを、0.40は「C0固有の判断の少なくとも
   一部を再現する」ことを求める値である。結果を見た後に変えない
 
+### 6.1 評価tool（#317）
+
+`python -m lisjong.learning l2a-offline-eval`（`lisjong.learning.l2a_offline_eval`）が5節と6節を1回の実行で
+判定する。閾値・support下限・bootstrap（10,000回、seed 317、percentile区間）・層は
+`lisjong.learning.l2a_offline_gate.L2A_OFFLINE_GATE`（identity `lisjong-l2a-offline-eval-gate-v1`）に固定し、
+reportにそのdigestを含める。本書の表から実装で次のとおり具体化した。
+
+- 「CALL全体」の下限（3.2）はChi・Ponの両方の判定に要求する。WIN / RIICHIの各30行を下回るときは
+  guardの正しさを確かめられないため、全行動を判定保留にする
+- train-serve一致は、M1・M0・R1のdatasetの値とservingの経路で再encodeした値（候補順、教師index、
+  shared context、候補vector）のfloat32 byte一致で数える
+- 層の向聴は、DISCARDは打牌前、CALLは鳴く前の純手牌の向聴とし、和了形（-1）は0に含める
+- `--ledger`のdirectoryへ、OFFLINE-EVALを読む前に評価ごとのentryを新規作成する。同じartifact
+  （M1 / M0 / R1のどれか）のentryが既にあれば指標を計算せずSTOP / INVALIDにする。途中で失敗した
+  評価のentryも残るため、再実行も2回目として扱う。identityが合わない場合はentryを作らずSTOPにする
+
 ## 7. 時間・RSS・費用・保存の見積り
 
 根拠はarena #442の訂正済み計測（[校正結果](https://github.com/lisbun/lisjong-arena/issues/442#issuecomment-5979691377)、
