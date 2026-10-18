@@ -575,6 +575,19 @@ class CollectTests(_SourceCase):
         self.assertEqual(counts["call.r1.match"], 1)
         self.assertNotIn("call.b_pass.match", counts)
         self.assertEqual(tally.diagnostics["scores"]["r1"]["rows"], 2)
+        # serving呼出しの中で、候補encoding・shared context・forwardを分けて測る。
+        runtime = tally.diagnostics["runtime"]
+        for kind in ("discard", "call"):
+            self.assertEqual(
+                set(runtime[kind]),
+                {"candidate_encoding", "decide", "forward", "shared_context"},
+            )
+        self.assertEqual(set(runtime["win"]), {"decide"})
+        result = _policy().decide(cf.discard_decision(cf.SECOND_NEAR_HAND))
+        self.assertEqual(
+            set(result.timings_ms), {"candidate_encoding", "forward", "shared_context"}
+        )
+        self.assertIsNone(_policy().decide(cf.tsumo_decision()).timings_ms)
 
         report = judge_l2a_offline_eval(tally)
         self.assertEqual(report["outcome"], EVALUATED)
@@ -668,21 +681,27 @@ class LedgerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
-    def _record(self, artifacts):
+    def _record(self, artifacts, source="s"):
         return record_offline_evaluation(
             self.ledger,
             artifacts=artifacts,
             datasets={"m1": "d1"},
-            source_identity="s" * 64,
+            source_identity=source * 64,
         )
 
-    def test_second_use_of_an_artifact_is_detected(self) -> None:
+    def test_second_use_of_a_source_is_detected_even_with_new_artifacts(self) -> None:
         first, prior = self._record({"m1": "a", "m0": "b", "r1": "c"})
         self.assertEqual((first, prior), ("offline-eval-0001.json", []))
-        other, prior = self._record({"m1": "x", "m0": "y", "r1": "z"})
+        second, prior = self._record({"m1": "x", "m0": "y", "r1": "z"})
+        self.assertEqual(second, "offline-eval-0002.json")
+        self.assertEqual([item["entry"] for item in prior], [first])
+
+    def test_second_use_of_an_artifact_is_detected_across_sources(self) -> None:
+        first, _ = self._record({"m1": "a", "m0": "b", "r1": "c"})
+        other, prior = self._record({"m1": "x", "m0": "y", "r1": "z"}, source="t")
         self.assertEqual(prior, [])
-        second, prior = self._record({"m1": "a2", "m0": "y2", "r1": "c"})
-        self.assertEqual(second, "offline-eval-0003.json")
+        third, prior = self._record({"m1": "a2", "m0": "y2", "r1": "c"}, source="u")
+        self.assertEqual(third, "offline-eval-0003.json")
         self.assertEqual([item["entry"] for item in prior], [first])
         self.assertEqual(len(list(self.ledger.iterdir())), 3)
 
@@ -759,6 +778,20 @@ class RunTests(_SourceCase):
         self.assertEqual(
             report["evaluation"]["ledger"]["entry"], "offline-eval-0002.json"
         )
+
+    def test_retrained_artifacts_cannot_reuse_the_same_offline_eval(self) -> None:
+        # 先の評価はM1 / M0 / R1とも別のartifact（全再学習）だが、sourceは同じ。
+        record_offline_evaluation(
+            self.ledger,
+            artifacts={name: "0" * 64 for name in ("m1", "m0", "r1")},
+            datasets={},
+            source_identity=self.source.identity,
+        )
+        report = self._run()
+        self.assertEqual(report["outcome"], INVALID)
+        self.assertIn("already evaluated", report["stop_reasons"][0])
+        self.assertNotIn("metrics", report)
+        self.assertNotIn("correctness", report)
 
     @unittest.skipUnless(_HAS_TORCH, "requires the optional ML runtime")
     def test_cli_evaluates_once_then_stops(self) -> None:

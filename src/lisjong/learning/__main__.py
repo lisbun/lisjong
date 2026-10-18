@@ -44,7 +44,8 @@ python -m lisjong.learning verify-l2a-artifact --artifact <artifact>
 ```
 
 Issue #317のL2a OFFLINE-EVAL（設計5・6節）。凍結後に1回だけ実行する。`--ledger`は
-評価の記録を置くdirectoryで、同じartifactの2回目の評価をSTOP / INVALIDにする。
+評価の記録を置くdirectoryで、L2a実験を通じて同じdirectoryを使う。同じsourceの
+OFFLINE-EVAL、または同じartifactの2回目の評価をSTOP / INVALIDにする。
 
 ```text
 python -m lisjong.learning l2a-offline-eval --source-record <source-record> \

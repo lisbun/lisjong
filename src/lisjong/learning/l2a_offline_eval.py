@@ -16,10 +16,13 @@ ledgerの照合と記録（同じartifactの評価が既にあればSTOP / INVAL
     -> 半荘別・層別の数 -> 凍結したgateで判定
 ```
 
-ledgerは評価の記録を置くdirectoryで、OFFLINE-EVALを読む前に1評価につき1つの
-entryを新規作成する。同じartifact identity（M1 / M0 / R1のどれか）を含むentryが
-既にあれば、その評価はOFFLINE-EVALの2回目の使用であり、指標を計算せずSTOP / INVALID
-にする（設計3.4節）。途中で失敗した評価のentryも残るため、再実行も2回目として検出する。
+ledgerは評価の記録を置くdirectoryで、1つのL2a実験を通じて同じdirectoryを使う。
+OFFLINE-EVALを読む前に1評価につき1つのentryを新規作成する。同じsource identityの
+OFFLINE-EVALを使ったentry、または同じartifact identity（M1 / M0 / R1のどれか）を
+含むentryが既にあれば、その評価はOFFLINE-EVALの2回目の使用であり、指標を計算せず
+STOP / INVALIDにする（設計3.4・4.5節）。artifactをすべて再学習しても同じsourceの
+OFFLINE-EVALは再利用できない。途中で失敗した評価のentryも残るため、再実行も2回目として
+検出する。
 
 B-TSとC0固有層の判定に`TwoStepUkeirePolicy`を同じPolicyInputとlegal actionsで
 再実行する。これはofflineの比較であり、L2aのserving経路では使わない。
@@ -248,7 +251,9 @@ class _Collector:
         self.exceptions = 0
         self.scores = {name: _ScoreDiagnostics() for name in self.encodings}
         self.decide_ms: dict[str, list[float]] = defaultdict(list)
-        self.build_ms: dict[str, list[float]] = defaultdict(list)
+        self.stage_ms: dict[str, dict[str, list[float]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
 
     def run(self, source) -> L2aOfflineTally:
         for game in _offline_games(source):
@@ -275,8 +280,11 @@ class _Collector:
             diagnostics={
                 "runtime": {
                     kind: {
-                        "candidate_build": _runtime_summary(self.build_ms[kind]),
                         "decide": _runtime_summary(self.decide_ms[kind]),
+                        **{
+                            stage: _runtime_summary(values)
+                            for stage, values in sorted(self.stage_ms[kind].items())
+                        },
                     }
                     for kind in sorted(self.decide_ms)
                 },
@@ -295,6 +303,8 @@ class _Collector:
         started = time.perf_counter()
         result = self.proposed.decide(context)
         self.decide_ms[kind.value].append((time.perf_counter() - started) * 1000.0)
+        for stage, value in (result.timings_ms or {}).items():
+            self.stage_ms[kind.value][stage].append(value)
         action = result.action
 
         self.decisions += 1
@@ -319,14 +329,14 @@ class _Collector:
             return
         position = (row.game_ordinal, row.decision_ordinal)
         if kind is L2aDecisionKind.DISCARD:
-            self._train_serve("m1", context, teacher, position, timed=kind)
+            self._train_serve("m1", context, teacher, position)
             self._train_serve("m0", context, teacher, position)
             self._discard(context, result, teacher, counts)
         else:
-            self._train_serve("r1", context, teacher, position, timed=kind)
+            self._train_serve("r1", context, teacher, position)
             self._call(context, result, teacher, counts)
 
-    def _train_serve(self, name, context, teacher, position, timed=None) -> None:
+    def _train_serve(self, name, context, teacher, position) -> None:
         payload = next(self.payloads[name], None)
         if (
             payload is None
@@ -340,11 +350,8 @@ class _Collector:
                 f"{name} dataset does not hold the scorer decision at game "
                 f"{position[0]} decision {position[1]}"
             )
-        started = time.perf_counter()
         encoded = self.encodings[name].encode(context)
         shared = build_player_safe_feature(context.input)
-        if timed is not None:
-            self.build_ms[timed.value].append((time.perf_counter() - started) * 1000.0)
         try:
             teacher_index = resolve_teacher_index(encoded.actions, teacher)
         except DatasetError:
@@ -477,10 +484,11 @@ def record_offline_evaluation(
     datasets: Mapping[str, str],
     source_identity: str,
 ) -> tuple[str, list[dict[str, object]]]:
-    """評価のentryを新規作成し、(entry名, 同じartifactを含む過去のentry)を返す。
+    """評価のentryを新規作成し、(entry名, 使用済みと判定した過去のentry)を返す。
 
-    既存entryは書き換えない。過去のentryが1つでもあれば、この評価は
-    OFFLINE-EVALの2回目以降の使用である。
+    同じsource identityの同じsplitを評価したentry、または同じartifact identityを
+    含むentryを使用済みとする。既存entryは書き換えない。過去のentryが1つでもあれば、
+    この評価はOFFLINE-EVALの2回目以降の使用である。
     """
     root = Path(ledger)
     if not root.is_dir():
@@ -488,7 +496,13 @@ def record_offline_evaluation(
     entries = _read_ledger(root)
     identities = set(artifacts.values())
     prior = [
-        entry for entry in entries if identities & set(entry["artifacts"].values())
+        entry
+        for entry in entries
+        if (
+            entry["source_identity"] == source_identity
+            and entry["split"] == L2A_OFFLINE_SPLIT
+        )
+        or identities & set(entry["artifacts"].values())
     ]
     sequence = 1 + max((entry["sequence"] for entry in entries), default=0)
     name = f"{LEDGER_ENTRY_PREFIX}{sequence:04d}.json"
@@ -591,8 +605,8 @@ def run_l2a_offline_eval(
     provenance["ledger"] = {"entry": entry, "prior_evaluations": prior}
     if prior:
         reason = (
-            f"{L2A_OFFLINE_SPLIT} was already evaluated for these artifacts: "
-            + ", ".join(item["entry"] for item in prior)
+            f"{L2A_OFFLINE_SPLIT} of this source or these artifacts was already "
+            "evaluated: " + ", ".join(item["entry"] for item in prior)
         )
         return {**judge_l2a_offline_eval(None, [reason]), "evaluation": provenance}
 

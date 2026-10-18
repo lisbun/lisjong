@@ -371,9 +371,13 @@ reportにそのdigestを含める。本書の表から実装で次のとおり�
 - train-serve一致は、M1・M0・R1のdatasetの値とservingの経路で再encodeした値（候補順、教師index、
   shared context、候補vector）のfloat32 byte一致で数える
 - 層の向聴は、DISCARDは打牌前、CALLは鳴く前の純手牌の向聴とし、和了形（-1）は0に含める
-- `--ledger`のdirectoryへ、OFFLINE-EVALを読む前に評価ごとのentryを新規作成する。同じartifact
-  （M1 / M0 / R1のどれか）のentryが既にあれば指標を計算せずSTOP / INVALIDにする。途中で失敗した
-  評価のentryも残るため、再実行も2回目として扱う。identityが合わない場合はentryを作らずSTOPにする
+- `--ledger`のdirectoryは1つのL2a実験を通じて同じ保存先を使う。OFFLINE-EVALを読む前に評価ごとの
+  entryを新規作成し、同じsource identityのOFFLINE-EVALを使ったentry、または同じartifact
+  （M1 / M0 / R1のどれか）のentryが既にあれば指標を計算せずSTOP / INVALIDにする。artifactを
+  すべて再学習しても同じsourceのOFFLINE-EVALは再利用できない（4.5）。途中で失敗した評価の
+  entryも残るため、再実行も2回目として扱う。identityが合わない場合はentryを作らずSTOPにする
+- 推論時間は、合成Policyのserving呼出しの中で候補encoding・shared context（#184）・forward
+  （scorer実行）を分けて測り、判断全体（分類・guardを含む）の時間と並べて報告する
 
 ## 7. 時間・RSS・費用・保存の見積り
 
