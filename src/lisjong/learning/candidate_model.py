@@ -131,9 +131,15 @@ def build_scorer_module(
     `weights`を渡した場合、`parameter_layout()`の順序でそのままcopyする。
     任意codeやoptimizer stateは復元しない。
     """
-    torch = require_torch()
     if not isinstance(config, CandidateScorerConfig):
         raise TypeError("config must be a CandidateScorerConfig")
+    return _build_module(config, weights)
+
+
+def _build_module(config, weights: Sequence[float] | None):
+    """`context_dimension` / `candidate_dimension` / `hidden_width` /
+    `parameter_layout()`を持つconfigからmoduleを構築する（L2aと共有する）。"""
+    torch = require_torch()
     module = torch.nn.ModuleDict(
         {
             "context_layer": torch.nn.Linear(
