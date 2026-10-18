@@ -259,7 +259,20 @@ score  = output_layer(hidden)
 
 M1・R1の値は、C0が規則で参照する情報の族（守備・打点・役のroute）をplayer-safeな解析値として渡すものである。
 値を渡すだけで、制約（envelope）にはしない。C0の内部値（`GameSituationMode`、危険度の順位、選択branch）は渡さない。
-オーラスmodeは共有contextの公開score・局・本場から学ぶ。encodingの具体的なlayout・identityは実装Issueで固定する。
+オーラスmodeは共有contextの公開score・局・本場から学ぶ。
+
+固定したidentityと次元（#316）は次のとおり。layoutの正本は`lisjong.learning.l2a_encoding`のmodule docstringである。
+
+| encoding | identity | 次元 |
+|---|---|---:|
+| M0 | `lisjong-offense-l0.2-discard-candidate-encoding-v1`（L0.2と同一） | 53 |
+| M1 | `lisjong-l2a-discard-candidate-encoding-m1-v1`（M0 + 解析値37次元） | 90 |
+| R1 | `lisjong-l2a-reaction-candidate-encoding-r1-v1` | 95 |
+
+- route向聴はroute外の牌を浮き牌とするため、使える牌が無い手では13まで大きくなる（通常形の上限8を超える）。
+  scaleは13とする
+- 喰い替え規則は、鳴いた牌と同じ牌種、およびChiで鳴いた牌が順子の端のときの反対側の牌種を、鳴いた直後に切れない牌とする
+- datasetは全行で教師規則の例外（2.3）を確かめ、1件でもあればfail closedする
 
 #442の校正（record200、DEVELOPMENT、M0相当のencoding）では、C0教師に対するSELECTの打牌top-1は65.16%だった。
 M1の追加は「不足はデータ量より、C0の守備・打点・役の判断に使われる情報がencodingに無いこと」という仮説である。
@@ -359,20 +372,36 @@ CALL全体（Chi / Pon合算）の鳴く/鳴かないのbalanced accuracyと鳴�
 | C0生成 | 92.0 | #442実測 |
 | 全件replay-verify | 93.2 | #442実測 |
 | 打牌dataset（M0） | 28〜32 | #442の推定処理量 |
-| 打牌dataset（M1） | 約60（仮置き） | M0に解析値を加えるため2倍と置く。実装Issueで実測して改訂する |
-| 反応dataset（R1） | 約5（仮置き） | CALL行は全体の1割未満で、候補も少ない。実装Issueで実測 |
+| 打牌dataset（M1） | 29〜33 | #316実測でM1 / M0 = 1.02（下記）。M0の値に比を掛けた |
+| 反応dataset（R1） | 約1 | #316実測でR1 / M0 = 0.03（下記） |
 | 学習（幅2つ×20 epoch、3モデル） | 約2 | #442の候補学習0.23 s/半荘を3モデル×2幅で概算 |
-| 計 | 約280〜290 | |
+| 計 | 約245〜255 | |
+
+実測（#316。arena#505のpilot source 50半荘・34,299判断、DEVELOPMENT、rust backend、WSL2・Intel Core Ultra 7 258V、
+各encodingを`--workers 1`で1 processずつ並行に実行）。pilot sourceは計測にだけ使い、学習・評価はしていない。
+
+| encoding | CPU秒/半荘 | 変換のmax RSS | dataset容量/半荘 | 読込み+tensor化のRSS増分/半荘 |
+|---|---:|---:|---:|---:|
+| M0 | 16.8 | 61 MiB | 2.46 MB | 5.8 MiB |
+| M1 | 17.1 | 61 MiB | 3.26 MB | 7.9 MiB |
+| R1 | 0.52 | 56 MiB | 0.35 MB | 0.9 MiB |
+
+- 258VはPコアとEコアの混成で、WSLからは実行コアを区別できないため、半荘あたりの絶対値は環境依存である。
+  m7i.xlargeへの換算には、M0との比（M1 1.02、R1 0.03）を#442のM0推定値へ掛けて使う
+- M1の追加計算（安全牌・待ち形・ドラ・route向聴）は約0.3 s/半荘で、M0の2段目受入の計算が大半を占める
+- 変換のmax RSSは半荘数に依存しない（逐次読込み）。並列変換はworkerあたり同程度
+- 「読込み+tensor化」は`read_l2a_dataset()`と学習用tensorの作成までのRSSから、torchのimportだけのRSS
+  （221 MiB）を引いて半荘数で割った値である。学習本体は実行していない（pilotの学習結果を見ないため）
 
 ### 7.2 L2a全体（初期案 TRAIN 600 / SELECT 100 / OFFLINE-EVAL 150 = 850半荘）
 
 | 項目 | 見積り |
 |---|---|
-| CPU | 850 × 約285 s + pilot 50半荘（生成・replay 約185 s/半荘）+ 動作確認16半荘 ≈ 約70 vCPU-h |
-| 費用（AWS） | 4 vCPUへ詰めた下限で約USD 4.7（USD 0.0673/vCPU-h）。#442ではwallがCPU下限の約1.3倍だったため、概算で約USD 6、OFFLINE-EVALを250半荘にすると約USD 7。上限ではなく、M1 / R1の処理時間・RSSを実装Issueで実測した後に更新する |
-| wall | m7i.xlargeで約18〜23 h。vCPUの多い型なら比例して短くなる（型と単価は実行計画で確認） |
-| RSS | 変換はworker数で決まり半荘数に依存しない（#247 / #248、workerあたり約50 MiB）。学習は全件読込みで、旧候補学習の約6 MiB/半荘を当てると850半荘で約5 GiB。M1はcandidateあたりの次元が増えるため、実装Issueで実測して改訂する |
-| 保存 | source archive約69 KB/半荘（gzip）→ 約60 MB、保存費は無視できる。datasetは既定では保存せず、sourceから再生成する。#442の4.54 MB/半荘は旧BC＋旧候補datasetの合計であり、M0＋M1＋R1の容量には使えない。M0は旧候補と同じencodingなので約3.0 MB/半荘、M1・R1は未計測で、実装Issueで実測する |
+| CPU | 850 × 約250 s + pilot 50半荘（生成・replay 約185 s/半荘）+ 動作確認16半荘 ≈ 約62 vCPU-h |
+| 費用（AWS） | 4 vCPUへ詰めた下限で約USD 4.2（USD 0.0673/vCPU-h）。#442ではwallがCPU下限の約1.3倍だったため、概算で約USD 5.5、OFFLINE-EVALを250半荘にすると約USD 6。上限ではない |
+| wall | m7i.xlargeで約16〜20 h。vCPUの多い型なら比例して短くなる（型と単価は実行計画で確認） |
+| RSS | 変換は半荘数に依存せず、workerあたり約60 MiB（#316実測）。学習は1モデルずつ全件読込みで、読込み+tensor化はM1 約7.9 MiB/半荘、M0 約5.8 MiB/半荘、R1 約0.9 MiB/半荘（#316実測）。850半荘でM1 約6.6 GiB + torch約0.2 GiB。16 GiBの型に収まるが、学習本体の追加分は未計測で、それを超える規模では逐次読込みが要る |
+| 保存 | source archive約69 KB/半荘（gzip）→ 約60 MB、保存費は無視できる。datasetは既定では保存せず、sourceから再生成する。dataset容量はM0 2.46 MB、M1 3.26 MB、R1 0.35 MB/半荘（#316実測、非圧縮）で、850半荘の3つ合計で約5.1 GB |
 | 回収 | source archive・`evidence.json`・replay summary・dataset / artifactのmanifest・artifact（weights含む）・評価report・環境記録。datasetは回収しない |
 
 - 月USD 20は既支出込みであり、C0生成・Learningの暫定枠はUSD 8（#84）。当月の支出（例：arena #503の上限見積り
@@ -396,7 +425,7 @@ CALL全体（Chi / Pon合算）の鳴く/鳴かないのbalanced accuracyと鳴�
 | モデル | L0.2形の小MLP、幅{64, 256}、weights.f32、Rustで推論できる規模 |
 | baseline | B-TS、B-PASS、M0 |
 | 成立条件 | 6節（DISCARD・Chi・Ponを別に判定）。0.85は点推定、0.40は95%区間下限。support不足は種別ごとに判定保留 |
-| 規模・費用 | 初期案850半荘、約70 vCPU-h、AWSなら概算USD 5〜7（M1 / R1の実測後に更新）。実行前に当月残額を確認 |
+| 規模・費用 | 初期案850半荘、約62 vCPU-h、AWSなら概算USD 5〜6（M1 / R1は#316で実測済み）。実行前に当月残額を確認 |
 
 ## 9. 担当と後続Issue
 
