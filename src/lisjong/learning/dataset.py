@@ -79,7 +79,7 @@ from lisjong.learning.features import (
 )
 from lisjong.learning.source_record import (
     DEVELOPMENT_PURPOSE,
-    POLICY_SOURCE_RECORD_SCHEMA_V1,
+    POLICY_SOURCE_RECORD_SCHEMAS,
     SCIENTIFIC_PURPOSE,
     SOURCE_RECORD_SCHEMA_V2,
     PlayerSafeSourceRecord,
@@ -288,9 +288,7 @@ def validate_source_block(
     `PlayerSafeSourceRecord.provenance()`が生成する記述の正本validationであり、
     datasetとmodel artifactの双方が同じ契約でこのblockを検証する。
     """
-    policy = (
-        type(value) is dict and value.get("schema") == POLICY_SOURCE_RECORD_SCHEMA_V1
-    )
+    policy = type(value) is dict and value.get("schema") in POLICY_SOURCE_RECORD_SCHEMAS
     source = expect_object(
         value,
         _POLICY_SOURCE_FIELDS if policy else _SOURCE_FIELDS,

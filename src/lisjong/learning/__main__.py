@@ -33,7 +33,17 @@ Issue #315のL2a support計数（設計`docs/learning-l2a.md` 2.3・3.3節）。
 python -m lisjong.learning l2a-source-support --source-record <source-record>
 ```
 
-`train` / `train-candidate-scorer` / `evaluate-candidate-scorer`だけがoptional
+Issue #316のL2a候補scorer（設計4節。打牌M0 / M1、反応R1）。
+
+```text
+python -m lisjong.learning l2a-dataset     --source-record <source-record> --output <dataset> --encoding m1
+
+python -m lisjong.learning l2a-train     --dataset <dataset> --output <artifact>     --train-split TRAIN --select-split SELECT --hidden-width 64
+
+python -m lisjong.learning verify-l2a-artifact --artifact <artifact>
+```
+
+`train` / `train-candidate-scorer` / `evaluate-candidate-scorer` / `l2a-train`だけがoptional
 ML runtimeを必要とする。dataset materializationとartifact検証はML runtimeなしで
 実行できる。
 """
@@ -60,7 +70,12 @@ from lisjong.learning.candidate_training import (
 )
 from lisjong.learning.dataset import publish_dataset, read_dataset
 from lisjong.learning.errors import LearningError
+from lisjong.learning.l2a_artifact import load_l2a_artifact
+from lisjong.learning.l2a_dataset import publish_l2a_dataset, read_l2a_dataset
+from lisjong.learning.l2a_encoding import L2A_ENCODINGS, l2a_encoding
+from lisjong.learning.l2a_model import L2A_HIDDEN_WIDTHS
 from lisjong.learning.l2a_support import count_source_support
+from lisjong.learning.l2a_training import L2aTrainingConfig, train_l2a_scorer
 from lisjong.learning.model import ModelConfig
 from lisjong.learning.source_record import open_source_record, read_source_record
 from lisjong.learning.training import BehaviorCloningConfig, train_behavior_cloning
@@ -154,6 +169,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="count L2a decision kinds, action support and teacher-rule exceptions",
     )
     l2a_support.add_argument("--source-record", required=True)
+
+    l2a_dataset = commands.add_parser(
+        "l2a-dataset",
+        help="materialize an L2a candidate dataset (discard M0 / M1, reaction R1)",
+    )
+    l2a_dataset.add_argument("--source-record", required=True)
+    l2a_dataset.add_argument("--output", required=True)
+    l2a_dataset.add_argument("--encoding", required=True, choices=sorted(L2A_ENCODINGS))
+    l2a_dataset.add_argument("--workers", type=int, default=1)
+    l2a_dataset.add_argument("--max-pending-shards", type=int, default=None)
+
+    l2a_train = commands.add_parser(
+        "l2a-train", help="train one L2a candidate scorer and write an artifact"
+    )
+    l2a_train.add_argument("--dataset", required=True)
+    l2a_train.add_argument("--output", required=True)
+    l2a_train.add_argument("--train-split", required=True, action="append")
+    l2a_train.add_argument("--select-split", required=True, action="append")
+    l2a_train.add_argument(
+        "--hidden-width", type=int, required=True, choices=L2A_HIDDEN_WIDTHS
+    )
+    l2a_train.add_argument("--epochs", type=int, default=20)
+    l2a_train.add_argument("--batch-size", type=int, default=256)
+    l2a_train.add_argument("--learning-rate", type=float, default=1.0e-3)
+    l2a_train.add_argument("--weight-decay", type=float, default=0.0)
+    l2a_train.add_argument("--seed", type=int, default=0)
+
+    l2a_verify = commands.add_parser(
+        "verify-l2a-artifact",
+        help="strict-load an L2a candidate scorer artifact without an ML runtime",
+    )
+    l2a_verify.add_argument("--artifact", required=True)
 
     return parser
 
@@ -283,6 +330,59 @@ def _l2a_source_support(arguments) -> dict[str, object]:
     return count_source_support(open_source_record(arguments.source_record))
 
 
+def _l2a_dataset(arguments) -> dict[str, object]:
+    source = open_source_record(arguments.source_record)
+    manifest = publish_l2a_dataset(
+        source,
+        arguments.output,
+        encoding=l2a_encoding(arguments.encoding),
+        workers=arguments.workers,
+        max_pending_shards=arguments.max_pending_shards,
+    )
+    return {
+        "dataset_identity": manifest["identity"],
+        "encoding": manifest["encoding"],
+        "output": str(arguments.output),
+        "rows": manifest["rows"],
+        "source_identity": source.identity,
+    }
+
+
+def _l2a_train(arguments) -> dict[str, object]:
+    dataset = read_l2a_dataset(arguments.dataset)
+    config = L2aTrainingConfig(
+        train_splits=tuple(arguments.train_split),
+        select_splits=tuple(arguments.select_split),
+        hidden_width=arguments.hidden_width,
+        epochs=arguments.epochs,
+        batch_size=arguments.batch_size,
+        learning_rate=arguments.learning_rate,
+        weight_decay=arguments.weight_decay,
+        seed=arguments.seed,
+    )
+    artifact = train_l2a_scorer(dataset, config, arguments.output)
+    return {
+        "artifact_identity": artifact.identity,
+        "dataset_identity": artifact.dataset_identity,
+        "output": str(arguments.output),
+        "selected_epoch": artifact.manifest["training"]["selected_epoch"],
+        "source_identity": artifact.source_identity,
+        "training_diagnostics": artifact.manifest["training"]["diagnostics"],
+    }
+
+
+def _verify_l2a(arguments) -> dict[str, object]:
+    artifact = load_l2a_artifact(arguments.artifact)
+    return {
+        "artifact_identity": artifact.identity,
+        "dataset_identity": artifact.dataset_identity,
+        "encoding": artifact.manifest["encoding"],
+        "model": artifact.manifest["model"],
+        "selected_epoch": artifact.manifest["training"]["selected_epoch"],
+        "source_identity": artifact.source_identity,
+    }
+
+
 def _emit(summary: dict[str, object]) -> None:
     """summaryをUTF-8のcanonical JSONとしてstdoutへ書く。
 
@@ -310,6 +410,9 @@ def main(argv: list[str] | None = None) -> int:
         "verify-candidate-artifact": _verify_candidates,
         "evaluate-candidate-scorer": _evaluate_candidates,
         "l2a-source-support": _l2a_source_support,
+        "l2a-dataset": _l2a_dataset,
+        "l2a-train": _l2a_train,
+        "verify-l2a-artifact": _verify_l2a,
     }
     try:
         summary = handlers[arguments.command](arguments)
