@@ -43,7 +43,19 @@ python -m lisjong.learning l2a-train     --dataset <dataset> --output <artifact>
 python -m lisjong.learning verify-l2a-artifact --artifact <artifact>
 ```
 
-`train` / `train-candidate-scorer` / `evaluate-candidate-scorer` / `l2a-train`だけがoptional
+Issue #317のL2a OFFLINE-EVAL（設計5・6節）。凍結後に1回だけ実行する。`--ledger`は
+評価の記録を置くdirectoryで、L2a実験を通じて同じdirectoryを使う。同じsourceの
+OFFLINE-EVAL、または同じartifactの2回目の評価をSTOP / INVALIDにする。
+
+```text
+python -m lisjong.learning l2a-offline-eval --source-record <source-record> \
+    --m1-artifact <m1> --m0-artifact <m0> --r1-artifact <r1> \
+    --m1-dataset <m1-dataset> --m0-dataset <m0-dataset> --r1-dataset <r1-dataset> \
+    --ledger <ledger-directory>
+```
+
+`train` / `train-candidate-scorer` / `evaluate-candidate-scorer` / `l2a-train` /
+`l2a-offline-eval`だけがoptional
 ML runtimeを必要とする。dataset materializationとartifact検証はML runtimeなしで
 実行できる。
 """
@@ -74,6 +86,7 @@ from lisjong.learning.l2a_artifact import load_l2a_artifact
 from lisjong.learning.l2a_dataset import publish_l2a_dataset, read_l2a_dataset
 from lisjong.learning.l2a_encoding import L2A_ENCODINGS, l2a_encoding
 from lisjong.learning.l2a_model import L2A_HIDDEN_WIDTHS
+from lisjong.learning.l2a_offline_eval import ARTIFACT_NAMES, run_l2a_offline_eval
 from lisjong.learning.l2a_support import count_source_support
 from lisjong.learning.l2a_training import L2aTrainingConfig, train_l2a_scorer
 from lisjong.learning.model import ModelConfig
@@ -201,6 +214,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="strict-load an L2a candidate scorer artifact without an ML runtime",
     )
     l2a_verify.add_argument("--artifact", required=True)
+
+    l2a_offline = commands.add_parser(
+        "l2a-offline-eval",
+        help="evaluate frozen L2a artifacts on OFFLINE-EVAL once with the frozen gate",
+    )
+    l2a_offline.add_argument("--source-record", required=True)
+    for name in ARTIFACT_NAMES:
+        l2a_offline.add_argument(f"--{name}-artifact", required=True)
+        l2a_offline.add_argument(f"--{name}-dataset", required=True)
+    l2a_offline.add_argument("--ledger", required=True)
 
     return parser
 
@@ -383,6 +406,19 @@ def _verify_l2a(arguments) -> dict[str, object]:
     }
 
 
+def _l2a_offline_eval(arguments) -> dict[str, object]:
+    return run_l2a_offline_eval(
+        source_record=arguments.source_record,
+        artifacts={
+            name: getattr(arguments, f"{name}_artifact") for name in ARTIFACT_NAMES
+        },
+        datasets={
+            name: getattr(arguments, f"{name}_dataset") for name in ARTIFACT_NAMES
+        },
+        ledger=arguments.ledger,
+    )
+
+
 def _emit(summary: dict[str, object]) -> None:
     """summaryをUTF-8のcanonical JSONとしてstdoutへ書く。
 
@@ -413,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
         "l2a-dataset": _l2a_dataset,
         "l2a-train": _l2a_train,
         "verify-l2a-artifact": _verify_l2a,
+        "l2a-offline-eval": _l2a_offline_eval,
     }
     try:
         summary = handlers[arguments.command](arguments)

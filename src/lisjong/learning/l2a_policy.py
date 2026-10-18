@@ -24,9 +24,11 @@ DecisionContext
 torchはoptional extra（`lisjong[ml]`）であり、lazy importで必要とする。
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
+from time import perf_counter
 
 from lisjong.learning.candidate_model import score_candidates
 from lisjong.learning.errors import LearnedPolicyError
@@ -46,12 +48,18 @@ INFERENCE_DEVICE = "cpu"
 
 @dataclass(frozen=True, slots=True)
 class L2aDecision:
-    """1判断の選択結果。scorerを呼んだときだけ候補とscoreを持つ。"""
+    """1判断の選択結果。scorerを呼んだときだけ候補・score・時間の内訳を持つ。
+
+    `timings_ms`はこの判断のserving呼出しの中で測った時間（ms）で、
+    `candidate_encoding`（候補encoding）、`shared_context`（#184 shared feature）、
+    `forward`（scorer実行）を分ける（設計5.3節）。
+    """
 
     kind: L2aDecisionKind
     action: InternalAction
     candidates: tuple[InternalAction, ...] | None = None
     scores: tuple[float, ...] | None = None
+    timings_ms: Mapping[str, float] | None = None
 
 
 def select_best(scores: tuple[float, ...]) -> int:
@@ -116,9 +124,13 @@ class L2aPolicy:
             return L2aDecision(kind=kind, action=guarded)
 
         scorer = self.runtime.scorer_for(kind)
+        started = perf_counter()
         encoded = scorer.encoding.encode(decision)
+        encoded_at = perf_counter()
         context = build_player_safe_feature(decision.input)
+        context_at = perf_counter()
         scores = scorer.score(context, encoded.vectors)
+        scored_at = perf_counter()
         if len(scores) != len(encoded.actions):
             raise LearnedPolicyError("scorer produced an unexpected score count")
         action = encoded.actions[select_best(scores)]
@@ -127,7 +139,15 @@ class L2aPolicy:
                 "selected candidate is not a canonical legal action object"
             )
         return L2aDecision(
-            kind=kind, action=action, candidates=encoded.actions, scores=scores
+            kind=kind,
+            action=action,
+            candidates=encoded.actions,
+            scores=scores,
+            timings_ms={
+                "candidate_encoding": (encoded_at - started) * 1000.0,
+                "forward": (scored_at - context_at) * 1000.0,
+                "shared_context": (context_at - encoded_at) * 1000.0,
+            },
         )
 
     def choose_action(self, decision: DecisionContext) -> InternalAction:

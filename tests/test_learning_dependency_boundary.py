@@ -85,6 +85,8 @@ _LEARNING_MODULES = (
     "lisjong.learning.l2a_decision",
     "lisjong.learning.l2a_encoding",
     "lisjong.learning.l2a_model",
+    "lisjong.learning.l2a_offline_eval",
+    "lisjong.learning.l2a_offline_gate",
     "lisjong.learning.l2a_policy",
     "lisjong.learning.l2a_training",
     "lisjong.learning.model",
