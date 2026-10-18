@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 
 import candidate_fixtures as cf
@@ -96,6 +97,13 @@ def _single_candidate_discard():
             AnkanAction(actor=value.self_seat, tiles=(_ONE_MAN,) * 4),
         ),
     )
+
+
+def _south_four(decision):
+    """同じ判断を南4局（オーラス相当）へ置き換える。"""
+    value = decision.input
+    round_state = replace(value.round, round_wind=Wind.SOUTH, hand_number=4)
+    return replace(decision, input=replace(value, round=round_state))
 
 
 class ClassificationTests(unittest.TestCase):
@@ -262,25 +270,25 @@ class SupportCountTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def record(self, *, teacher=_teacher) -> Path:
-        game0 = (
-            cf.discard_decision(cf.NEAR_HAND),
-            cf.discard_decision(cf.NEAR_HAND, tsumogiri_only=True),
-            cf.riichi_decision(),
-            cf.response_decision(),
-            _single_candidate_discard(),
-        )
-        game1 = (cf.discard_decision(cf.SECOND_NEAR_HAND), cf.tsumo_decision())
-        games = []
-        for ordinal, (split, decisions) in enumerate(
-            (("TRAIN", game0), ("SELECT", game1))
-        ):
+    def record(self, *, teacher=_teacher, games=None) -> Path:
+        if games is None:
+            game0 = (
+                cf.discard_decision(cf.NEAR_HAND),
+                cf.discard_decision(cf.NEAR_HAND, tsumogiri_only=True),
+                cf.riichi_decision(),
+                cf.response_decision(),
+                _single_candidate_discard(),
+            )
+            game1 = (cf.discard_decision(cf.SECOND_NEAR_HAND), cf.tsumo_decision())
+            games = (("TRAIN", game0), ("SELECT", game1))
+        written = []
+        for ordinal, (split, decisions) in enumerate(games):
             seed = 100 * (ordinal + 1)
             rows = cf.source_rows(
                 decisions, game_ordinal=ordinal, seed=seed, split=split, teacher=teacher
             )
-            games.append((split, seed, rows))
-        return fixtures.write_policy_source_record(self.root / "source-record", games)
+            written.append((split, seed, rows))
+        return fixtures.write_policy_source_record(self.root / "source-record", written)
 
     def test_counts_rows_and_hanchan_support(self) -> None:
         report = count_source_support(
@@ -313,7 +321,36 @@ class SupportCountTests(unittest.TestCase):
         self.assertEqual(
             total["all_last_equivalent"]["discard"], {"rows": 0, "hanchan": 0}
         )
+        self.assertEqual(total["discard"]["all_last_scored"], {"rows": 0, "hanchan": 0})
         self.assertNotIn("agreement", json.dumps(report))
+
+    def test_all_last_scored_discard_excludes_single_candidate_rows(self) -> None:
+        # 南4局で単一候補行しかない半荘と、評価対象の打牌が1つある半荘。
+        only_single = (_south_four(_single_candidate_discard()),)
+        with_scored = (
+            _south_four(_single_candidate_discard()),
+            _south_four(cf.discard_decision(cf.NEAR_HAND)),
+        )
+        report = count_source_support(
+            read_source_record(
+                self.record(games=(("TRAIN", only_single), ("SELECT", with_scored)))
+            ),
+            reference_policy=_first_discard,
+        )
+
+        only_single_split = report["splits"]["TRAIN"]
+        self.assertEqual(
+            only_single_split["all_last_equivalent"]["discard"],
+            {"rows": 1, "hanchan": 1},
+        )
+        self.assertEqual(
+            only_single_split["discard"]["all_last_scored"], {"rows": 0, "hanchan": 0}
+        )
+        total = report["total"]
+        self.assertEqual(
+            total["all_last_equivalent"]["discard"], {"rows": 3, "hanchan": 2}
+        )
+        self.assertEqual(total["discard"]["all_last_scored"], {"rows": 1, "hanchan": 1})
 
     def test_streaming_record_gives_same_report(self) -> None:
         path = self.record()

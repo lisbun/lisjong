@@ -8,6 +8,10 @@
 `TwoStepUkeirePolicy`の選択と異なる行）を数えるため、TwoStepを同じ
 PolicyInputとlegal actionsで再実行する。TwoStepはplayer-safeなlisjong Policyで
 あり、この計数はofflineの診断である（servingの経路では使わない）。
+
+`all_last_equivalent`はオーラス相当局の全行を分類別に数える。設計3.2節の
+「オーラス相当局のDISCARD」の下限には、単一候補行を除いた
+`discard.all_last_scored`を使う。
 """
 
 from collections import defaultdict
@@ -114,7 +118,9 @@ class _SplitSupport:
                 ("chi_legal", "chi_selected", "pon_legal", "pon_selected")
             ),
             "decisions": self.decisions,
-            "discard": self.strata.summary(("scored", "c0_specific")),
+            "discard": self.strata.summary(
+                ("scored", "c0_specific", "all_last_scored")
+            ),
             "hanchan": len(self.games),
             "kinds": self.kinds.summary(kind_names),
             "selected_actions": self.selected.summary(
@@ -191,11 +197,14 @@ def _count_game(
                     call_names.append(f"{label}_legal")
                 if isinstance(row.selected_action, action_type):
                     call_names.append(f"{label}_selected")
+        all_last = is_all_last_equivalent(row.policy_input)
         strata_names = []
         if is_single_candidate(context, kind):
             strata_names.append("single_candidate")
         elif kind is L2aDecisionKind.DISCARD:
             strata_names.append("scored")
+            if all_last:
+                strata_names.append("all_last_scored")
             reference = reference_policy(context)
             if not (
                 isinstance(row.selected_action, DiscardAction)
@@ -203,7 +212,6 @@ def _count_game(
                 and row.selected_action.tile == reference.tile
             ):
                 strata_names.append("c0_specific")
-        all_last = is_all_last_equivalent(row.policy_input)
         exception = teacher_rule_exception(context, kind, row.selected_action)
         for target in targets:
             target.decisions += 1
