@@ -524,6 +524,20 @@ C0固有層ではM1 0.726に対しM0 0.423である（B-TSは定義上0）。こ
 
 ### 10.4 残り・注意
 
-- 対局での動作確認16半荘（5.4節）は未実施（arena#507。凍結したM1 `c976ed4a…`・R1 `d565713f…`を使う）
+- 対局での動作確認16半荘（5.4節）は実施済みでPASS（10.5節）
 - 時間：dataset 2.4 h、学習6回で14分、OFFLINE-EVAL 4.66 h（単一process）、計7.44 h（c7i.2xlarge）
 - 費用は推計約USD 3.43（instance稼働時間 × 単価）。請求反映後の実額は未確定
+
+### 10.5 対局での動作確認（5.4節）
+
+凍結したM1 `c976ed4a…`・R1 `d565713f…`を1席、C0を3席にした16半荘（arena#507、seed `506900..506915`、DEVELOPMENT）。
+正本：[arena#507の結果](https://github.com/lisbun/lisjong-arena/issues/507#issuecomment-6278840709)。
+**動作の正常性の確認であり、強さ・局素点の比較はしていない。** 10.1の判定は変わらず、蒸留は成立していない。
+
+- **PASS**：完走16 / 16、非合法0、例外0。L2a席の判断2,309（scorer：DISCARD 1,571、CALL 405）
+- 推論時間（判断ごと、中央値 / p95 / 最大）：DISCARD 14.0 / 122.7 / 409.8 ms（大半は候補encoding）、
+  CALL 1.18 / 4.89 / 7.27 ms
+- process RSS：load直後243 MiB、終了時321 MiB、peak 479 MiB
+- 実行条件：Arena `606759b`（arena#508のhead。squash merge後のmain `6942d00`と同じtree）、lisjong `999553b`、Rust backend、torch 2.13.0+cpu、WSL（8 cores）、1 process
+- native wheelは`999553b`でbuildした`9aa0ca4e…`（`SOURCE_REVISION` `999553b`）。学習・OFFLINE-EVALは同じlisjong `999553b`に
+  wheel `ee02748f…`（`SOURCE_REVISION` `174bf48`）を入れて実行した。native sourceは同じで、埋め込まれたrevisionだけが違う
