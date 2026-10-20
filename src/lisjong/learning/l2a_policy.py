@@ -195,7 +195,8 @@ class L2aRuntime:
         return self.create_policy()
 
 
-def _load_scorer(path: str | Path) -> L2aScorer:
+def load_l2a_scorer(path: str | Path) -> L2aScorer:
+    """1 headだけをstrict loadする。診断もservingと同じload経路を使う。"""
     torch = require_torch()
     artifact = load_l2a_artifact(path)
     module = build_l2a_scorer_module(artifact.model_config, artifact.weights)
@@ -219,8 +220,8 @@ def load_l2a_policy_factory(
 ) -> L2aRuntime:
     """2つのartifactをstrict loadし、Policy factoryとして使えるruntimeを返す。"""
     return L2aRuntime(
-        discard=_load_scorer(discard_artifact),
-        reaction=_load_scorer(reaction_artifact),
+        discard=load_l2a_scorer(discard_artifact),
+        reaction=load_l2a_scorer(reaction_artifact),
     )
 
 
@@ -231,5 +232,6 @@ __all__ = [
     "L2aRuntime",
     "L2aScorer",
     "load_l2a_policy_factory",
+    "load_l2a_scorer",
     "select_best",
 ]

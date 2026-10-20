@@ -541,3 +541,8 @@ C0固有層ではM1 0.726に対しM0 0.423である（B-TSは定義上0）。こ
 - 実行条件：Arena `606759b`（arena#508のhead。squash merge後のmain `6942d00`と同じtree）、lisjong `999553b`、Rust backend、torch 2.13.0+cpu、WSL（8 cores）、1 process
 - native wheelは`999553b`でbuildした`9aa0ca4e…`（`SOURCE_REVISION` `999553b`）。学習・OFFLINE-EVALは同じlisjong `999553b`に
   wheel `ee02748f…`（`SOURCE_REVISION` `174bf48`）を入れて実行した。native sourceは同じで、埋め込まれたrevisionだけが違う
+
+## L2a後続の限定診断
+
+#324の集計定義、教師規則との静的照合、実行手順と実測結果は
+[限定CALL診断](learning-l2a-call-diagnostic.md)を参照。
