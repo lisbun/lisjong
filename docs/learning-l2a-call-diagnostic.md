@@ -2,9 +2,9 @@
 
 ## 状態と対象
 
-診断CLI・合成test・静的照合を実装した。凍結sourceとR1 weightsが実装環境に
-ないため、実データのpreflight / 本診断は未実行であり、#324は未完了である。
-現時点では追加実験を推薦しない。以下の静的差分だけで門前Chiの失敗原因を確定しない。
+診断CLI・合成test・静的照合を実装し、凍結sourceとR1で実データのpreflight / 本診断を
+2026-10-21に1回実行した（結果は「実測結果」節）。静的差分と本診断だけで
+門前Chiの失敗原因を確定しない。
 
 対象は#318の凍結R1（r1-w256、selected epoch 5）と既存sourceだけである。
 identityは `lisjong.learning.l2a_call_diagnostic.CONFIG` に固定する。
@@ -52,7 +52,7 @@ SELECTの判断平均CEが最小のepochを選び、同値なら先のepochを�
 それだけで誤りの原因とは言えない。本診断ではCALL全体と門前Chi合法のteacher-positive /
 negativeの件数・半荘supportを対比し、凍結manifestのepoch別TRAIN / SELECT CEも併記する。
 R1のepoch 5選択だけから過学習・学習不足を断定しない。manifestのdiagnosticsはreportの
-`artifact_training`へ保存する。実測値の解釈は入力取得後に追記する。
+`artifact_training`へ保存する。実測値の解釈は「実測結果」節に記す。
 
 ## 集計の読み方
 
@@ -117,4 +117,64 @@ exit statusも保存し、reportがない実行を完了と扱わない。
 preflight / full JSONと短い日本語の診断をIssueへ添付し、TRAIN / SELECTを混合せず、
 行動種別・Chi内候補・入力表現・目的関数のどこまで観測で説明できるかを明記する。
 次の介入は最大1案とし、反証条件と対象を絞る。根拠不足なら「未解決／追加実験非推奨」とする。
-入力不在の現状ではこの完了条件を満たしていない。
+
+## 実測結果（2026-10-21）
+
+WSL2（x86_64）、Python 3.14.7、torch 2.13.0+cpu（1 thread）、rust backend（native API 3、
+PR CIのmanylinux wheel。本PRはnativeを変更しない）、診断revision `f59c03c` のclean clone。
+sourceはarchiveをArenaの `restore` で新規に復元し、identity・SHA-256・replay証跡が一致した。
+
+| phase | status | wall | peak RSS | report identity |
+|---|---|---:|---:|---|
+| preflight（TRAIN 10半荘） | COMPLETE、予算内（外挿357秒） | 5.1秒 | 266 MiB | `f22c4c54…d922f` |
+| full（TRAIN 600 / SELECT 100） | COMPLETE | 228秒 | 268 MiB | `bbf58d28…a3359` |
+
+reportは `C:\Dev\lisjong-artifacts\issue-324-l2a-call-diagnostic\` に置く（repositoryにはcommitしない）。
+
+### 主対象（Chi合法の判断。括弧内は半荘support）
+
+| split / 層 | 判断 | teacher Chi | 一致 | Pass予測 | 別Chi | false Chi | Chi recall | balanced acc. | Chi限定argmax一致 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| TRAIN 門前 | 41,933 | 699（419） | 679 | 20（20） | 0 | 8 | 0.971 | 0.986 | 0.994 |
+| SELECT 門前 | 7,317 | 93（57） | 21 | 72（52） | 0 | 6 | 0.226 | 0.612 | 1.000 |
+| TRAIN 副露 | 4,144 | 1,122（474） | 1,120 | 2（2） | 0 | 5 | 0.998 | 0.998 | 1.000 |
+| SELECT 副露 | 762 | 188（70） | 114 | 74（53） | 0 | 36 | 0.606 | 0.772 | 1.000 |
+
+- SELECT門前のChi候補数別recallは1候補 15/70、2候補 6/9、3候補以上 0/14（TRAINは453/466、145/146、81/87）。
+- SELECT門前のteacher-Chiでのmax Chi − max non-Chi scoreは中央値 −1.69（四分位 −2.56 / −0.20）、正21 / 負72。
+- 門前のteacher-Chi比率はTRAIN 1.67%、SELECT 1.27%。副露は27.1%、24.7%。
+- 凍結manifestのCEはepoch 5（選択）でTRAIN 0.0155 / SELECT 0.1085。SELECT CEはepoch 5が最小で、以後増加する。
+
+### CALL不一致の内訳
+
+| split | CALL不一致 | うち門前 | 門前Chi合法の行 | 門前のPonのみ合法の行（Pon見逃し / false Pon） |
+|---|---:|---:|---:|---:|
+| TRAIN | 104 | 96 | 28（`closed_chi_contribution` 0.269） | 68（15 / 53） |
+| SELECT | 548 | 396 | 78（0.142） | 318（122 / 196） |
+
+SELECTでのPon recallは565/727（0.777）、TRAINは3,859/3,875。
+
+### 解釈（探索的。TRAIN / SELECTとも開発に使用済み）
+
+1. **Chi内の候補選択は原因でない。** 両split・全層でwrong-candidateは0、SELECTのChi限定argmaxは
+   teacher-Chiと全件一致する。誤りは「Chiするか」（teacher Chi → 予測Pass）に集中する。
+2. **TRAINでは再現でき、SELECTで落ちる。** 門前Chi recallは0.971 → 0.226、副露でも0.998 → 0.606。
+   失敗は門前固有ではなく、teacher-positiveの少ない門前で最大になる汎化差として観測される。
+   TRAINで再現できているので、batch平均CEで希少行動の寄与が小さい点はTRAINへの適合の妨げにはなっていない。
+   class weighting / oversamplingでSELECTとの差が縮むかは未検証であり、この結果から支持しない。
+3. **門前のCALL不一致の大半は門前Chiではない。** SELECTの門前不一致396件のうちChi合法の行は78件で、
+   318件はPonのみ合法の行（主にfalse Pon）。#318の「CALL不一致の71.3%が門前」を門前Chiの寄与と
+   読まないという前提を、SELECTでも観測として確認した（OFFLINE-EVALでは再集計していない）。
+4. **入力表現は未確定。** 静的照合で非明示だった教師の判断量（mode別value閾値、特殊形を含む向聴改善、
+   route / valueの共同選択）を学習器が代理特徴で覚えた可能性は、TRAIN適合とSELECT低下に整合する。
+   ただし門前teacher-Chi 699行 / 419半荘というsupportの少なさでも同じ形になり得るため、
+   本診断ではこの2つを区別できない。不可逆な情報欠落の証拠も得ていない。
+
+### 次の介入案（1案。実行は別Issueで判断する）
+
+R1の反応encodingに、教師の判断量のうち公開情報から導出できるもの（Pass比の特殊形を含む向聴改善、
+最小向聴を達成する打牌でのroute value、mode）を候補特徴として明示した版を1つ作り、
+同じsource・TRAIN / SELECT・学習設定・選択規則でR1と比べる。CALL headの変更なのでPonにも同時に効く。
+OFFLINE-EVALは使わない。反証条件：SELECTの門前Chi recallがR1の21/93から半荘clusterで有意に改善しない、
+または改善してもTRAIN / SELECTの差が同程度に残るなら、入力表現の仮説を棄却し、
+CALLについての追加実験は推薦しない。
