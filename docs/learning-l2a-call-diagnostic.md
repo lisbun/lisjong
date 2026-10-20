@@ -157,7 +157,8 @@ SELECTでのPon recallは565/727（0.777）、TRAINは3,859/3,875。
 ### 解釈（探索的。TRAIN / SELECTとも開発に使用済み）
 
 1. **Chi内の候補選択は原因でない。** 両split・全層でwrong-candidateは0、SELECTのChi限定argmaxは
-   teacher-Chiと全件一致する。誤りは「Chiするか」（teacher Chi → 予測Pass）に集中する。
+   teacher-Chiと全件一致する。teacher-Chiの不一致はすべて予測Pass（「Chiするか」の誤り）である。
+   これとは別に、teacherがChiしない判断でのfalse ChiがSELECT門前6件・副露36件ある。
 2. **TRAINでは再現でき、SELECTで落ちる。** 門前Chi recallは0.971 → 0.226、副露でも0.998 → 0.606。
    失敗は門前固有ではなく、teacher-positiveの少ない門前で最大になる汎化差として観測される。
    TRAINで再現できているので、batch平均CEで希少行動の寄与が小さい点はTRAINへの適合の妨げにはなっていない。
@@ -174,7 +175,8 @@ SELECTでのPon recallは565/727（0.777）、TRAINは3,859/3,875。
 
 R1の反応encodingに、教師の判断量のうち公開情報から導出できるもの（Pass比の特殊形を含む向聴改善、
 最小向聴を達成する打牌でのroute value、mode）を候補特徴として明示した版を1つ作り、
-同じsource・TRAIN / SELECT・学習設定・選択規則でR1と比べる。CALL headの変更なのでPonにも同時に効く。
-OFFLINE-EVALは使わない。反証条件：SELECTの門前Chi recallがR1の21/93から半荘clusterで有意に改善しない、
-または改善してもTRAIN / SELECTの差が同程度に残るなら、入力表現の仮説を棄却し、
-CALLについての追加実験は推薦しない。
+同じsource・TRAIN / SELECT・学習設定・選択規則でR1と比べる。CALL headの変更なのでPonにも影響するため、
+Ponの改善・悪化を併せて確認する（Ponへの効果は未検証）。OFFLINE-EVALは使わない。
+中止条件：SELECTの門前Chi recallがR1の21/93から半荘clusterで有意に改善しない、
+または改善してもTRAIN / SELECTの差が同程度に残るなら、今回の特徴追加案を支持する証拠は得られなかった
+として、CALLについての追加実験を見送る。これは入力表現の仮説全体の棄却を意味しない。
