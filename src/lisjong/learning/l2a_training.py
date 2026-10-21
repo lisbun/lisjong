@@ -18,6 +18,7 @@ strict-read L2a dataset（M0 / M1 / R1）
 torchはoptional extraでありlazy importする。
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -152,9 +153,17 @@ def _evaluate(torch, module, tensors: _Tensors, indices, batch_size: int):
 
 
 def train_l2a_scorer(
-    dataset: L2aDataset, config: L2aTrainingConfig, destination: str | Path
+    dataset: L2aDataset,
+    config: L2aTrainingConfig,
+    destination: str | Path,
+    *,
+    on_epoch: Callable[[int, float, float], None] | None = None,
 ) -> LoadedL2aScorerArtifact:
-    """L2a scorerを学習し、SELECT CE最小のepochのweightsでartifactを書き出す。"""
+    """L2a scorerを学習し、SELECT CE最小のepochのweightsでartifactを書き出す。
+
+    `on_epoch(epoch, train_ce, select_ce)`は各epochの評価後に呼ぶ。例外を送出すると
+    学習を中止し、artifactを書き出さない（予算超過の停止に使う）。
+    """
     if not isinstance(dataset, L2aDataset):
         raise TrainingError("dataset must be a strict-read L2aDataset")
     if not isinstance(config, L2aTrainingConfig):
@@ -219,6 +228,8 @@ def train_l2a_scorer(
             selected_objective = select_ce
             selected_epoch = epoch
             selected_weights = scorer_module_weights(model_config, module)
+        if on_epoch is not None:
+            on_epoch(epoch, train_ce, select_ce)
 
     if selected_weights is None:
         raise TrainingError("training produced no selected weights")

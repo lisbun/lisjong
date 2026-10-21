@@ -12,9 +12,10 @@ DecisionContext（分類はlisjong.learning.l2a_decision）
 ```
 
 入力は`DecisionContext`だけである。解析値は`PolicyInput`から決定的に計算できる
-ものに限り、HandBelief・他家の伏せ牌・wall・C0の内部値（`GameSituationMode`、
-危険度の順位、選択branch）は使わない。concrete Policy moduleのprivate helperは
-importせず、役のroute・喰い替え・ドラの規則はこのmoduleが独自に持つ。
+ものに限り、HandBelief・他家の伏せ牌・wall・C0の内部値（C0が実行時に求めた
+mode、危険度の順位、選択branch）は使わない。R1-public-callの点数状況modeも
+C0を実行せず公開入力から独自に計算する。concrete Policy moduleのhelperは
+importせず、役のroute・喰い替え・ドラ・modeの規則はこのmoduleが独自に持つ。
 
 ## M1の追加block（M0の後ろへ連結）
 
@@ -59,12 +60,36 @@ route向聴は`calculate_restricted_standard_shanten`によるroute外の牌を�
 場合は成立maskを0、値を0にし、大きな向聴で代用しない。差の欄も、どちらかが
 不成立ならmask・値とも0にする。
 
-layout・scale・規則を変える場合は既存identityを書き換えず新しいidentityにする。
+## R1-public-call（Issue #326、R1の後ろへ連結）
+
+R1の95次元を意味・順序とも変えずに、教師C0が公開情報から計算する鳴き判断の
+解析量を1組の介入として加える。値は`public_call_analysis()`が返す。
+
+```text
+current_shanten      2  mask、現在の向聴 / 13（判断で共通）。門前（暗槓のみを含む）は
+                        特殊形を含むcalculate_shanten。副露は既存副露と矛盾しない役route
+                        （Tanyao / Honitsu萬 / 筒 / 索）の最小route向聴。routeなしはmask 0
+joint_route_shanten  2  mask、候補の最小route向聴 / 13。Chi / Ponは喰い替えで許される打牌と
+                        適合routeの全組の最小、Passは鳴かない現在の手の役route最小。
+                        routeまたは許される打牌が無ければmask 0
+shanten_improvement  2  mask、(current - joint) / 13。両方有効な場合だけ有効。正が改善。
+                        Passは差の基準として値0（maskはcurrent_shantenのmask）
+joint_route_value    2  mask、value / 64。最小route向聴を達成する（打牌、route）の組の
+                        最大value。value = route翻相当（Tanyao 1 / Honitsu 2 / route内の
+                        純手牌と副露牌に字牌が無いHonitsuはChinitsu 5）+ route内の純手牌と
+                        副露牌のドラ（表示牌の重複を数える）と赤5の枚数
+situation_mode       3  NORMAL / ALL_LAST_TOP_SPEED / ALL_LAST_LAST_VALUE one-hot（判断で共通）
+```
+
+modeは公開score・局から計算する（南4局と西入以降で、単独トップならTOP_SPEED、
+子の単独ラスで3着との差が4000点を超えるならLAST_VALUE、それ以外はNORMAL）。
+modeごとの採用閾値の通過、教師の選択・順位・logitは特徴に入れない。
 """
 
 from collections import Counter
 from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
+from enum import Enum
 
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.belief.riichi_safe_tiles import (
@@ -73,6 +98,7 @@ from lisjong.belief.riichi_safe_tiles import (
 )
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.belief.wait_shape_support import river_relation, wait_shape_support
+from lisjong.hand_evaluation import calculate_shanten
 from lisjong.hand_evaluation.shanten import calculate_restricted_standard_shanten
 from lisjong.learning._canonical import value_digest
 from lisjong.learning.candidate_encoding import (
@@ -109,6 +135,9 @@ from lisjong.structural_efficiency import post_discard_concealed_hand
 
 M1_ENCODING_IDENTITY = "lisjong-l2a-discard-candidate-encoding-m1-v1"
 R1_ENCODING_IDENTITY = "lisjong-l2a-reaction-candidate-encoding-r1-v1"
+R1_PUBLIC_CALL_ENCODING_IDENTITY = (
+    "lisjong-l2a-reaction-candidate-encoding-r1-public-call-v1"
+)
 
 TILE_TYPE_AXIS_SIZE = 34
 ROUTE_SHANTEN_SCALE = 13.0
@@ -121,6 +150,14 @@ RETAINED_DORA_SCALE = 8.0
 RETAINED_RED_SCALE = 3.0
 YAKUHAI_SCALE = 2.0
 CONSUMED_SCALE = 2.0
+ROUTE_VALUE_SCALE = 64.0
+MAX_ROUTE_VALUE = 64
+"""route valueの上限。範囲外は丸めずfail closedする。"""
+TANYAO_HAN = 1
+HONITSU_HAN = 2
+CHINITSU_HAN = 5
+VALUE_MODE_MINIMUM_GAP = 4000
+"""LAST_VALUEを発動する、ラス目の子と3着の最小点差（この値を超えると発動）。"""
 
 _NUMBER_CATEGORIES = (TileCategory.MANZU, TileCategory.PINZU, TileCategory.SOUZU)
 _ALL_TILE_TYPES = frozenset(
@@ -202,6 +239,20 @@ R1_BLOCKS = (
     ("own_yakuhai", 1),
 )
 R1_BLOCK_OFFSETS, R1_ENCODING_DIMENSION = _layout(R1_BLOCKS)
+
+R1_PUBLIC_CALL_BLOCKS = (
+    ("current_shanten", 2),
+    ("joint_route_shanten", 2),
+    ("shanten_improvement", 2),
+    ("joint_route_value", 2),
+    ("situation_mode", 3),
+)
+R1_PUBLIC_CALL_BLOCK_OFFSETS, R1_PUBLIC_CALL_EXTRA_DIMENSION = _layout(
+    R1_PUBLIC_CALL_BLOCKS
+)
+R1_PUBLIC_CALL_ENCODING_DIMENSION = (
+    R1_ENCODING_DIMENSION + R1_PUBLIC_CALL_EXTRA_DIMENSION
+)
 
 
 # --- player-safe解析値 -------------------------------------------------------
@@ -513,6 +564,194 @@ def _encode_reaction_r1(decision: DecisionContext):
     return actions, tuple(vectors)
 
 
+# --- R1-public-call -----------------------------------------------------------
+
+
+class PublicSituationMode(Enum):
+    """公開score・局だけから決まる点数状況mode（教師C0の定義と同じ意味）。"""
+
+    NORMAL = "normal"
+    ALL_LAST_TOP_SPEED = "all_last_top_speed"
+    ALL_LAST_LAST_VALUE = "all_last_last_value"
+
+
+_SITUATION_MODES = tuple(PublicSituationMode)
+
+
+def public_situation_mode(policy_input: PolicyInput) -> PublicSituationMode:
+    """南4局と西入以降だけmodeを持つ。同点を含む順位ではmodeを発動しない。"""
+    round_state = policy_input.round
+    all_last = round_state.round_wind in (Wind.WEST, Wind.NORTH) or (
+        round_state.round_wind is Wind.SOUTH and round_state.hand_number == 4
+    )
+    if not all_last:
+        return PublicSituationMode.NORMAL
+    self_index = int(policy_input.self_seat)
+    own = policy_input.players[self_index].score
+    others = tuple(
+        player.score
+        for index, player in enumerate(policy_input.players)
+        if index != self_index
+    )
+    if all(own > score for score in others):
+        return PublicSituationMode.ALL_LAST_TOP_SPEED
+    if (
+        policy_input.self_seat != round_state.dealer_seat
+        and all(own < score for score in others)
+        and min(others) - own > VALUE_MODE_MINIMUM_GAP
+    ):
+        return PublicSituationMode.ALL_LAST_LAST_VALUE
+    return PublicSituationMode.NORMAL
+
+
+def _yaku_route_value(
+    route: _Route,
+    concealed: Sequence[Tile],
+    meld_tiles: Sequence[Tile],
+    dora: Counter[TileType],
+) -> int:
+    """route翻相当 + route内の純手牌と副露牌のドラ・赤5の枚数。"""
+    retained = (
+        *(tile for tile in concealed if tile.tile_type in route.usable_tile_types),
+        *meld_tiles,
+    )
+    if route is _TANYAO_ROUTE:
+        han = TANYAO_HAN
+    elif any(tile.tile_type.category is TileCategory.HONOR for tile in retained):
+        han = HONITSU_HAN
+    else:
+        han = CHINITSU_HAN
+    value = han + sum(tile.is_red + dora[tile.tile_type] for tile in retained)
+    if not 0 <= value <= MAX_ROUTE_VALUE:
+        raise CandidateFeatureError(
+            f"route value {value} is outside 0..{MAX_ROUTE_VALUE}"
+        )
+    return value
+
+
+def _best_yaku_route(
+    hands: Sequence[Sequence[Tile]],
+    meld_tiles: Sequence[Tile],
+    dora: Counter[TileType],
+) -> tuple[int, int] | None:
+    """(手、適合route)の全組の最小route向聴と、それを達成する組の最大value。
+
+    適合routeか手が1つも無ければ`None`（値で代用しない）。
+    """
+    routes = tuple(
+        route for route in M1_OPEN_ROUTES if _route_compatible(route, meld_tiles)
+    )
+    evaluations = [
+        (
+            _route_shanten(hand, route.usable_tile_types),
+            _yaku_route_value(route, hand, meld_tiles, dora),
+        )
+        for hand in hands
+        for route in routes
+    ]
+    if not evaluations:
+        return None
+    best = min(shanten for shanten, _ in evaluations)
+    return best, max(value for shanten, value in evaluations if shanten == best)
+
+
+def _kuikae_allowed_hands(
+    concealed: Sequence[Tile], action: ChiAction | PonAction
+) -> list[tuple[Tile, ...]]:
+    after_call = _remove_consumed(concealed, action.consumed_tiles)
+    forbidden = _kuikae_forbidden(action)
+    return [
+        (*after_call[:index], *after_call[index + 1 :])
+        for index, tile in enumerate(after_call)
+        if tile.tile_type not in forbidden
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class PublicCallValues:
+    """1候補の公開解析値。`None`は不成立（maskが0）を表す。"""
+
+    current_shanten: int | None
+    joint_route_shanten: int | None
+    shanten_improvement: int | None
+    joint_route_value: int | None
+    situation_mode: PublicSituationMode
+
+
+def public_call_analysis(
+    policy_input: PolicyInput, actions: Sequence[InternalAction]
+) -> tuple[PublicCallValues, ...]:
+    """反応候補ごとの公開解析値を返す。入力は`PolicyInput`の公開情報だけである。"""
+    concealed = policy_input.own_hand.concealed_tiles
+    melds = _own_melds(policy_input)
+    meld_tiles = tuple(tile for meld in melds for tile in meld.tiles)
+    dora = _dora_multiplicity(policy_input)
+    if all(meld.kind is MeldKind.ANKAN for meld in melds):
+        current = calculate_shanten(concealed)
+        if not 0 <= current <= MAX_ROUTE_SHANTEN:
+            raise CandidateFeatureError(
+                f"current shanten {current} is outside 0..{MAX_ROUTE_SHANTEN}"
+            )
+    else:
+        best = _best_yaku_route((concealed,), meld_tiles, dora)
+        current = None if best is None else best[0]
+    mode = public_situation_mode(policy_input)
+
+    values: list[PublicCallValues] = []
+    for action in actions:
+        if isinstance(action, PassAction):
+            joint = _best_yaku_route((concealed,), meld_tiles, dora)
+        elif isinstance(action, (ChiAction, PonAction)):
+            joint = _best_yaku_route(
+                _kuikae_allowed_hands(concealed, action),
+                (*meld_tiles, action.called_tile, *action.consumed_tiles),
+                dora,
+            )
+        else:
+            raise CandidateFeatureError(f"not a reaction candidate: {action!r}")
+        joint_shanten = None if joint is None else joint[0]
+        if isinstance(action, PassAction):
+            improvement = None if current is None else 0
+        elif current is None or joint_shanten is None:
+            improvement = None
+        else:
+            improvement = current - joint_shanten
+        values.append(
+            PublicCallValues(
+                current_shanten=current,
+                joint_route_shanten=joint_shanten,
+                shanten_improvement=improvement,
+                joint_route_value=None if joint is None else joint[1],
+                situation_mode=mode,
+            )
+        )
+    return tuple(values)
+
+
+def _encode_reaction_r1_public_call(decision: DecisionContext):
+    actions, base = _encode_reaction_r1(decision)
+    offsets = R1_PUBLIC_CALL_BLOCK_OFFSETS
+    vectors: list[tuple[float, ...]] = []
+    for vector, values in zip(
+        base, public_call_analysis(decision.input, actions), strict=True
+    ):
+        extra = [0.0] * R1_PUBLIC_CALL_EXTRA_DIMENSION
+        for name, value, scale in (
+            ("current_shanten", values.current_shanten, ROUTE_SHANTEN_SCALE),
+            ("joint_route_shanten", values.joint_route_shanten, ROUTE_SHANTEN_SCALE),
+            ("shanten_improvement", values.shanten_improvement, ROUTE_SHANTEN_SCALE),
+            ("joint_route_value", values.joint_route_value, ROUTE_VALUE_SCALE),
+        ):
+            if value is not None:
+                extra[offsets[name]] = 1.0
+                extra[offsets[name] + 1] = value / scale
+        extra[
+            offsets["situation_mode"] + _SITUATION_MODES.index(values.situation_mode)
+        ] = 1.0
+        vectors.append((*vector, *extra))
+    return actions, tuple(vectors)
+
+
 # --- encoding contract --------------------------------------------------------
 
 type _Encoder = Callable[
@@ -640,11 +879,65 @@ ENCODING_R1 = L2aEncoding(
     _encoder=_encode_reaction_r1,
 )
 
-L2A_ENCODINGS = {item.name: item for item in (ENCODING_M0, ENCODING_M1, ENCODING_R1)}
+ENCODING_R1_PUBLIC_CALL = L2aEncoding(
+    name="r1-public-call",
+    identity=R1_PUBLIC_CALL_ENCODING_IDENTITY,
+    head=L2aDecisionKind.CALL,
+    dimension=R1_PUBLIC_CALL_ENCODING_DIMENSION,
+    specification={
+        "base": ENCODING_R1.block(),
+        "blocks": _blocks_value(R1_PUBLIC_CALL_BLOCKS, R1_PUBLIC_CALL_BLOCK_OFFSETS),
+        "current_shanten": (
+            "closed(ankan only): calculate_shanten incl. chiitoitsu/kokushi; "
+            "open: minimum route shanten over yaku routes compatible with melds"
+        ),
+        "dimension": R1_PUBLIC_CALL_ENCODING_DIMENSION,
+        "identity": R1_PUBLIC_CALL_ENCODING_IDENTITY,
+        "joint_route": (
+            "minimum route shanten over (kuikae-allowed discard, compatible yaku "
+            "route); value is the maximum among pairs at that minimum; pass uses "
+            "the current hand"
+        ),
+        "mask_value_order": "mask,value",
+        "pass_improvement": "zero with the current_shanten mask",
+        "route_value": {
+            "chinitsu_han": CHINITSU_HAN,
+            "dora": "red fives plus indicator multiplicity in route-usable concealed "
+            "tiles and all meld tiles",
+            "honitsu_han": HONITSU_HAN,
+            "maximum": MAX_ROUTE_VALUE,
+            "tanyao_han": TANYAO_HAN,
+        },
+        "scales": {
+            "route_shanten": ROUTE_SHANTEN_SCALE,
+            "route_value": ROUTE_VALUE_SCALE,
+        },
+        "situation_mode": {
+            "all_last": "south-4 or west/north rounds",
+            "last_value_minimum_gap": VALUE_MODE_MINIMUM_GAP,
+            "order": [mode.value for mode in _SITUATION_MODES],
+            "rule": "strict top -> top_speed; non-dealer strict last with gap > "
+            "minimum -> last_value; otherwise normal",
+        },
+        "yaku_routes": {
+            route.name: _ROUTE_SPECIFICATION[route.name] for route in M1_OPEN_ROUTES
+        },
+    },
+    _encoder=_encode_reaction_r1_public_call,
+)
+"""R1 + 教師が公開情報から計算する鳴き判断の解析量（Issue #326）。"""
+
+L2A_ENCODINGS = {
+    item.name: item
+    for item in (ENCODING_M0, ENCODING_M1, ENCODING_R1, ENCODING_R1_PUBLIC_CALL)
+}
 
 
 def l2a_encoding(name: str) -> L2aEncoding:
-    """名前（m0 / m1 / r1）からencodingを返す。未知の名前はfail closedする。"""
+    """名前（m0 / m1 / r1 / r1-public-call）からencodingを返す。
+
+    未知の名前はfail closedする。
+    """
     try:
         return L2A_ENCODINGS[name]
     except KeyError:
@@ -657,6 +950,7 @@ __all__ = [
     "ENCODING_M0",
     "ENCODING_M1",
     "ENCODING_R1",
+    "ENCODING_R1_PUBLIC_CALL",
     "L2A_ENCODINGS",
     "M1_BLOCK_OFFSETS",
     "M1_ENCODING_DIMENSION",
@@ -664,7 +958,14 @@ __all__ = [
     "R1_BLOCK_OFFSETS",
     "R1_ENCODING_DIMENSION",
     "R1_ENCODING_IDENTITY",
+    "R1_PUBLIC_CALL_BLOCK_OFFSETS",
+    "R1_PUBLIC_CALL_ENCODING_DIMENSION",
+    "R1_PUBLIC_CALL_ENCODING_IDENTITY",
     "L2aEncodedDecision",
     "L2aEncoding",
+    "PublicCallValues",
+    "PublicSituationMode",
     "l2a_encoding",
+    "public_call_analysis",
+    "public_situation_mode",
 ]
