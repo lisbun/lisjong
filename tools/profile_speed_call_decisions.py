@@ -157,7 +157,7 @@ _FUNCTION_TARGETS = (
     (_THR, "_evaluate_completion_masses", "finite_horizon_dp"),
     (_GFH, "_evaluate_completion_masses", "finite_horizon_dp"),
     (_THR, "_select_from_completion_masses", "thr.select_positive"),
-    (_THR, "_evaluate_all_zero_targeted_honor_release", "thr.all_zero_gate"),
+    (_THR, "_evaluate_all_zero_targeted_honor_release_with_hva", "thr.all_zero_gate"),
     (_THR, "_evaluate_progression_candidates", "r5_progression_dp"),
     (_THR, "_hand_value_aware_evaluate_and_choose_discard", "hand_value_aware"),
     (_GFH, "_hand_value_aware_evaluate_and_choose_discard", "hand_value_aware"),

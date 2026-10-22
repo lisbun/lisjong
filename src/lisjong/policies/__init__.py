@@ -49,6 +49,9 @@ from lisjong.policies.placement_aware_speed_call_kobalab_0004_belief_paijia_disc
 from lisjong.policies.placement_aware_speed_call_kobalab_0004_discard import (
     PlacementAwareSpeedCallKobalab0004DiscardPolicy,
 )
+from lisjong.policies.placement_aware_speed_call_suited_paijia_tie import (
+    PlacementAwareSpeedCallSuitedPaijiaTiePolicy,
+)
 from lisjong.policies.shanten import ShantenPolicy
 from lisjong.policies.targeted_honor_release_terminal_progression import (
     TargetedHonorReleaseTerminalProgressionPolicy,
@@ -82,6 +85,7 @@ __all__ = [
     "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
     "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
     "PlacementAwareSpeedCallPolicy",
+    "PlacementAwareSpeedCallSuitedPaijiaTiePolicy",
     "OneShantenDefensePlacementAwareSpeedCallPolicy",
     "ShantenPolicy",
     "TargetedHonorReleaseTerminalProgressionPolicy",

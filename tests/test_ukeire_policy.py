@@ -1042,6 +1042,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "OneShantenDefensePlacementAwareSpeedCallPolicy",
                 "OpenHandYakuAwareCallPolicy",
                 "PassedTileGenbutsuPlacementAwareSpeedCallPolicy",
+                "PlacementAwareSpeedCallSuitedPaijiaTiePolicy",
                 "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
                 "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
                 "PlacementAwareSpeedCallPolicy",

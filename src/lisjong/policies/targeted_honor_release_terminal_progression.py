@@ -436,6 +436,36 @@ def _evaluate_all_zero_targeted_honor_release(
     完了していることを前提にし、current HandValueAware parent actionから先の
     narrow target gate / R5 overrideだけをsingle-sourceで実行する。
     """
+    selected_action, _, analysis = _evaluate_all_zero_targeted_honor_release_with_hva(
+        policy_input,
+        branch=branch,
+        eligible_actions=eligible_actions,
+        remaining_counts=remaining_counts,
+        hidden_tile_count=hidden_tile_count,
+        completion_evaluations=completion_evaluations,
+    )
+    return selected_action, analysis
+
+
+def _evaluate_all_zero_targeted_honor_release_with_hva(
+    policy_input: PolicyInput,
+    *,
+    branch: TargetedHonorReleaseBranch,
+    eligible_actions: tuple[DiscardAction, ...],
+    remaining_counts: tuple[int, ...],
+    hidden_tile_count: int,
+    completion_evaluations: tuple[FiniteHorizonCandidateEvaluation, ...],
+) -> tuple[
+    DiscardAction,
+    tuple[HandValueCandidateEvaluation, ...],
+    TargetedHonorReleaseAnalysis,
+]:
+    """`_evaluate_all_zero_targeted_honor_release()`の本体。
+
+    同じ1回の計算で使ったHandValueAwareのstaged snapshot（eligible集合全体）を
+    2番目の要素として返す。候補Policy（#330）がHVA rankingを再実行・複製せずに最終tieを
+    読むためのもので、selectionとanalysisは変えない。
+    """
     sequence_denominator: int | None = None
     parent_action, hva_snapshots = _hand_value_aware_evaluate_and_choose_discard(
         policy_input, eligible_actions
@@ -446,30 +476,38 @@ def _evaluate_all_zero_targeted_honor_release(
 
     minimum_shanten = min(snapshot.post_discard_shanten for snapshot in hva_snapshots)
     if parent_snapshot.post_discard_shanten < 3:
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.PARENT_SHANTEN_TOO_CLOSE,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
     if parent_snapshot.post_discard_shanten != minimum_shanten:
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.PARENT_NOT_MINIMUM_SHANTEN,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.PARENT_NOT_MINIMUM_SHANTEN,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
 
     shanten_finalists = tuple(
@@ -487,31 +525,39 @@ def _evaluate_all_zero_targeted_honor_release(
         or not ukeire_values
         or parent_snapshot.current_ukeire_count != max(ukeire_values)
     ):
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.PARENT_NOT_MAXIMUM_UKEIRE,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.PARENT_NOT_MAXIMUM_UKEIRE,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
 
     if parent_action.tile.tile_type.category is TileCategory.HONOR:
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.PARENT_ALREADY_HONOR,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.PARENT_ALREADY_HONOR,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
 
     target_snapshots = _target_candidates(parent_action, hva_snapshots)
@@ -520,19 +566,23 @@ def _evaluate_all_zero_targeted_honor_release(
         for snapshot in target_snapshots
     )
     if honor_target_count == 0:
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.NO_QUALIFYING_HONOR_PEER,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            target_candidate_count=len(target_snapshots),
-            honor_target_candidate_count=0,
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.NO_QUALIFYING_HONOR_PEER,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                target_candidate_count=len(target_snapshots),
+                honor_target_candidate_count=0,
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
 
     sequence_denominator = _falling_factorial(hidden_tile_count, DEFAULT_HORIZON)
@@ -559,42 +609,50 @@ def _evaluate_all_zero_targeted_honor_release(
     )
 
     if any(evaluation.action == parent_action for evaluation in r5_best):
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.R5_PARENT_BEST,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            target_candidate_count=len(target_snapshots),
-            honor_target_candidate_count=honor_target_count,
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
-            progression_evaluations=progression_evaluations,
-            r5_best_count=len(r5_best),
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.R5_PARENT_BEST,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                target_candidate_count=len(target_snapshots),
+                honor_target_candidate_count=honor_target_count,
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+                progression_evaluations=progression_evaluations,
+                r5_best_count=len(r5_best),
+            ),
         )
 
     if any(
         evaluation.action.tile.tile_type.category is not TileCategory.HONOR
         for evaluation in r5_best
     ):
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.R5_NON_HONOR_ONLY_BEST,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=parent_snapshot,
-            eligible_candidate_count=len(eligible_actions),
-            target_candidate_count=len(target_snapshots),
-            honor_target_candidate_count=honor_target_count,
-            hva_decisive_stage=decisive_stage,
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
-            progression_evaluations=progression_evaluations,
-            r5_best_count=len(r5_best),
+        return (
+            parent_action,
+            hva_snapshots,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.R5_NON_HONOR_ONLY_BEST,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=parent_snapshot,
+                eligible_candidate_count=len(eligible_actions),
+                target_candidate_count=len(target_snapshots),
+                honor_target_candidate_count=honor_target_count,
+                hva_decisive_stage=decisive_stage,
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+                progression_evaluations=progression_evaluations,
+                r5_best_count=len(r5_best),
+            ),
         )
 
     if len(r5_best) == 1:
@@ -603,21 +661,25 @@ def _evaluate_all_zero_targeted_honor_release(
         selected_action, _ = _hand_value_aware_evaluate_and_choose_discard(
             policy_input, tuple(evaluation.action for evaluation in r5_best)
         )
-    return selected_action, _analysis(
-        stage=TargetedHonorReleaseActivationStage.R5_HONOR_ONLY_SWITCH,
-        parent_action=parent_action,
-        selected_action=selected_action,
-        branch=branch,
-        closed_hand=True,
-        parent_snapshot=parent_snapshot,
-        eligible_candidate_count=len(eligible_actions),
-        target_candidate_count=len(target_snapshots),
-        honor_target_candidate_count=honor_target_count,
-        hva_decisive_stage=decisive_stage,
-        hidden_tile_count=hidden_tile_count,
-        sequence_denominator=sequence_denominator,
-        progression_evaluations=progression_evaluations,
-        r5_best_count=len(r5_best),
+    return (
+        selected_action,
+        hva_snapshots,
+        _analysis(
+            stage=TargetedHonorReleaseActivationStage.R5_HONOR_ONLY_SWITCH,
+            parent_action=parent_action,
+            selected_action=selected_action,
+            branch=branch,
+            closed_hand=True,
+            parent_snapshot=parent_snapshot,
+            eligible_candidate_count=len(eligible_actions),
+            target_candidate_count=len(target_snapshots),
+            honor_target_candidate_count=honor_target_count,
+            hva_decisive_stage=decisive_stage,
+            hidden_tile_count=hidden_tile_count,
+            sequence_denominator=sequence_denominator,
+            progression_evaluations=progression_evaluations,
+            r5_best_count=len(r5_best),
+        ),
     )
 
 
@@ -626,6 +688,25 @@ def _evaluate_and_choose_discard(
     discard_actions: tuple[DiscardAction, ...],
 ) -> tuple[DiscardAction, TargetedHonorReleaseAnalysis]:
     """#174のnarrow gateとselectionを1 decision分だけ評価する。"""
+    selected_action, _, analysis = _evaluate_and_choose_discard_with_hva(
+        policy_input, discard_actions
+    )
+    return selected_action, analysis
+
+
+def _evaluate_and_choose_discard_with_hva(
+    policy_input: PolicyInput,
+    discard_actions: tuple[DiscardAction, ...],
+) -> tuple[
+    DiscardAction,
+    tuple[HandValueCandidateEvaluation, ...] | None,
+    TargetedHonorReleaseAnalysis,
+]:
+    """`_evaluate_and_choose_discard()`の本体。
+
+    all-zero PUSH pathでHandValueAwareを実行した場合だけ、そのstaged snapshotを
+    2番目の要素として返す（それ以外は`None`）。
+    """
     discard_actions = tuple(discard_actions)
     if not discard_actions:
         raise ValueError("discard_actions must not be empty")
@@ -637,38 +718,50 @@ def _evaluate_and_choose_discard(
     # post-call discardではNoneになる。metadataがない局面へ#174を外挿せずparent維持。
     if policy_input.own_hand.drawn_tile is None:
         parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.NOT_NORMAL_TURN,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=closed_hand,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
+        return (
+            parent_action,
+            None,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.NOT_NORMAL_TURN,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=closed_hand,
+                parent_snapshot=None,
+                eligible_candidate_count=len(eligible_actions),
+            ),
         )
 
     if not closed_hand:
         parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.OPEN_HAND,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=False,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
+        return (
+            parent_action,
+            None,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.OPEN_HAND,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=False,
+                parent_snapshot=None,
+                eligible_candidate_count=len(eligible_actions),
+            ),
         )
 
     if branch is not TargetedHonorReleaseBranch.PUSH:
         parent_action = _parent_action(policy_input, discard_actions)
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.NON_PUSH_BRANCH,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
+        return (
+            parent_action,
+            None,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.NON_PUSH_BRANCH,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=None,
+                eligible_candidate_count=len(eligible_actions),
+            ),
         )
 
     remaining_counts = _root_remaining_counts(policy_input)
@@ -694,19 +787,23 @@ def _evaluate_and_choose_discard(
         parent_action = _select_from_completion_masses(
             policy_input, completion_evaluations, maximum_completion
         )
-        return parent_action, _analysis(
-            stage=TargetedHonorReleaseActivationStage.POSITIVE_COMPLETION,
-            parent_action=parent_action,
-            selected_action=parent_action,
-            branch=branch,
-            closed_hand=True,
-            parent_snapshot=None,
-            eligible_candidate_count=len(eligible_actions),
-            hidden_tile_count=hidden_tile_count,
-            sequence_denominator=sequence_denominator,
+        return (
+            parent_action,
+            None,
+            _analysis(
+                stage=TargetedHonorReleaseActivationStage.POSITIVE_COMPLETION,
+                parent_action=parent_action,
+                selected_action=parent_action,
+                branch=branch,
+                closed_hand=True,
+                parent_snapshot=None,
+                eligible_candidate_count=len(eligible_actions),
+                hidden_tile_count=hidden_tile_count,
+                sequence_denominator=sequence_denominator,
+            ),
         )
 
-    return _evaluate_all_zero_targeted_honor_release(
+    return _evaluate_all_zero_targeted_honor_release_with_hva(
         policy_input,
         branch=branch,
         eligible_actions=eligible_actions,
