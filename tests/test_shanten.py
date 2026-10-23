@@ -1,8 +1,10 @@
 import ast
 import inspect
+import os
 import pathlib
 import random
 import struct
+import subprocess
 import sys
 import threading
 import unittest
@@ -14,7 +16,9 @@ from lisjong.hand_evaluation import (
     _lookup_shanten,
     _python_shanten,
     _shanten_backend,
+    _shanten_common,
     _shanten_frontier,
+    _shanten_table,
     calculate_shanten,
 )
 from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
@@ -640,15 +644,13 @@ class LookupTableArtifactTest(unittest.TestCase):
                 for meld_seeds in range(6):
                     for head_seeds in range(6):
                         for score in range(10):
-                            packed = _lookup_shanten.pack_entry(
+                            packed = _shanten_table.pack_entry(
                                 blocks_used, head_used, meld_seeds, head_seeds, score
                             )
-                            state = packed >> _lookup_shanten._SCORE_SHIFT
+                            state = packed >> _shanten_table._SCORE_SHIFT
+                            self.assertEqual(packed & _shanten_table._SCORE_MASK, score)
                             self.assertEqual(
-                                packed & _lookup_shanten._SCORE_MASK, score
-                            )
-                            self.assertEqual(
-                                _lookup_shanten._decode_state(state),
+                                _shanten_table._decode_state(state),
                                 (blocks_used, head_used, meld_seeds, head_seeds),
                             )
 
@@ -660,7 +662,7 @@ class LookupTableArtifactTest(unittest.TestCase):
                 for meld_seeds in range(6):
                     for head_seeds in range(6):
                         self.assertEqual(
-                            _lookup_shanten._missing_seed_penalty(
+                            _shanten_table._missing_seed_penalty(
                                 blocks_left, heads_left, meld_seeds, head_seeds
                             ),
                             original(blocks_left, heads_left, meld_seeds, head_seeds),
@@ -668,39 +670,39 @@ class LookupTableArtifactTest(unittest.TestCase):
 
     def test_artifact_header_matches_its_declared_dimensions(self) -> None:
         payload = (
-            pathlib.Path(_PACKAGE_ROOT) / _lookup_shanten.TABLE_RESOURCE
+            pathlib.Path(_PACKAGE_ROOT) / _shanten_table.TABLE_RESOURCE
         ).read_bytes()
 
-        self.assertTrue(payload.startswith(_lookup_shanten.MAGIC))
+        self.assertTrue(payload.startswith(_shanten_table.MAGIC))
         # 宣言dimensionと実サイズの不一致はloaderがfail closedする。
-        _lookup_shanten._ShantenTable(payload)
+        _shanten_table._ShantenTable(payload)
 
     def test_same_size_structural_corruption_fails_closed(self) -> None:
         # file sizeが宣言dimensionと一致していても、frontier idやspanが壊れて
         # いれば範囲外参照になり得る。どちらも`ShantenTableError`へ統一され、
         # `IndexError`やsilentに短いsliceにならないことを固定する。
         payload = (
-            pathlib.Path(_PACKAGE_ROOT) / _lookup_shanten.TABLE_RESOURCE
+            pathlib.Path(_PACKAGE_ROOT) / _shanten_table.TABLE_RESOURCE
         ).read_bytes()
-        header_size = struct.calcsize(_lookup_shanten.HEADER_FORMAT)
+        header_size = struct.calcsize(_shanten_table.HEADER_FORMAT)
 
         # spanをpool末尾より先へ伸ばす（サイズは不変）。load時に弾かれる。
         broken_span = bytearray(payload)
         span_offset = (
             header_size
-            + (_lookup_shanten.SUIT_KEY_SPACE + _lookup_shanten.HONOR_KEY_SPACE) * 2
+            + (_shanten_table.SUIT_KEY_SPACE + _shanten_table.HONOR_KEY_SPACE) * 2
         )
         broken_span[span_offset : span_offset + 4] = (0xFFFFFF).to_bytes(4, "little")
         with self.assertRaisesRegex(
-            _lookup_shanten.ShantenTableError, "past the end of its entry pool"
+            _shanten_table.ShantenTableError, "past the end of its entry pool"
         ):
-            _lookup_shanten._ShantenTable(bytes(broken_span))
+            _shanten_table._ShantenTable(bytes(broken_span))
 
         # suit key 0（= 萬子が1枚もない状態）のfrontier idを、存在しない値へ
         # 差し替える。これもサイズは不変で、参照した時点で弾かれる。
         broken_id = bytearray(payload)
         broken_id[header_size : header_size + 2] = (0xFFFF).to_bytes(2, "little")
-        table = _lookup_shanten._ShantenTable(bytes(broken_id))
+        table = _shanten_table._ShantenTable(bytes(broken_id))
 
         counts = [0] * 34
         for kind in (9, 10, 11, 18, 19, 20, 27, 27, 28, 28, 29, 29, 30, 30):
@@ -710,25 +712,25 @@ class LookupTableArtifactTest(unittest.TestCase):
 
         with patch.object(_lookup_shanten, "_TABLE", table):
             with self.assertRaisesRegex(
-                _lookup_shanten.ShantenTableError, "frontier that does not exist"
+                _shanten_table.ShantenTableError, "frontier that does not exist"
             ):
                 _lookup_shanten.calculate_standard_shanten(counts, 0)
 
     def test_corrupted_artifacts_fail_closed(self) -> None:
         payload = bytearray(
-            (pathlib.Path(_PACKAGE_ROOT) / _lookup_shanten.TABLE_RESOURCE).read_bytes()
+            (pathlib.Path(_PACKAGE_ROOT) / _shanten_table.TABLE_RESOURCE).read_bytes()
         )
 
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
-            _lookup_shanten._ShantenTable(b"")
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
-            _lookup_shanten._ShantenTable(b"NOTALISJ" + bytes(payload[8:]))
+        with self.assertRaises(_shanten_table.ShantenTableError):
+            _shanten_table._ShantenTable(b"")
+        with self.assertRaises(_shanten_table.ShantenTableError):
+            _shanten_table._ShantenTable(b"NOTALISJ" + bytes(payload[8:]))
         bad_version = bytearray(payload)
-        bad_version[8:12] = (_lookup_shanten.FORMAT_VERSION + 1).to_bytes(4, "little")
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
-            _lookup_shanten._ShantenTable(bytes(bad_version))
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
-            _lookup_shanten._ShantenTable(bytes(payload[:-2]))
+        bad_version[8:12] = (_shanten_table.FORMAT_VERSION + 1).to_bytes(4, "little")
+        with self.assertRaises(_shanten_table.ShantenTableError):
+            _shanten_table._ShantenTable(bytes(bad_version))
+        with self.assertRaises(_shanten_table.ShantenTableError):
+            _shanten_table._ShantenTable(bytes(payload[:-2]))
 
 
 class ScratchWorkspaceThreadSafetyTest(unittest.TestCase):
@@ -942,6 +944,153 @@ _REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 _PACKAGE_ROOT = _REPOSITORY_ROOT / "src" / "lisjong" / "hand_evaluation"
 
 
+def _imported_modules(path: pathlib.Path) -> set[str]:
+    """source fileがimportするmodule名（`from X import Y`はX.Yも含む）を返す。"""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+            imported.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return imported
+
+
+def _run_python(code: str, backend: str | None) -> subprocess.CompletedProcess:
+    environment = dict(os.environ)
+    environment.pop(_shanten_backend.BACKEND_ENVIRONMENT_VARIABLE, None)
+    if backend is not None:
+        environment[_shanten_backend.BACKEND_ENVIRONMENT_VARIABLE] = backend
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=environment,
+        cwd=_REPOSITORY_ROOT,
+        timeout=120,
+    )
+
+
+_FAKE_NATIVE_RUST_PROGRAM = """
+import sys
+import types
+
+fake = types.ModuleType("_lisjong_native")
+fake.API_VERSION = 3
+
+
+class StandardShantenTable:
+    standard_shanten = shanten_from_valid_counts = None
+    evaluate_discards = evaluate_progression = None
+
+    def __init__(self, payload, combine, penalty, error):
+        fake.arguments = (payload, combine, penalty, error)
+
+
+fake.StandardShantenTable = StandardShantenTable
+sys.modules["_lisjong_native"] = fake
+
+from lisjong.hand_evaluation import _shanten_backend, _shanten_table
+
+assert _shanten_backend.BACKEND_NAME == "rust"
+payload, combine, penalty, error = fake.arguments
+assert payload == _shanten_table.read_table_payload()
+assert combine == _shanten_backend._little_endian_bytes(_shanten_table._COMBINE)
+assert penalty == b"".join(table.tobytes() for table in _shanten_table._PENALTY)
+assert error is _shanten_table.ShantenTableError
+for name in ("_lookup_shanten", "_python_shanten"):
+    assert "lisjong.hand_evaluation." + name not in sys.modules, name
+print("ok")
+"""
+
+
+_GENERATOR_IMPORT_PROGRAM = """
+import sys
+
+sys.modules["_lisjong_native"] = None
+from tools import generate_shanten_table, generate_structural_predicate_table
+
+assert "lisjong.hand_evaluation._python_shanten" not in sys.modules
+print("ok")
+"""
+
+
+class ArtifactSupplySeparationTest(unittest.TestCase):
+    """Issue #338: artifact供給・共有helperとPython計算本体の依存分離を固定する。
+
+    native table構築、structural predicate、offline generatorが、後で削除する
+    Python numeric計算本体（`_lookup_shanten`の計算loop、`_python_shanten`の
+    DFS）へ依存しないことを、import graphと実行時のmodule読込で確認する。
+    """
+
+    _CALCULATION_MODULES = ("_lookup_shanten", "_python_shanten")
+
+    def _assert_no_import(self, path: pathlib.Path, forbidden: tuple[str, ...]) -> None:
+        imported = _imported_modules(path)
+        for name in forbidden:
+            with self.subTest(path=path.name, forbidden=name):
+                self.assertFalse(
+                    any(name in module.split(".") for module in imported),
+                    sorted(imported),
+                )
+
+    def test_shared_helper_module_has_no_package_dependencies(self) -> None:
+        imported = _imported_modules(_PACKAGE_ROOT / "_shanten_common.py")
+        self.assertFalse(any(name.startswith("lisjong") for name in imported))
+
+    def test_artifact_supply_does_not_import_calculation_modules(self) -> None:
+        self._assert_no_import(
+            _PACKAGE_ROOT / "_shanten_table.py",
+            (
+                *self._CALCULATION_MODULES,
+                "_shanten_frontier",
+                "_shanten_backend",
+                "shanten",
+                "_lisjong_native",
+            ),
+        )
+
+    def test_frontier_and_generators_do_not_import_calculation_or_native(
+        self,
+    ) -> None:
+        forbidden = (*self._CALCULATION_MODULES, "_shanten_backend", "_lisjong_native")
+        self._assert_no_import(_PACKAGE_ROOT / "_shanten_frontier.py", forbidden)
+        for name in (
+            "generate_shanten_table.py",
+            "generate_structural_predicate_table.py",
+        ):
+            self._assert_no_import(_REPOSITORY_ROOT / "tools" / name, forbidden)
+
+    def test_semantic_module_does_not_import_the_old_search(self) -> None:
+        # 七対子・国士無双と共有定数は`_shanten_common`から読む。structural
+        # predicateの特殊形dispatchもこの経路を共有する。
+        self._assert_no_import(_PACKAGE_ROOT / "shanten.py", ("_python_shanten",))
+        self.assertIs(shanten_module._shanten_common, _shanten_common)
+
+    def test_lookup_backend_shares_the_supply_objects(self) -> None:
+        self.assertIs(
+            _lookup_shanten.ShantenTableError, _shanten_table.ShantenTableError
+        )
+        self.assertIs(_lookup_shanten._COMBINE, _shanten_table._COMBINE)
+        self.assertIs(_lookup_shanten._PENALTY, _shanten_table._PENALTY)
+
+    def test_generators_import_without_native_extension_or_old_search(self) -> None:
+        result = _run_python(_GENERATOR_IMPORT_PROGRAM, backend=None)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_rust_selection_builds_native_table_without_python_calculation(
+        self,
+    ) -> None:
+        # native拡張の代わりに引数を記録するfakeを入れ、rust選択processが
+        # `_shanten_table`の供給だけでnative tableを作り、Python計算moduleを
+        # importしないことを確認する（API_VERSION検査は実物と同じ経路を通る）。
+        result = _run_python(_FAKE_NATIVE_RUST_PROGRAM, backend="rust")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+
 class PublicSurfaceTest(unittest.TestCase):
     def test_package_exports_only_the_public_contract(self) -> None:
         import lisjong.hand_evaluation as hand_evaluation
@@ -992,6 +1141,8 @@ class PublicSurfaceTest(unittest.TestCase):
                 "_shanten_frontier.py",
                 "_lookup_shanten.py",
                 "_shanten_backend.py",
+                "_shanten_common.py",
+                "_shanten_table.py",
                 "_structural_predicates.py",
                 "scoring.py",
             },

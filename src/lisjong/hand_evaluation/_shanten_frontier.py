@@ -3,7 +3,8 @@
 Issue #115で追加した、lookup-table backend（`_lookup_shanten`）用のtableを
 **生成する**側のmoduleである。runtimeのshanten計算はこのmoduleを呼ばない。
 呼び出すのはoffline generator（`tools/generate_shanten_table.py`）と、
-exactnessを固定するtestsだけである。
+exactnessを固定するtestsだけである。共有定数は`_shanten_common`から読み、
+旧DFS oracle（`_python_shanten`）やnative拡張をimportしない（Issue #338）。
 
 ## なぜlocal frontierで足りるのか
 
@@ -63,15 +64,15 @@ semanticsをそのまま保つ。
 
 from collections.abc import Sequence
 
-from lisjong.hand_evaluation import _python_shanten
+from lisjong.hand_evaluation import _shanten_common
 
-MAX_BLOCK_COUNT = _python_shanten._MAX_BLOCK_COUNT
+MAX_BLOCK_COUNT = _shanten_common.MAX_BLOCK_COUNT
 """雀頭を除いて使える面子・塔子候補の最大数。"""
 
-SEED_COUNT_CAP = _python_shanten._SEED_COUNT_CAP
+SEED_COUNT_CAP = _shanten_common.SEED_COUNT_CAP
 """meld seed / head seedの上限（これ以上は結果へ影響しない）。"""
 
-MAX_COPIES_PER_TILE_KIND = _python_shanten.MAX_COPIES_PER_TILE_KIND
+MAX_COPIES_PER_TILE_KIND = _shanten_common.MAX_COPIES_PER_TILE_KIND
 """1牌種あたりのphysical上限枚数。"""
 
 SUIT_KIND_COUNT = 9

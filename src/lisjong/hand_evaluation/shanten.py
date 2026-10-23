@@ -4,7 +4,8 @@ Issue #50で確定した、外部環境に依存しない牌姿評価の入口�
 内部の`Tile`列だけで、RiichiEnv / RiichiLab / mjai等の外部型を受け取らない。
 
 このmoduleは入力のsnapshot、validation、34牌種countへの正規化、確定面子数の
-判断までを担当し、実際の探索は`_python_shanten`へ委譲する。
+判断までを担当し、通常形の計算は`_shanten_backend`が選んだbackendへ委譲する。
+七対子・国士無双の計算と共有定数は`_shanten_common`を使う（Issue #338）。
 
 入口は2つあり、責務が異なる。
 
@@ -39,8 +40,8 @@ predicateもこのmoduleが所有し、special-hand計算は同じhelperを共�
 from collections.abc import Container, Iterable, Sequence
 
 from lisjong.hand_evaluation import (
-    _python_shanten,
     _shanten_backend,
+    _shanten_common,
     _structural_predicates,
 )
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
@@ -205,7 +206,7 @@ def _python_evaluate_discards(
 ) -> tuple[tuple[int, ...], tuple[tuple[int, ...] | None, ...]]:
     """`evaluate_discards_from_canonical_counts()`のPython実装（Python numeric core）。"""
     work = list(counts)
-    if len(work) != _python_shanten.TILE_KIND_COUNT:
+    if len(work) != _shanten_common.TILE_KIND_COUNT:
         raise ValueError("counts must contain exactly 34 values")
     for count in work:
         if not isinstance(count, int):
@@ -259,7 +260,7 @@ def _read_discard_indexes(
     for index in discard_indexes:
         if type(index) is bool or not isinstance(index, int):
             raise TypeError("discard_indexes must contain only int values")
-        if not 0 <= index < _python_shanten.TILE_KIND_COUNT:
+        if not 0 <= index < _shanten_common.TILE_KIND_COUNT:
             raise ValueError("discard_indexes must contain only values from 0 to 33")
         if index in seen:
             raise ValueError("discard_indexes must not contain duplicates")
@@ -360,7 +361,7 @@ def _shanten_from_valid_counts(counts: Sequence[int], concealed_tile_count: int)
     通常形はIssue #115でexact lookup-table backend（`_lookup_shanten`）へ
     置き換えた。Issue #213以降は`_shanten_backend`がprocess起動時に選んだ
     実装（defaultは`_lookup_shanten`、opt-inでnative）を呼ぶ。七対子・
-    国士無双は従来どおり`_python_shanten`の単純なcount計算を使う。どちらも
+    国士無双は従来どおりの単純なcount計算（Issue #338以降は`_shanten_common`）を使う。どちらも
     shanten semanticは変わっていない。
     """
     fixed_meld_count = _fixed_meld_count(concealed_tile_count)
@@ -391,8 +392,8 @@ if _shanten_backend.native_evaluate_discards is not None:
 def _meldless_special_shanten(counts: Sequence[int]) -> int:
     """Return the shared closed-hand minimum for seven pairs / orphans."""
     return min(
-        _python_shanten.calculate_seven_pairs_shanten(counts),
-        _python_shanten.calculate_thirteen_orphans_shanten(counts),
+        _shanten_common.calculate_seven_pairs_shanten(counts),
+        _shanten_common.calculate_thirteen_orphans_shanten(counts),
     )
 
 
@@ -416,7 +417,7 @@ def _count_tile_kinds(tiles: tuple[Tile, ...]) -> list[int]:
 
     赤5と通常5は同じindexへ加算する。入力順序に依存しない。
     """
-    counts = [0] * _python_shanten.TILE_KIND_COUNT
+    counts = [0] * _shanten_common.TILE_KIND_COUNT
     for tile in tiles:
         tile_type = tile.tile_type
         counts[_CATEGORY_OFFSETS[tile_type.category] + tile_type.rank - 1] += 1

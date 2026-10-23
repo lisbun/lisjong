@@ -203,6 +203,8 @@ class NoComputedOracleTest(unittest.TestCase):
             "_python_shanten",
             "_lookup_shanten",
             "_shanten_frontier",
+            "_shanten_common",
+            "_shanten_table",
             "_python_shanten_from_valid_counts",
             "mahjong",
         }
