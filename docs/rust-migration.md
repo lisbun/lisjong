@@ -6,7 +6,8 @@
 
 Python重複計算backendの廃止範囲・consumer・配布前提・切替順序は
 [Python計算backendの段階的廃止](python-compute-backend-retirement.md)を参照する。
-#332/#333は完了済み。次の限定実装は#337（R5仕様検証）と#338（artifact/helper分離）。
+#332/#333は完了済み。#337の[R5仕様検証](r5-spec-verification.md)を追加し、
+次の限定実装は#338（artifact/helper分離）。
 Rust必須化とArena採用は配布・互換性の前提が揃ってから別Issueで行う。
 
 ## 到達目標

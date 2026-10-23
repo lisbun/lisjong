@@ -71,7 +71,7 @@ D1/D2は配布・必須化をblockするが、#337/#338と本設計の完了はb
 | --- | --- | --- |
 | numeric | #332の`shanten_spec_fixtures.py`、`test_shanten_spec_fixtures.py`。全有効枚数・確定面子、特殊形、赤、public/canonical/native、対称性、入力不正、routing | 定数と根拠を正本にする。旧DFS/lookupとの差分test削除時にcoverageを対応付ける。fixtureを再作成しない |
 | batched discard | #333のRust core unit test、既存native binding tests。候補順、None/empty、threshold、4枚、table error | synthetic scorerのloop testと実際の向聴計算testを区別。入力検証・counter・実table integrationは残す |
-| R5 | `test_native_progression_backend.py`のPython/unpruned差分、horizon 1〜3、root順/重複、境界、counter/cache、3 caller、GIL。Rustはoverflow等 | #337で小さい残牌の手計算distribution・tieとcaller期待値を補う。既存境界/GIL検証を重複実装しない |
+| R5 | `test_native_progression_backend.py`のPython/unpruned差分、horizon 1〜3、root順/重複、境界、counter/cache、3 caller、GIL。Rustはoverflow等 | #337で`test_progression_spec_fixtures.py`に手計算distribution・tie・caller固定値を追加。[導出とcoverage](r5-spec-verification.md)参照。既存差分/境界/GIL検証は保持 |
 | artifact・binding | format/parser、破損、配列、API不一致、release subprocess、実native routing | #338の移動に対応して維持。generatorの再現性、nativeなしimport経路を確認 |
 | 配布・provenance | manylinux build、AL2023 binary-only、SOURCE_REVISION。Arenaでwheel hash/ロードfile照合 | Python比較を消しても保持。wheelなし・不整合が成功/skipにならないtestを切替時に固定 |
 
@@ -109,7 +109,7 @@ seed管理、P3、候補固有の確認や正式評価承認は省略しない�
 | 順序・状態 | Issue / owner | 完了条件と依存 |
 | --- | --- | --- |
 | 完了 | #332 / #333、lisjong | numeric fixtureとbatched Rust core。追加作業なし |
-| 1 READY | [#337](https://github.com/lisbun/lisjong/issues/337)、Claude Code | R5の独立fixtureと選択契約の不足補完、native必須CI。削除なし |
+| 1 検証実装済み | [#337](https://github.com/lisbun/lisjong/issues/337)、lisjong | R5の独立fixtureと選択契約の不足補完。完了状態・CI証拠はIssue/PRを参照。削除なし |
 | 2 READY | [#338](https://github.com/lisbun/lisjong/issues/338)、Claude Code | artifact/helper供給分離、bytes/API/default不変、generator回帰。#337とは必須依存なし |
 | 3 判断後に起票 | 配布準備 / lisjong、環境確認はユーザー管理環境 | D1/D2を確定し対象platformのbuild/installを検証。同revision二段install、永続取得と失敗動作を文書化 |
 | 4 設計から起票 | Arena互換準備 / Arena owner | D3、CLI/schema別検証、旧protocol保持、新gate仕様を確定。旧pinで読取/新旧gate準備をmergeし、まだ実行切替しない |
