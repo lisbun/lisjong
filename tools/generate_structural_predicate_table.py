@@ -24,7 +24,7 @@ from array import array
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from lisjong.hand_evaluation import (  # noqa: E402
-    _lookup_shanten,
+    _shanten_table,
     _structural_predicates,
 )
 from lisjong.hand_evaluation._shanten_frontier import (  # noqa: E402
@@ -39,12 +39,12 @@ _DEFAULT_SHANTEN_TABLE = (
     / "src"
     / "lisjong"
     / "hand_evaluation"
-    / _lookup_shanten.TABLE_RESOURCE
+    / _shanten_table.TABLE_RESOURCE
 )
 
 
 def _completion_mask(
-    table: _lookup_shanten._ShantenTable,
+    table: _shanten_table._ShantenTable,
     *,
     key: int,
     tile_count: int,
@@ -65,7 +65,7 @@ def _completion_mask(
         counts = table.honor_counts
         pool = table.honor_pool
     if frontier_id >= frontier_count:
-        raise _lookup_shanten.ShantenTableError(
+        raise _shanten_table.ShantenTableError(
             "source shanten table references a frontier that does not exist"
         )
 
@@ -78,10 +78,10 @@ def _completion_mask(
     start = starts[frontier_id]
     for position in range(start, start + counts[frontier_id]):
         packed = pool[position]
-        blocks, head, _meld_seeds, _head_seeds = _lookup_shanten._decode_state(
-            packed >> _lookup_shanten._SCORE_SHIFT
+        blocks, head, _meld_seeds, _head_seeds = _shanten_table._decode_state(
+            packed >> _shanten_table._SCORE_SHIFT
         )
-        score = packed & _lookup_shanten._SCORE_MASK
+        score = packed & _shanten_table._SCORE_MASK
         if tile_count != 3 * blocks + 2 * head:
             continue
         if score != 2 * blocks + head:
@@ -92,7 +92,7 @@ def _completion_mask(
 
 
 def _build_group(
-    table: _lookup_shanten._ShantenTable,
+    table: _shanten_table._ShantenTable,
     kind_count: int,
     *,
     suited: bool,
@@ -151,7 +151,7 @@ def build_artifact(
     *,
     progress: bool = True,
 ) -> tuple[bytes, dict[str, int | float]]:
-    source_table = _lookup_shanten._ShantenTable(shanten_table_path.read_bytes())
+    source_table = _shanten_table._ShantenTable(shanten_table_path.read_bytes())
     suit_ids, suit_pairs, suit_reachable, suit_time = _build_group(
         source_table,
         SUIT_KIND_COUNT,

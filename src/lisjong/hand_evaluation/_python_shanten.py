@@ -13,32 +13,25 @@ Cryolite/nyanten、Apricot-S/xiangting等の先行実装から、探索候補の
 塔子数のcap条件、同じ牌種を5枚必要とする分解を除外する必要性という観点を
 学んだうえで、lisjongの命名と設計へ合わせて独立に実装したものである。
 source codeの移植は行っていない。
+
+Issue #338で、共有定数と七対子・国士無双helperは`_shanten_common`へ分離した。
+本moduleは通常形の再帰探索（旧DFS oracle）だけを持ち、production pathからは
+importされない。`_shanten_frontier`もこのmoduleには依存しない。
 """
 
 from collections.abc import Sequence
 
-TILE_KIND_COUNT = 34
-"""向聴計算内部で使う34牌種canonical representationの要素数。"""
+from lisjong.hand_evaluation import _shanten_common
+from lisjong.hand_evaluation._shanten_common import (
+    MAX_COPIES_PER_TILE_KIND,
+    SUITED_KIND_COUNT,
+    TILE_KIND_COUNT,
+)
 
-SUITED_KIND_COUNT = 27
-"""数牌（萬子・筒子・索子）が占めるindexの個数。0..26が数牌、27..33が字牌。"""
-
-MAX_COPIES_PER_TILE_KIND = 4
-"""1つの牌種が実在し得る最大枚数。和了形もこの枚数を超えられない。"""
-
+_MAX_BLOCK_COUNT = _shanten_common.MAX_BLOCK_COUNT
+_STANDARD_SHANTEN_BASE = _shanten_common.STANDARD_SHANTEN_BASE
+_SEED_COUNT_CAP = _shanten_common.SEED_COUNT_CAP
 _RANKS_PER_SUIT = 9
-
-_TERMINAL_OR_HONOR_INDICES = (0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33)
-"""国士無双の対象となる么九牌13種のindex。"""
-
-_MAX_BLOCK_COUNT = 4
-"""通常形で雀頭を除いて必要な面子・塔子候補の総数。"""
-
-_STANDARD_SHANTEN_BASE = 8
-"""面子・塔子・雀頭を1つも持たない場合の通常形向聴数。"""
-
-_SEED_COUNT_CAP = 5
-"""探索stateとして保持する種牌数の上限。必要な種牌は最大5個（4面子 + 雀頭）。"""
 
 
 def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> int:
@@ -59,32 +52,6 @@ def calculate_standard_shanten(counts: Sequence[int], fixed_meld_count: int) -> 
     search = _StandardFormSearch(counts)
     block_score = search.best_block_score(_MAX_BLOCK_COUNT - fixed_meld_count)
     return _STANDARD_SHANTEN_BASE - 2 * fixed_meld_count - block_score
-
-
-def calculate_seven_pairs_shanten(counts: Sequence[int]) -> int:
-    """七対子の向聴数を返す。
-
-    同じ牌種の3枚目以降は別の対子として使えないため、対子は牌種ごとに最大1しか
-    数えない。牌種数が7未満の場合は、対子にできる牌種を新たに引く必要があるぶん
-    だけ補正する。
-    """
-    pair_count = sum(1 for count in counts if count >= 2)
-    kind_count = sum(1 for count in counts if count >= 1)
-
-    shanten = 6 - pair_count
-    if kind_count < 7:
-        shanten += 7 - kind_count
-    return shanten
-
-
-def calculate_thirteen_orphans_shanten(counts: Sequence[int]) -> int:
-    """国士無双の向聴数を返す。
-
-    么九牌の種類数と、么九牌の対子を1つ持つかどうかだけで決まる。
-    """
-    kind_count = sum(1 for index in _TERMINAL_OR_HONOR_INDICES if counts[index] >= 1)
-    has_pair = any(counts[index] >= 2 for index in _TERMINAL_OR_HONOR_INDICES)
-    return 13 - kind_count - (1 if has_pair else 0)
 
 
 class _StandardFormSearch:

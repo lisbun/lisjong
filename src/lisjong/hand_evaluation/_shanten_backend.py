@@ -16,13 +16,14 @@ LISJONG_SHANTEN_BACKEND   backend
 `rust`を明示した場合、native拡張をimportできなければimport時に
 `ShantenBackendError`でfail closedし、Python backendへ黙って切り替えない。
 native backendは`_lookup_shanten`と同じ`_shanten_table.bin`、同じresource
-state combine table、同じpenalty tableをbytesで受け取り、frontier combineの
+state combine table、同じpenalty tableを、Issue #338で分離した供給module
+`_shanten_table`からbytesで受け取り、frontier combineの
 loopと、閉じた13 / 14枚の七対子・国士無双との最小値dispatchをnativeで実行する
 （Issue #213の計測でcore全体がchampion Policyの主要costだったため）。
-artifact integrity failureは同じ`ShantenTableError`になる。
+artifact integrity failureは同じ`_shanten_table.ShantenTableError`になる。
 
 dispatchと特殊形の定義はPython core（`shanten._shanten_from_valid_counts()`、
-`_python_shanten`）が正本であり、native側はその写しである。差分は
+`_shanten_common`）が正本であり、native側はその写しである。差分は
 `tests/test_native_shanten_backend.py`のdifferential testsと、rust選択下の
 full test suite（CI `native-backend` job）で検出する。
 
@@ -53,7 +54,7 @@ R5もnativeで実行し、R5だけPythonへ黙って戻ることはない（環�
 import os
 import sys
 
-from lisjong.hand_evaluation import _lookup_shanten
+from lisjong.hand_evaluation import _shanten_table
 
 BACKEND_ENVIRONMENT_VARIABLE = "LISJONG_SHANTEN_BACKEND"
 PYTHON_BACKEND = "python"
@@ -74,12 +75,15 @@ def _little_endian_bytes(values) -> bytes:
 
 
 def build_native_table(native_module):
-    """`_lookup_shanten`のartifactとtableからnative tableを作る。"""
+    """`_shanten_table`のartifactとcombine / penalty表からnative tableを作る。
+
+    Python lookup計算本体（`_lookup_shanten`）には依存しない（Issue #338）。
+    """
     return native_module.StandardShantenTable(
-        _lookup_shanten.read_table_payload(),
-        _little_endian_bytes(_lookup_shanten._COMBINE),
-        b"".join(table.tobytes() for table in _lookup_shanten._PENALTY),
-        _lookup_shanten.ShantenTableError,
+        _shanten_table.read_table_payload(),
+        _little_endian_bytes(_shanten_table._COMBINE),
+        b"".join(table.tobytes() for table in _shanten_table._PENALTY),
+        _shanten_table.ShantenTableError,
     )
 
 
@@ -149,4 +153,7 @@ if BACKEND_NAME == RUST_BACKEND:
     native_evaluate_discards = _NATIVE_TABLE.evaluate_discards
     native_evaluate_progression = _NATIVE_TABLE.evaluate_progression
 else:
+    # Python lookup計算本体はpython選択時だけimportする（Issue #338）。
+    from lisjong.hand_evaluation import _lookup_shanten
+
     calculate_standard_shanten = _lookup_shanten.calculate_standard_shanten

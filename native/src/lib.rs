@@ -362,7 +362,7 @@ impl ShantenCore {
 pub(crate) const VALID_CONCEALED_TILE_COUNTS: [i64; 10] = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14];
 const TERMINAL_OR_HONOR_INDICES: [usize; 13] = [0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33];
 
-/// Same definition as `_python_shanten.calculate_seven_pairs_shanten()`.
+/// Same definition as `_shanten_common.calculate_seven_pairs_shanten()`.
 fn seven_pairs_shanten(counts: &[u8; TILE_KIND_COUNT]) -> i32 {
     let pair_count = counts.iter().filter(|&&count| count >= 2).count() as i32;
     let kind_count = counts.iter().filter(|&&count| count >= 1).count() as i32;
@@ -373,7 +373,7 @@ fn seven_pairs_shanten(counts: &[u8; TILE_KIND_COUNT]) -> i32 {
     shanten
 }
 
-/// Same definition as `_python_shanten.calculate_thirteen_orphans_shanten()`.
+/// Same definition as `_shanten_common.calculate_thirteen_orphans_shanten()`.
 fn thirteen_orphans_shanten(counts: &[u8; TILE_KIND_COUNT]) -> i32 {
     let kind_count = TERMINAL_OR_HONOR_INDICES
         .iter()

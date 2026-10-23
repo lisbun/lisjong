@@ -18,6 +18,8 @@ from lisjong.hand_evaluation import (
     _lookup_shanten,
     _python_shanten,
     _shanten_backend,
+    _shanten_common,
+    _shanten_table,
     calculate_shanten,
 )
 from lisjong.policy_contract.tile import Tile, TileCategory, TileType
@@ -34,7 +36,7 @@ _TABLE_PATH = (
     / "src"
     / "lisjong"
     / "hand_evaluation"
-    / _lookup_shanten.TABLE_RESOURCE
+    / _shanten_table.TABLE_RESOURCE
 )
 _HAND_SIZES = (1, 2, 4, 5, 7, 8, 10, 11, 13, 14)
 
@@ -193,8 +195,8 @@ class NativeStandardShantenEquivalenceTest(unittest.TestCase):
                     expected = _lookup_shanten.calculate_standard_shanten(
                         counts, fixed_meld_count
                     )
-                except _lookup_shanten.ShantenTableError as error:
-                    with self.assertRaises(_lookup_shanten.ShantenTableError) as raised:
+                except _shanten_table.ShantenTableError as error:
+                    with self.assertRaises(_shanten_table.ShantenTableError) as raised:
                         self.table.standard_shanten(counts, fixed_meld_count)
                     self.assertEqual(str(raised.exception), str(error))
                     continue
@@ -271,8 +273,8 @@ def _oracle_numeric_shanten(counts) -> int:
     if size in (13, 14):
         value = min(
             value,
-            _python_shanten.calculate_seven_pairs_shanten(counts),
-            _python_shanten.calculate_thirteen_orphans_shanten(counts),
+            _shanten_common.calculate_seven_pairs_shanten(counts),
+            _shanten_common.calculate_thirteen_orphans_shanten(counts),
         )
     return value
 
@@ -374,22 +376,22 @@ class NativeArtifactIntegrityTest(unittest.TestCase):
         return _lisjong_native.StandardShantenTable(
             payload,
             (
-                _shanten_backend._little_endian_bytes(_lookup_shanten._COMBINE)
+                _shanten_backend._little_endian_bytes(_shanten_table._COMBINE)
                 if combine is None
                 else combine
             ),
             (
-                b"".join(table.tobytes() for table in _lookup_shanten._PENALTY)
+                b"".join(table.tobytes() for table in _shanten_table._PENALTY)
                 if penalties is None
                 else penalties
             ),
-            _lookup_shanten.ShantenTableError,
+            _shanten_table.ShantenTableError,
         )
 
     def test_corrupted_artifacts_fail_closed(self) -> None:
         payload = bytearray(self.payload)
         bad_version = bytearray(payload)
-        bad_version[8:12] = (_lookup_shanten.FORMAT_VERSION + 1).to_bytes(4, "little")
+        bad_version[8:12] = (_shanten_table.FORMAT_VERSION + 1).to_bytes(4, "little")
         for label, broken in (
             ("empty", b""),
             ("magic", b"NOTALISJ" + bytes(payload[8:])),
@@ -398,19 +400,19 @@ class NativeArtifactIntegrityTest(unittest.TestCase):
             ("extended", bytes(payload) + b"\x00\x00"),
         ):
             with self.subTest(label=label):
-                with self.assertRaises(_lookup_shanten.ShantenTableError):
+                with self.assertRaises(_shanten_table.ShantenTableError):
                     self._build(broken)
 
     def test_broken_frontier_span_fails_closed_at_load(self) -> None:
         header_size = 28
         span_offset = (
             header_size
-            + (_lookup_shanten.SUIT_KEY_SPACE + _lookup_shanten.HONOR_KEY_SPACE) * 2
+            + (_shanten_table.SUIT_KEY_SPACE + _shanten_table.HONOR_KEY_SPACE) * 2
         )
         broken = bytearray(self.payload)
         broken[span_offset : span_offset + 4] = (0xFFFFFFF0).to_bytes(4, "little")
         with self.assertRaisesRegex(
-            _lookup_shanten.ShantenTableError, "past the end of its entry pool"
+            _shanten_table.ShantenTableError, "past the end of its entry pool"
         ):
             self._build(bytes(broken))
 
@@ -422,16 +424,16 @@ class NativeArtifactIntegrityTest(unittest.TestCase):
         for kind in (9, 10, 11, 18, 19, 20, 27, 27, 28, 28, 29, 29, 30, 30):
             counts[kind] += 1
         with self.assertRaisesRegex(
-            _lookup_shanten.ShantenTableError, "frontier that does not exist"
+            _shanten_table.ShantenTableError, "frontier that does not exist"
         ):
             table.standard_shanten(counts, 0)
 
     def test_inconsistent_helper_tables_fail_closed(self) -> None:
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
+        with self.assertRaises(_shanten_table.ShantenTableError):
             self._build(self.payload, combine=b"\x00\x00")
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
+        with self.assertRaises(_shanten_table.ShantenTableError):
             self._build(self.payload, combine=b"\x00\x7f" * (360 * 360))
-        with self.assertRaises(_lookup_shanten.ShantenTableError):
+        with self.assertRaises(_shanten_table.ShantenTableError):
             self._build(self.payload, penalties=b"\x00")
 
     def test_out_of_range_pool_states_fail_closed_without_aborting(self) -> None:
@@ -468,14 +470,14 @@ class NativeArtifactIntegrityTest(unittest.TestCase):
 _CORRUPT_POOL_PROGRAM = """
 import struct
 import _lisjong_native
-from lisjong.hand_evaluation import _lookup_shanten, _shanten_backend
+from lisjong.hand_evaluation import _shanten_backend, _shanten_table
 
-payload = bytearray(_lookup_shanten.read_table_payload())
-header = struct.unpack_from(_lookup_shanten.HEADER_FORMAT, payload)
+payload = bytearray(_shanten_table.read_table_payload())
+header = struct.unpack_from(_shanten_table.HEADER_FORMAT, payload)
 _magic, _version, suit_frontiers, honor_frontiers, suit_pool, honor_pool = header
 suit_pool_offset = (
-    struct.calcsize(_lookup_shanten.HEADER_FORMAT)
-    + (_lookup_shanten.SUIT_KEY_SPACE + _lookup_shanten.HONOR_KEY_SPACE) * 2
+    struct.calcsize(_shanten_table.HEADER_FORMAT)
+    + (_shanten_table.SUIT_KEY_SPACE + _shanten_table.HONOR_KEY_SPACE) * 2
     + (suit_frontiers + honor_frontiers) * 5
 )
 offset, entries = (
@@ -488,11 +490,11 @@ payload[offset + index * 2 : offset + index * 2 + 2] = ({packed}).to_bytes(2, "l
 try:
     table = _lisjong_native.StandardShantenTable(
         bytes(payload),
-        _shanten_backend._little_endian_bytes(_lookup_shanten._COMBINE),
-        b"".join(table.tobytes() for table in _lookup_shanten._PENALTY),
-        _lookup_shanten.ShantenTableError,
+        _shanten_backend._little_endian_bytes(_shanten_table._COMBINE),
+        b"".join(table.tobytes() for table in _shanten_table._PENALTY),
+        _shanten_table.ShantenTableError,
     )
-except _lookup_shanten.ShantenTableError as error:
+except _shanten_table.ShantenTableError as error:
     assert "unknown resource state" in str(error), str(error)
     print("ShantenTableError: unknown resource state")
 else:

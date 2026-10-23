@@ -1,7 +1,8 @@
 """通常形shanten lookup table artifactを生成するdeterministic generator。
 
 Issue #115。`lisjong.hand_evaluation._shanten_frontier`が導出するexact local
-frontierを、`_lookup_shanten`がruntimeで読むcompact binary artifactへ書き出す。
+frontierを、`_lookup_shanten`とnative backendがruntimeで読むcompact binary
+artifactへ書き出す。
 
     python tools/generate_shanten_table.py \
         src/lisjong/hand_evaluation/_shanten_table.bin
@@ -11,7 +12,7 @@ randomization、object identityへ依存しない（keyはbase-5整数の昇順�
 entryはpacked値の昇順で書き出す）。
 
 runtimeでinternet accessを必要とせず、第三者repositoryの生成物やsource
-codeをcopyしていない。artifact formatは`_lookup_shanten`が正本とする。
+codeをcopyしていない。artifact formatは`_shanten_table`が正本とする。
 """
 
 import argparse
@@ -23,7 +24,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
-from lisjong.hand_evaluation import _lookup_shanten  # noqa: E402
+from lisjong.hand_evaluation import _shanten_table  # noqa: E402
 from lisjong.hand_evaluation._shanten_frontier import (  # noqa: E402
     HONOR_KIND_COUNT,
     SUIT_KIND_COUNT,
@@ -55,7 +56,7 @@ def _build_group(kind_count: int, *, suited: bool, progress_label: str):
         frontier = dominant_frontier(local_frontier(counts, suited=suited))
         packed = tuple(
             sorted(
-                _lookup_shanten.pack_entry(blocks_used, head_used, ms, hs, score)
+                _shanten_table.pack_entry(blocks_used, head_used, ms, hs, score)
                 for (blocks_used, head_used, ms, hs), score in frontier.items()
             )
         )
@@ -87,9 +88,9 @@ def build_artifact() -> tuple[bytes, dict[str, int]]:
     )
 
     header = struct.pack(
-        _lookup_shanten.HEADER_FORMAT,
-        _lookup_shanten.MAGIC,
-        _lookup_shanten.FORMAT_VERSION,
+        _shanten_table.HEADER_FORMAT,
+        _shanten_table.MAGIC,
+        _shanten_table.FORMAT_VERSION,
         len(suit_spans),
         len(honor_spans),
         len(suit_pool),

@@ -19,14 +19,17 @@ Arena [`86ea715`](https://github.com/lisbun/lisjong-arena/tree/86ea7152b0ce3de82
 | numeric向聴（通常形・七対子・国士） | `hand_evaluation/shanten.py`、`_lookup_shanten.py`、`_python_shanten.py` / `native/src/lib.rs` | 公開`calculate_shanten`、trusted canonical-count入口、restricted standard入口。赤牌集約、concealed枚数からの確定面子数、入力検証を維持 | runtime Python数値計算・DFS oracleは検証移管後に廃止。wrapperの入力契約は保持 |
 | batched discard・有効牌 | `shanten.py::_python_evaluate_discards` / `native/src/discards.rs`、`python.rs` | policy側の一括呼出。候補順、threshold、None/empty、4枚制限、戻り値、counter | #333でRust loop分離済み。Python loop廃止はnumericと同段階。binding validation/counterは残す |
 | R5 terminal progression DP | `policies/terminal_shanten_progression_mechanism_riichi_defense.py::_TerminalShantenProgressionEvaluator` / `native/src/progression.rs` | `_new_progression_evaluator`経由でprogression、targeted honor release、offensive efficiency diagnostic。root群、distribution、同点時の選択、decision内cache | #337完了後にPython DPと比較専用testを廃止。native wrapper、policy選択・diagnosticは残す |
-| structural complete/tenpai predicate | `_structural_predicates.py`と`shanten.py::_meldless_special_shanten` | numeric APIとは別の構造判定。後者は`_python_shanten`の七対子/国士helperを共有 | 今回は保持。共有helper/定数を#338で分離。Rust移植をこの廃止の前提に追加しない |
-| artifact読込・補助配列 | `_lookup_shanten.read_table_payload`、`_COMBINE`、`_PENALTY`、`ShantenTableError` / native table parser | `_shanten_backend.build_native_table`がPython側からpayloadと配列を渡す | 計算loopから分離して保持。format/version、endian、破損時の明示的失敗を維持 |
-| artifact生成・frontier | `tools/generate_shanten_table.py`、`generate_structural_predicate_table.py`、`_shanten_frontier.py` | lookupのpack/header/resource state、Python共通定数を使用 | offline Python generatorを保持。生成再現性とimport graphを検証し、native必須化で生成不能にしない |
+| structural complete/tenpai predicate | `_structural_predicates.py`と`shanten.py::_meldless_special_shanten` | numeric APIとは別の構造判定。後者は`_shanten_common`の七対子/国士helperを共有（#338で`_python_shanten`から分離済み） | 保持。Rust移植をこの廃止の前提に追加しない |
+| artifact読込・補助配列 | `_shanten_table.py`（format定数、`read_table_payload`、`_ShantenTable`、`_COMBINE`、`_PENALTY`、`ShantenTableError`）/ native table parser | `_shanten_backend.build_native_table`が`_shanten_table`だけからpayloadと配列を渡す。rust選択processは`_lookup_shanten`をimportしない | #338で計算loopから分離済み。保持。format/version、endian、破損時の明示的失敗を維持 |
+| artifact生成・frontier | `tools/generate_shanten_table.py`、`generate_structural_predicate_table.py`、`_shanten_frontier.py` | `_shanten_table`のpack/header/resource state/reader、`_shanten_common`の共通定数を使用（#338以降、`_lookup_shanten`/`_python_shanten`/nativeをimportしない） | offline Python generatorを保持。生成再現性とimport graphをtestで固定済み。native必須化で生成不能にしない |
 | scoring | `scoring.py`は型・validation・binding / `native/src/scoring.rs` | scoring API、`SCORING_API_VERSION=1`。nativeなしでもimport/型構築可、評価時に明示的失敗 | 既にRust計算のみ。削除対象のPython scorerはない。lazy import契約を別判断なく変更しない |
 | Python Policy / Learning / 制御 | `policies`、feature/dataset/training、Python API | ML optional + lazy import、観測情報境界、immutable artifact | 残す。Python非依存化や全repositoryのRust化を目的にしない |
 
-`src/lisjong/`を上表のPython source pathに補う。`_python_shanten`全体を削除する前に、
-`TILE_KIND_COUNT`等の共有定数と特殊形helper、frontierの依存が解消されている必要がある。
+`src/lisjong/`を上表のPython source pathに補う。`_python_shanten`全体を削除する前提だった
+`TILE_KIND_COUNT`等の共有定数・特殊形helper・frontierの依存は、#338で`_shanten_common`へ移して解消した。
+Python計算本体の削除対象は`_lookup_shanten`（lookup計算loop）と`_python_shanten`（DFS oracle）であり、
+`_shanten_common`・`_shanten_table`・`_shanten_frontier`・generatorは保持対象である。
+依存境界は`tests/test_shanten.py::ArtifactSupplySeparationTest`で固定する。
 
 ## 2. backend選択と互換性
 
@@ -72,7 +75,7 @@ D1/D2は配布・必須化をblockするが、#337/#338と本設計の完了はb
 | numeric | #332の`shanten_spec_fixtures.py`、`test_shanten_spec_fixtures.py`。全有効枚数・確定面子、特殊形、赤、public/canonical/native、対称性、入力不正、routing | 定数と根拠を正本にする。旧DFS/lookupとの差分test削除時にcoverageを対応付ける。fixtureを再作成しない |
 | batched discard | #333のRust core unit test、既存native binding tests。候補順、None/empty、threshold、4枚、table error | synthetic scorerのloop testと実際の向聴計算testを区別。入力検証・counter・実table integrationは残す |
 | R5 | `test_native_progression_backend.py`のPython/unpruned差分、horizon 1〜3、root順/重複、境界、counter/cache、3 caller、GIL。Rustはoverflow等 | #337で`test_progression_spec_fixtures.py`に手計算distribution・tie・caller固定値を追加。[導出とcoverage](r5-spec-verification.md)参照。既存差分/境界/GIL検証は保持 |
-| artifact・binding | format/parser、破損、配列、API不一致、release subprocess、実native routing | #338の移動に対応して維持。generatorの再現性、nativeなしimport経路を確認 |
+| artifact・binding | format/parser、破損、配列、API不一致、release subprocess、実native routing | #338の移動後も維持。generatorの再現性、nativeなしimport経路、rust選択時に計算moduleを読まないことを固定 |
 | 配布・provenance | manylinux build、AL2023 binary-only、SOURCE_REVISION。Arenaでwheel hash/ロードfile照合 | Python比較を消しても保持。wheelなし・不整合が成功/skipにならないtestを切替時に固定 |
 
 Python oracleの削除は「testがpassした」だけでは進めない。各差分testについて仕様fixture・property・
@@ -110,7 +113,7 @@ seed管理、P3、候補固有の確認や正式評価承認は省略しない�
 | --- | --- | --- |
 | 完了 | #332 / #333、lisjong | numeric fixtureとbatched Rust core。追加作業なし |
 | 1 検証実装済み | [#337](https://github.com/lisbun/lisjong/issues/337)、lisjong | R5の独立fixtureと選択契約の不足補完。完了状態・CI証拠はIssue/PRを参照。削除なし |
-| 2 READY | [#338](https://github.com/lisbun/lisjong/issues/338)、Claude Code | artifact/helper供給分離、bytes/API/default不変、generator回帰。#337とは必須依存なし |
+| 2 実装済み | [#338](https://github.com/lisbun/lisjong/issues/338)、Claude Code | artifact/helper供給分離、bytes/API/default不変、generator回帰。完了状態・CI証拠はIssue/PRを参照 |
 | 3 判断後に起票 | 配布準備 / lisjong、環境確認はユーザー管理環境 | D1/D2を確定し対象platformのbuild/installを検証。同revision二段install、永続取得と失敗動作を文書化 |
 | 4 設計から起票 | Arena互換準備 / Arena owner | D3、CLI/schema別検証、旧protocol保持、新gate仕様を確定。旧pinで読取/新旧gate準備をmergeし、まだ実行切替しない |
 | 5 BLOCKED | Rust必須化・Python計算削除 / lisjong | #337/#338、配布、Arena準備完了後。numeric/batched/R5と比較専用test/CIを限定削除。保持項目、env失敗契約、同revision CI/full suiteを確認 |
