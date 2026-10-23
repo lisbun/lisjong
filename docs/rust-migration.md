@@ -4,6 +4,11 @@
 横断作業の正本: [lisjong-project #87](https://github.com/lisbun/lisjong-project/issues/87)。
 最初の実装: [lisjong #240](https://github.com/lisbun/lisjong/issues/240)。
 
+Python重複計算backendの廃止範囲・consumer・配布前提・切替順序は
+[Python計算backendの段階的廃止](python-compute-backend-retirement.md)を参照する。
+#332/#333は完了済み。次の限定実装は#337（R5仕様検証）と#338（artifact/helper分離）。
+Rust必須化とArena採用は配布・互換性の前提が揃ってから別Issueで行う。
+
 ## 到達目標
 
 対局・判断の基盤はRustに集約し、学習・統計分析・実験はPythonを継続する。
