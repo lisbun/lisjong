@@ -41,7 +41,8 @@ external executionをlisjongへ戻さず、既存の依存方向を守る。
 
 ## 第1段階の到達範囲
 
-`native/src/lib.rs`にtable parser・numeric shanten core、`native/src/progression.rs`にR5探索を置く。
+`native/src/lib.rs`にtable parser・numeric shanten core、`native/src/discards.rs`に
+打牌候補の一括評価（打牌・仮想ツモの列挙、Issue #333）、`native/src/progression.rs`にR5探索を置く。
 Python依存の型変換・例外変換・module登録・診断カウンタは`native/src/python.rs`が担当する。
 
 Cargo feature `python`はdefaultで有効。既存のmaturin wheel生成とPython APIは維持する。
@@ -62,7 +63,9 @@ Rust公開APIはまだ設けていないため、bindingを外したlibrary buil
 この段階では以下が残る。
 
 - shanten artifact・補助配列の供給はPython側が担当する。
-- batched discardの列挙はまだbinding module内にある。
+- batched discardの列挙はRust core（`discards.rs`）へ移したが、入力validation・Python結果への変換・
+  診断カウンタはbinding側に残る。frontier artifactと補助配列は引き続きPythonから供給する。
+- Python backendがdefaultのままで、batched discardにもPython実装が残る。
 - Policy・入力契約・engine・対局runnerは移植していない。
 - Rust指定はopt-in、Pythonがdefaultという現在の選択規則を維持する。
 - API_VERSION=3、SOURCE_REVISION、例外・結果順序・カウンタの意味を変更しない。
