@@ -9,8 +9,8 @@
 //! runtime or a public Rust API. Calculation semantics are unchanged.
 //!
 //! `python.rs` owns input validation, exception conversion, diagnostics and
-//! module registration, including the existing batched discard entry.
-//! `progression.rs` owns the Python-free sequential draw/discard DP.
+//! module registration.  `discards.rs` owns the Python-free batched discard
+//! enumeration and `progression.rs` the Python-free sequential draw/discard DP.
 //!
 //! Integer range: frontier entry scores are 4-bit (0..=15) and at most four
 //! groups are summed, so every intermediate score is in 0..=60 and the final
@@ -20,6 +20,7 @@
 
 // The numeric core has no Python dependency. The existing wheel enables
 // the binding by default; --no-default-features builds/tests only Rust.
+mod discards;
 mod progression;
 #[cfg(feature = "python")]
 mod python;

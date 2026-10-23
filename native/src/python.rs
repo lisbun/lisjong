@@ -8,6 +8,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyInt, PyList, PyTuple, PyType};
 
+use crate::discards::{self, DISCARD_HAND_SIZES};
 use crate::scoring;
 use crate::{
     MAX_FIXED_MELDS, ShantenCore, TILE_KIND_COUNT, VALID_CONCEALED_TILE_COUNTS, parse_artifact,
@@ -40,9 +41,6 @@ static DISCARD_EVALUATION_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Number of successful `evaluate_progression()` calls in this process.
 /// Diagnostic only: tests use it to prove that the native R5 search ran.
 static PROGRESSION_EVALUATION_CALLS: AtomicU64 = AtomicU64::new(0);
-
-/// Concealed hand sizes from which a discard leaves a valid concealed size.
-const DISCARD_HAND_SIZES: [usize; 5] = [2, 5, 8, 11, 14];
 
 fn read_count(item: &Bound<'_, PyAny>) -> PyResult<u8> {
     let value: i64 = item.extract()?;
@@ -208,7 +206,7 @@ impl StandardShantenTable {
         discard_indexes: &Bound<'py, PyAny>,
         improving_max_shanten: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<(Bound<'py, PyTuple>, Bound<'py, PyTuple>)> {
-        let mut counts = read_counts(counts)?;
+        let counts = read_counts(counts)?;
         let total: usize = counts.iter().map(|&count| count as usize).sum();
         if !DISCARD_HAND_SIZES.contains(&total) {
             return Err(PyValueError::new_err(
@@ -218,44 +216,14 @@ impl StandardShantenTable {
         }
         let indexes = read_discard_indexes(discard_indexes, &counts)?;
         let improving_max_shanten = read_improving_max_shanten(improving_max_shanten)?;
-        let table_error = |message: String| self.table_error(py, message);
 
-        let mut evaluations = 0u64;
-        let mut after_values = Vec::with_capacity(indexes.len());
-        let mut improving_values = Vec::with_capacity(indexes.len());
-        for &index in &indexes {
-            counts[index] -= 1;
-            evaluations += 1;
-            let after = self
-                .core
-                .numeric_shanten(&counts, total - 1)
-                .map_err(table_error)?;
-            let evaluate_improving =
-                improving_max_shanten.is_none_or(|maximum| after as i64 <= maximum);
-            let improving = if evaluate_improving {
-                let mut found = Vec::new();
-                for drawn in 0..TILE_KIND_COUNT {
-                    if counts[drawn] as i64 >= MAX_COPIES {
-                        continue;
-                    }
-                    counts[drawn] += 1;
-                    evaluations += 1;
-                    let shanten = self.core.numeric_shanten(&counts, total);
-                    counts[drawn] -= 1;
-                    if shanten.map_err(table_error)? < after {
-                        found.push(drawn as i64);
-                    }
-                }
-                Some(found)
-            } else {
-                None
-            };
-            counts[index] += 1;
-            after_values.push(after);
-            improving_values.push(improving);
-        }
+        // Every precondition of the Rust core has been checked above.
+        let evaluation =
+            discards::evaluate_discards(&self.core, &counts, &indexes, improving_max_shanten)
+                .map_err(|message| self.table_error(py, message))?;
 
-        let improving_objects = improving_values
+        let improving_objects = evaluation
+            .improving_after
             .into_iter()
             .map(|improving| match improving {
                 Some(found) => PyTuple::new(py, found).map(Bound::into_any),
@@ -263,10 +231,10 @@ impl StandardShantenTable {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let result = (
-            PyTuple::new(py, after_values)?,
+            PyTuple::new(py, evaluation.shanten_after)?,
             PyTuple::new(py, improving_objects)?,
         );
-        STANDARD_SHANTEN_CALLS.fetch_add(evaluations, Ordering::Relaxed);
+        STANDARD_SHANTEN_CALLS.fetch_add(evaluation.shanten_evaluations, Ordering::Relaxed);
         DISCARD_EVALUATION_CALLS.fetch_add(1, Ordering::Relaxed);
         Ok(result)
     }

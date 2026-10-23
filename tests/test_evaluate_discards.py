@@ -132,6 +132,29 @@ class EvaluateDiscardsContractTest(unittest.TestCase):
                     evaluate(counts, iter([31, 0])), evaluate(counts, (31, 0))
                 )
 
+    def test_hand_computed_fixed_expectations(self) -> None:
+        # Issue #333: 実装出力ではなく手計算の固定期待値。
+        # 123m456p789s111z2z3z（14枚、和了形ではない）:
+        # - 1z打: 3面子+11z雀頭+2z3z孤立 = 1向聴。1z/2z/3zのツモで聴牌。
+        # - 2z打 / 3z打: 4面子の単騎 = 聴牌。残る字牌の単騎牌だけが和了牌。
+        # - 1m打: 3面子+23m塔子+2z3z孤立 = 1向聴。1m/4m（面子化）と
+        #   2z/3z（雀頭化）で聴牌。2m/3mは雀頭と塔子を両立できない。
+        counts = _counts(_hand("123m456p789s1112z3z"))
+        snapshot = list(counts)
+        indexes = [27, 28, 29, 0]
+        for name, evaluate in _implementations():
+            with self.subTest(implementation=name):
+                self.assertEqual(
+                    evaluate(counts, indexes, None),
+                    ((1, 0, 0, 1), ((27, 28, 29), (29,), (28,), (0, 3, 28, 29))),
+                )
+                # thresholdは`<=`: 0なら聴牌の候補だけ評価する。
+                self.assertEqual(
+                    evaluate(counts, indexes, 0),
+                    ((1, 0, 0, 1), (None, (29,), (28,), None)),
+                )
+                self.assertEqual(counts, snapshot)
+
     def test_unevaluated_is_none_and_distinct_from_evaluated(self) -> None:
         # 和了形（向聴-1）: thresholdが-1なら打牌後向聴0の候補は未評価（None）、
         # thresholdなしでは評価済みで空でない。
