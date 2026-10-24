@@ -11,7 +11,10 @@ permissions:
 
 jobs:
   quality:
+    # Issue #346: lisjong requires the Rust native extension. Every test job
+    # installs the wheel built from the same commit by `native-wheel`.
     name: quality
+    needs: native-wheel
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -28,6 +31,19 @@ jobs:
       - name: Install package and development tools
         run: python -m pip install --disable-pip-version-check -e ".[dev]"
 
+      - name: Download native wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: lisjong-native-wheel-${{ github.sha }}
+          path: wheelhouse
+
+      - name: Install the same-revision native wheel (binary only, no index)
+        run: |
+          (cd wheelhouse && sha256sum --strict -c SHA256SUMS && cat BUILD-INFO.txt)
+          python -m pip install --disable-pip-version-check \
+            --only-binary=:all: --no-index --no-deps wheelhouse/*.whl
+          test "$(python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)')" = "$GITHUB_SHA"
+
       - name: Check formatting
         run: python -m ruff format --check .
 
@@ -35,10 +51,13 @@ jobs:
         run: python -m ruff check .
 
       - name: Run tests
+        env:
+          LISJONG_REQUIRE_NATIVE: "1"
         run: python -m unittest discover -s tests -v --durations 30
 
   ml-tests:
     name: ml-tests
+    needs: native-wheel
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -55,6 +74,19 @@ jobs:
       - name: Install package and development tools
         run: python -m pip install --disable-pip-version-check -e ".[dev]"
 
+      - name: Download native wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: lisjong-native-wheel-${{ github.sha }}
+          path: wheelhouse
+
+      - name: Install the same-revision native wheel (binary only, no index)
+        run: |
+          (cd wheelhouse && sha256sum --strict -c SHA256SUMS && cat BUILD-INFO.txt)
+          python -m pip install --disable-pip-version-check \
+            --only-binary=:all: --no-index --no-deps wheelhouse/*.whl
+          test "$(python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)')" = "$GITHUB_SHA"
+
       - name: Install locked CPU PyTorch
         run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.13.0"
 
@@ -62,10 +94,13 @@ jobs:
         run: python -c "import torch; assert torch.__version__ == '2.13.0+cpu'; assert not torch.cuda.is_available()"
 
       - name: Run tests with the ML runtime present
+        env:
+          LISJONG_REQUIRE_NATIVE: "1"
         run: python -m unittest discover -s tests -v --durations 30
 
   reference-validation:
     name: reference validation
+    needs: native-wheel
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -82,14 +117,28 @@ jobs:
       - name: Install package and reference implementation
         run: python -m pip install --disable-pip-version-check -e ".[reference]"
 
+      - name: Download native wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: lisjong-native-wheel-${{ github.sha }}
+          path: wheelhouse
+
+      - name: Install the same-revision native wheel (binary only, no index)
+        run: |
+          (cd wheelhouse && sha256sum --strict -c SHA256SUMS && cat BUILD-INFO.txt)
+          python -m pip install --disable-pip-version-check \
+            --only-binary=:all: --no-index --no-deps wheelhouse/*.whl
+          test "$(python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)')" = "$GITHUB_SHA"
+
       - name: Run reference validation
         run: python -m unittest discover -s reference_tests -v --durations 30
 
   native-wheel:
-    # Issue #216: build the opt-in Rust shanten backend as one prebuilt wheel for
-    # the single target environment (the lisjong-arena AWS worker: Amazon Linux
-    # 2023, x86_64, dnf CPython 3.14). manylinux_2_28 needs glibc >= 2.28;
-    # AL2023 ships 2.34. The default install and the jobs above stay Python-only.
+    # Issue #216: build the Rust shanten backend as one prebuilt wheel for the
+    # target environments (the lisjong-arena AWS worker: Amazon Linux 2023,
+    # x86_64, dnf CPython 3.14; Linux / WSL development). manylinux_2_28 needs
+    # glibc >= 2.28; AL2023 ships 2.34. Since Issue #346 the native extension is
+    # required, and every test job installs this same-commit wheel.
     name: native wheel (cp314 manylinux_2_28 x86_64)
     runs-on: ubuntu-latest
     container: quay.io/pypa/manylinux_2_28_x86_64
@@ -173,11 +222,11 @@ jobs:
 
   native-backend:
     # Issue #213 / #216: install the prebuilt wheel into a clean Amazon Linux
-    # 2023 container that has no C or Rust compiler, then check the native
-    # backend against the Python backend and the independent oracle. The wheel
-    # is installed binary-only from the local file, so an incompatible wheel
-    # fails instead of falling back to a source build.
-    name: native backend (opt-in wheel on AL2023)
+    # 2023 container that has no C or Rust compiler and run the full suite. The
+    # wheel is installed binary-only from the local file, so an incompatible
+    # wheel fails instead of falling back to a source build. The Python/Rust
+    # comparison step was removed with the Python backend (Issue #346).
+    name: native backend (wheel on AL2023)
     needs: native-wheel
     runs-on: ubuntu-latest
     container: amazonlinux:2023
@@ -217,13 +266,7 @@ jobs:
           /opt/venv/bin/python -m pip install --disable-pip-version-check .
           test "$(/opt/venv/bin/python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)')" = "$GITHUB_SHA"
 
-      - name: Run native backend equivalence tests
+      - name: Run full test suite (native backend by default)
         env:
           LISJONG_REQUIRE_NATIVE: "1"
-        run: /opt/venv/bin/python -m unittest tests.test_native_shanten_backend -v
-
-      - name: Run full test suite with the Rust backend selected
-        env:
-          LISJONG_REQUIRE_NATIVE: "1"
-          LISJONG_SHANTEN_BACKEND: rust
         run: /opt/venv/bin/python -m unittest discover -s tests -v --durations 30

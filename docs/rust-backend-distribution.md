@@ -59,15 +59,16 @@ native拡張は、Python側の`_shanten_table.bin`、resource state combine tabl
 （1 = `standard_shanten` / `shanten_from_valid_counts`、#224以前のwheelは属性なしで1とみなす。
 2 = 打牌候補の一括構造評価`evaluate_discards`を追加。
 3 = R5（expected terminal shanten progression）探索本体`evaluate_progression`を追加、Issue #232）。
-`LISJONG_SHANTEN_BACKEND=rust`のprocessは
-`_shanten_backend`のimport時に`API_VERSION`が本体の`REQUIRED_NATIVE_API_VERSION`（現在3）と一致することを確認し、
-不一致なら`ShantenBackendError`で失敗する（一部の入口だけPythonへ切り替えない。API_VERSION 2以前のwheelでR5だけPythonへ黙って戻ることもない）。
-python選択時はnative拡張をimportしないため、旧wheelがinstallされていても影響しない。これは古いwheelの取り違えを起動時に検出する最低限の検査であり、
+lisjongは`_shanten_backend`のimport時に`API_VERSION`が本体の`REQUIRED_NATIVE_API_VERSION`（現在3）と一致することを確認し、
+不一致なら`ShantenBackendError`で失敗する。Issue #346以降はnative拡張が必須で、`LISJONG_SHANTEN_BACKEND`は
+未設定または`rust`だけを受け付ける（旧`python`値は移行案内付きで拒否し、旧wheelを無視して動く経路はない）。
+これは古いwheelの取り違えを起動時に検出する最低限の検査であり、
 §3の3値による組み合わせ固定（SHA-256・`SOURCE_REVISION`照合）を置き換えない。
 
 ## 4. CI
 
-`.github/workflows/ci.yml`の2 job。default installと他のjobはPython-onlyのままで、Rust toolchainを要求しない。
+`.github/workflows/ci.yml`の`native-wheel`がwheelをbuildし、Issue #346以降はすべてのtest jobが同じcommitのwheelを
+binary-onlyで導入して`SOURCE_REVISION`を照合する。Rust toolchainを要求するのは`native-wheel`だけである。
 
 - `native-wheel`：manylinux_2_28 container内でrustfmt check、wheel build、wheel tagの検査、
   `SHA256SUMS`と`BUILD-INFO.txt`（wheel名、SHA-256、lisjong revision、event / ref、run URL、Python・rustc・maturin version）を作成し、
@@ -78,8 +79,11 @@ python選択時はnative拡張をimportしないため、旧wheelがinstallさ�
   wheel SHA-256 / `SOURCE_REVISION`は、#232を含むrevisionへ揃えて更新する必要がある（連携事項。Arena側の変更はこのPRの対象外）。
 - `native-backend`：`amazonlinux:2023` containerで`dnf`の`python3.14`だけを入れ、`cc` / `gcc` / `g++` / `clang` / `rustc` / `cargo`が
   存在しないことを確認してから、artifactのSHA-256を照合し、wheelを`--only-binary=:all: --no-index --no-deps`でinstallする。
-  `SOURCE_REVISION`がcheckout中のcommitと一致することを確認し、native同値性test（`tests.test_native_shanten_backend`）と、
-  `LISJONG_SHANTEN_BACKEND=rust`でのfull test suiteを実行する。
+  `SOURCE_REVISION`がcheckout中のcommitと一致することを確認し、full test suite（`LISJONG_REQUIRE_NATIVE=1`）を実行する。
+  Python backendとの同値性step（`tests.test_native_shanten_backend`の単独実行）はIssue #346で撤去した。
+- `quality` / `ml-tests` / `reference-validation`（Ubuntu、`actions/setup-python`のCPython 3.14）：`native-wheel`の
+  artifactをSHA-256照合してbinary-only導入し、`SOURCE_REVISION`を照合してからformat / lint / full suite、
+  CPU PyTorch下のfull suite、外部実装とのreference検証を実行する。ML未導入のcore回帰は`quality`に残る。
 
 source buildした環境での成功は、wheel導入の確認として扱わない（CIはsource buildを行わない）。
 `python -m pip install ./native`は開発用のsource buildとして残る。
@@ -111,15 +115,16 @@ python3.14 -m venv .venv
 .venv/bin/python -m pip install --only-binary=:all: --no-index --no-deps \
     "$LISJONG_INPUT_DIR/lisjong_native-0.1.0-cp314-cp314-manylinux_2_28_x86_64.whl"
 .venv/bin/python -c 'import _lisjong_native; print(_lisjong_native.SOURCE_REVISION)'   # pinしたlisjong revisionと一致
-export LISJONG_SHANTEN_BACKEND=rust   # worker processへ環境変数で継承される
+# Issue #346以降はLISJONG_SHANTEN_BACKENDを設定しない（未設定でnativeを使う。旧`python`値は拒否される）
 ```
 
 - `--only-binary=:all: --no-index`により、wheelが対象環境に合わない場合は
   `... is not a supported wheel on this platform`でinstallが失敗し、source buildへ回らない。
-- `LISJONG_SHANTEN_BACKEND=rust`で`_lisjong_native`を読み込めない場合、lisjongはimport時に`ShantenBackendError`で失敗し、
-  Pythonへfallbackしない（#213）。
-- Pythonへ戻すには`LISJONG_SHANTEN_BACKEND`を未設定または`python`にする（wheelのuninstallは不要）。
-  Python-onlyの実行にはwheelもRust toolchainも要らない。
+- `_lisjong_native`を読み込めない場合、lisjongは`lisjong.hand_evaluation.shanten`のimport時に`ShantenBackendError`で失敗し、
+  Pythonへfallbackしない（#213、#346）。
+- Issue #346でPython計算実装を削除したため、環境変数でPythonへ戻すことはできない。Python backendで行った過去の
+  実行の再現・rollbackは、記録済みのlisjong / Arena revision・wheel・環境を組で戻す
+  （[Python計算backendの段階的廃止](python-compute-backend-retirement.md)のrollback節）。
 
 ## 7. 同revision source・wheel bundle（Issue #342）
 
@@ -168,7 +173,7 @@ python3.14 tools/native_bundle.py install <bundle> <新規venv path>
   不一致・wheel欠落・出力先が既に存在する場合は何も作らずに失敗する（既存環境を削除・上書きしない）。
 - 導入：新規venvへwheelを`--only-binary=:all: --no-index --no-deps`で、展開したsourceを`--no-deps`で入れる
   （sourceのbuild backend setuptoolsだけはpip既定のbuild isolationで取得する）。
-- 導入後：`LISJONG_SHANTEN_BACKEND=rust`の別process（`python -I`）で、`SOURCE_REVISION` / `API_VERSION`、
+- 導入後：`LISJONG_SHANTEN_BACKEND=rust`の別process（`python -I`。#346以前のbundleも同じ手順で検証できるよう明示する）で、`SOURCE_REVISION` / `API_VERSION`、
   `_lisjong_native`と拡張`.so`・`lisjong`がそのvenv内からロードされたこと、公開`calculate_shanten`と
   R5 evaluator（`_new_progression_evaluator`）がnative counterを進めること、`_lookup_shanten` /
   `_python_shanten`をimportしていないことを確認する。比較用のPython対局は起動しない。

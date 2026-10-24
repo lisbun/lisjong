@@ -21,21 +21,20 @@ repositoryからArenaへ依存しない）。
   private instrumentationを、decisionごとに数回しか呼ばれない
   `_evaluate_completion_masses` / `_evaluate_progression_candidates`の
   戻り時点で読むだけであり、hot loopへwrapperを入れない。
-  rust指定のprocessではR5はnative evaluatorが実行し、同じ4 counterをnativeが
-  実測してevaluatorへ保持する（Issue #232。未計測は`None`で、0で埋めない）。
+  R5はnative evaluatorが実行し、4 counterをnativeが実測してevaluatorへ保持する
+  （Issue #232。未計測は`None`で、0で埋めない）。
   `--export`は閾値以上のdecisionだけを同じ形式のpickleへ書き出す（local専用。
   repositoryへcommitしない）。
 - `breakdown`: stage関数とshanten primitiveをmodule / class属性の差し替えで
   wrapし、選んだdecisionごとに呼び出し回数・inclusive・self時間を出す。
   wrap自体のoverhead（特にshanten primitive）を含むため、速度の絶対値は
-  `scan`を使う。rust指定のprocessでは、R5探索本体はnative内で完結するため
-  Python関数wrapではnative内部のshanten時間・call数を測れない。その場合は
-  R5一括呼出しの時間（`r5_progression_dp`のinclusive）とnativeの実測counterだけを
+  `scan`を使う。R5探索本体はnative内で完結するため、Python関数wrapでは
+  native内部のshanten時間・call数を測れない。R5は一括呼出しの時間
+  （`r5_progression_dp`のinclusive）とnativeの実測counterだけを
   報告し、native内部のshanten時間・Python DP overheadは`null` / `not_measured`と
   理由を出す（0秒・0回やPython DP overheadとは表示しない）。
 
-shanten backendはprocess起動時の`LISJONG_SHANTEN_BACKEND`で決まるため、
-backend比較は別processで行う。
+shanten計算はnative拡張で行う（Issue #346でPython backendを削除）。
 
 Policyのsemanticsや選択actionは変えない（`scan`は記録済みactionとの一致を
 報告する）。decision pickleは自分で生成したlocal fileだけを読むこと（pickleは
@@ -170,7 +169,6 @@ _FUNCTION_TARGETS = (
         "is_structurally_complete_from_canonical_counts",
         "complete_pred@finite_horizon",
     ),
-    (_TSP, "calculate_shanten_from_canonical_counts", "shanten@r5_progression"),
     (_SE, "calculate_shanten", "shanten@structural_efficiency"),
     (_YC, "calculate_shanten", "shanten@yakuhai_call"),
     (_PASC, "calculate_shanten", "shanten@pasc"),
@@ -425,8 +423,7 @@ def _r5_report(evaluators: list, rows: dict[str, dict]) -> dict[str, object] | N
     """R5 evaluatorごとの実測counterと、native時の未計測値の明示。
 
     native evaluatorではnative内部のshanten時間とPython DP overheadを測れないので、
-    `r5_progression_dp`行の`self_ms`（Python oracleではDP overhead）を`null`にして
-    理由を添える。nativeのshanten call数は`shanten_evaluations` counterとして
+    `r5_progression_dp`行の`self_ms`を`null`にして理由を添える。nativeのshanten call数は`shanten_evaluations` counterとして
     実測済みである。
     """
     if not evaluators:
@@ -440,14 +437,8 @@ def _r5_report(evaluators: list, rows: dict[str, dict]) -> dict[str, object] | N
         )
         for name in _R5_COUNTER_FIELDS
     }
-    if not native:
-        return {
-            "backend": "python",
-            "evaluators": len(evaluators),
-            "counters": counters,
-        }
     if len(native) != len(evaluators):
-        raise RuntimeError("a decision mixed native and Python R5 evaluators")
+        raise RuntimeError("a decision used a non-native R5 evaluator")
     if any(
         getattr(item, name) is None for item in native for name in _R5_COUNTER_FIELDS
     ):

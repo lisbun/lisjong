@@ -32,7 +32,6 @@ from test_terminal_shanten_progression_mechanism_riichi_defense_policy import (
     _hand as _progression_hand,
 )
 
-from lisjong.hand_evaluation import _shanten_backend
 from lisjong.policies import PlacementAwareSpeedCallPolicy
 from lisjong.policy_contract.decision_context import DecisionContext
 from lisjong.policy_contract.own_hand_state import OwnHandState
@@ -149,8 +148,7 @@ class ProfileSpeedCallDecisionsToolTest(unittest.TestCase):
             self.assertIsInstance(r5[name], int)
         self.assertGreater(r5["visited_states"], 0)
         self.assertGreater(r5["shanten_evaluations"], 0)
-        native = _shanten_backend.BACKEND_NAME == _shanten_backend.RUST_BACKEND
-        self.assertEqual(r5.get("evaluator"), "native" if native else None)
+        self.assertEqual(r5.get("evaluator"), "native")
 
     def test_breakdown_reports_r5_counters_and_never_fakes_native_timing(
         self,
@@ -164,12 +162,7 @@ class ProfileSpeedCallDecisionsToolTest(unittest.TestCase):
             self.assertIsInstance(r5["counters"][name], int)
         self.assertGreater(r5["counters"]["shanten_evaluations"], 0)
         dp_row = entry["rows"]["r5_progression_dp"]
-        if _shanten_backend.BACKEND_NAME == _shanten_backend.RUST_BACKEND:
-            self._assert_native_breakdown(r5, entry["rows"], dp_row)
-        else:
-            self.assertEqual(r5["backend"], "python")
-            self.assertIsNotNone(dp_row["self_ms"])
-            self.assertIn("shanten@r5_progression", entry["rows"])
+        self._assert_native_breakdown(r5, entry["rows"], dp_row)
 
     def _assert_native_breakdown(self, r5, rows, dp_row) -> None:
         self.assertEqual(r5["backend"], "rust-native")

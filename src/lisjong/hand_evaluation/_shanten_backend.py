@@ -1,54 +1,40 @@
-"""通常形shanten計算backendの明示選択（Issue #213）。
+"""numeric shanten計算をnative拡張へ結び付けるprivate module（Issue #213 / #346）。
 
-`shanten._shanten_from_valid_counts()`と
-`shanten.calculate_restricted_standard_shanten()`が使う
-`calculate_standard_shanten(counts, fixed_meld_count)`と、numeric shanten
-core（`shanten._shanten_from_valid_counts()`）の実装を、process起動時に1回だけ
-選ぶprivate moduleである。shanten semantic、Policy、公開APIは変えない。
+`shanten`のnumeric core、`calculate_restricted_standard_shanten()`の通常形、
+打牌候補の一括評価、R5（expected terminal shanten progression）の探索本体は、
+すべてnative拡張`_lisjong_native`（`native/`のRust crate）で実行する。Issue #346で
+Python計算実装（`_lookup_shanten`、`_python_shanten`、Python版の一括打牌評価、
+R5のPython evaluator）を削除したため、Pythonへのfallbackや切替はない。
 
 ```text
-LISJONG_SHANTEN_BACKEND   backend
-未設定 / "python"         _lookup_shanten（default、native拡張不要）
-"rust"                    opt-in native拡張 `_lisjong_native`
+LISJONG_SHANTEN_BACKEND   動作
+未設定 / "rust"           native拡張を要求する
+"python"                  ShantenBackendError（Python backendは廃止済み）
 それ以外                  ShantenBackendError
 ```
 
-`rust`を明示した場合、native拡張をimportできなければimport時に
-`ShantenBackendError`でfail closedし、Python backendへ黙って切り替えない。
-native backendは`_lookup_shanten`と同じ`_shanten_table.bin`、同じresource
-state combine table、同じpenalty tableを、Issue #338で分離した供給module
-`_shanten_table`からbytesで受け取り、frontier combineの
-loopと、閉じた13 / 14枚の七対子・国士無双との最小値dispatchをnativeで実行する
-（Issue #213の計測でcore全体がchampion Policyの主要costだったため）。
-artifact integrity failureは同じ`_shanten_table.ShantenTableError`になる。
+本moduleはimport時にnative拡張のimport、`API_VERSION`の確認、native tableの
+構築まで行う。native拡張の不在・API不一致・artifact破損は最初のdecisionではなく
+import時に`ShantenBackendError` / `_shanten_table.ShantenTableError`でfail closed
+する（hot pathにlazy-load用のwrapper frameを挟まない）。失敗するのは本moduleを
+importする`lisjong.hand_evaluation.shanten`とその利用者（Policy等）であり、
+`lisjong`、`lisjong.hand_evaluation`、`scoring`、`_shanten_table`、
+`_shanten_common`、`_shanten_frontier`、`_structural_predicates`とoffline
+generatorはnative拡張なしでimportできる（package rootの`calculate_shanten`は
+遅延公開）。
 
-dispatchと特殊形の定義はPython core（`shanten._shanten_from_valid_counts()`、
-`_shanten_common`）が正本であり、native側はその写しである。差分は
-`tests/test_native_shanten_backend.py`のdifferential testsと、rust選択下の
-full test suite（CI `native-backend` job）で検出する。
+native tableは`_shanten_table`（Issue #338で分離した供給module）から
+`_shanten_table.bin`、resource state combine table、penalty tableをbytesで受け取る。
+artifact integrity failureは`_shanten_table.ShantenTableError`になる。
 
-選択は環境変数で行うため、Windows `spawn`を含むworker processにも親processの
-指定がそのまま継承される。runtimeに切り替えるAPIや、Python / Rustを混在させる
-設定は持たない。
+`API_VERSION`はnative入口の組を表す。`REQUIRED_NATIVE_API_VERSION`と一致しない
+wheel（#224以前の`API_VERSION`属性なし = 1を含む）は拒否する。lisjong単体の
+この検査は`SOURCE_REVISION`の一致を保証しないため、同じlisjong revisionから
+buildしたwheelを使う（`docs/rust-backend-distribution.md`）。
 
-native backendは入力preconditionを実行時にも検査する（34要素、各count 0..4、
-`fixed_meld_count` 0..4）。Python backendはtrusted callerを前提に検査しない。
-precondition違反の入力に対する例外型だけはbackendで異なり得るが、
-precondition内の入力に対する結果は一致する（differential testsで固定）。
-
-Issue #224で、打牌候補の構造評価を一括で行う
-`shanten.evaluate_discards_from_canonical_counts()`のnative実装
-（`StandardShantenTable.evaluate_discards`）を追加した。native拡張は入口の組を
-`API_VERSION`で識別し、rust選択時はimport時に`REQUIRED_NATIVE_API_VERSION`と
-一致することを確認する。#224以前のwheel（`API_VERSION`属性なし = 1）や将来の
-不一致なwheelは`ShantenBackendError`でfail closedし、一部の入口だけPythonへ
-切り替えることはしない。python選択時はnative拡張をimportしないため、旧wheelが
-installされていても影響しない。
-
-Issue #232でAPI_VERSION 3として、R5（expected terminal shanten progression）の
-探索本体`StandardShantenTable.evaluate_progression`を追加した。rust選択時は
-R5もnativeで実行し、R5だけPythonへ黙って戻ることはない（環境変数名は向聴専用に
-見えるが、適用範囲はnumeric shanten core・打牌一括評価・R5探索である）。
+native入口は入力preconditionを実行時にも検査する（34要素、各count 0..4、
+`fixed_meld_count` 0..4）。環境変数で選ぶため、Windows `spawn`を含むworker
+processにも親processの指定がそのまま継承される。
 """
 
 import os
@@ -57,14 +43,16 @@ import sys
 from lisjong.hand_evaluation import _shanten_table
 
 BACKEND_ENVIRONMENT_VARIABLE = "LISJONG_SHANTEN_BACKEND"
-PYTHON_BACKEND = "python"
 RUST_BACKEND = "rust"
+RETIRED_PYTHON_BACKEND = "python"
+"""Issue #346で廃止した旧backend名。黙ってRustへ読み替えず、移行案内付きで拒否する。"""
+
 REQUIRED_NATIVE_API_VERSION = 3
-"""rust選択時に要求する`_lisjong_native.API_VERSION`（Issue #224 / #232）。"""
+"""要求する`_lisjong_native.API_VERSION`（Issue #224 / #232）。"""
 
 
 class ShantenBackendError(Exception):
-    """明示されたshanten backendを利用できない場合のfail closed例外。"""
+    """native shanten backendを利用できない場合のfail closed例外。"""
 
 
 def _little_endian_bytes(values) -> bytes:
@@ -75,10 +63,7 @@ def _little_endian_bytes(values) -> bytes:
 
 
 def build_native_table(native_module):
-    """`_shanten_table`のartifactとcombine / penalty表からnative tableを作る。
-
-    Python lookup計算本体（`_lookup_shanten`）には依存しない（Issue #338）。
-    """
+    """`_shanten_table`のartifactとcombine / penalty表からnative tableを作る。"""
     return native_module.StandardShantenTable(
         _shanten_table.read_table_payload(),
         _little_endian_bytes(_shanten_table._COMBINE),
@@ -92,68 +77,52 @@ def _import_native_module():
         import _lisjong_native
     except ImportError as error:
         raise ShantenBackendError(
-            f"{BACKEND_ENVIRONMENT_VARIABLE}={RUST_BACKEND!r} requires the opt-in "
-            "native extension '_lisjong_native' (install it with "
-            "'python -m pip install ./native'); refusing to fall back to the "
-            "Python backend"
+            "lisjong requires the native extension '_lisjong_native' built from "
+            "the same lisjong revision (see docs/rust-backend-distribution.md); "
+            "the Python shanten backend was removed in Issue #346"
         ) from error
     # API_VERSIONを持たない#224以前のwheelは1として扱う。
     api_version = getattr(_lisjong_native, "API_VERSION", 1)
     if api_version != REQUIRED_NATIVE_API_VERSION:
         raise ShantenBackendError(
-            f"{BACKEND_ENVIRONMENT_VARIABLE}={RUST_BACKEND!r} requires "
-            f"_lisjong_native API_VERSION {REQUIRED_NATIVE_API_VERSION}, got "
-            f"{api_version!r}; rebuild or reinstall the native extension from "
-            "the same lisjong revision"
+            f"lisjong requires _lisjong_native API_VERSION "
+            f"{REQUIRED_NATIVE_API_VERSION}, got {api_version!r}; rebuild or "
+            "reinstall the native extension from the same lisjong revision"
         )
     return _lisjong_native
 
 
 def _select_backend_name() -> str:
-    name = os.environ.get(BACKEND_ENVIRONMENT_VARIABLE, PYTHON_BACKEND)
-    if name not in (PYTHON_BACKEND, RUST_BACKEND):
+    name = os.environ.get(BACKEND_ENVIRONMENT_VARIABLE, RUST_BACKEND)
+    if name == RETIRED_PYTHON_BACKEND:
         raise ShantenBackendError(
-            f"{BACKEND_ENVIRONMENT_VARIABLE} must be {PYTHON_BACKEND!r} or "
-            f"{RUST_BACKEND!r}, got {name!r}"
+            f"{BACKEND_ENVIRONMENT_VARIABLE}={RETIRED_PYTHON_BACKEND!r} is no "
+            "longer supported: the Python shanten backend was removed in Issue "
+            f"#346. Unset {BACKEND_ENVIRONMENT_VARIABLE} (or set it to "
+            f"{RUST_BACKEND!r}) and install the native extension from the same "
+            "lisjong revision; to reproduce a Python-backend run, use the "
+            "recorded lisjong revision and environment"
+        )
+    if name != RUST_BACKEND:
+        raise ShantenBackendError(
+            f"{BACKEND_ENVIRONMENT_VARIABLE} must be unset or {RUST_BACKEND!r}, "
+            f"got {name!r}"
         )
     return name
 
 
 BACKEND_NAME = _select_backend_name()
-"""このprocessで選択されたbackend名。"""
+"""このprocessのbackend名。現在は常に`"rust"`（記録・診断用に残す）。"""
 
-native_shanten_from_valid_counts = None
-"""rust選択時だけ設定される、numeric shanten core全体のnative実装。
+_NATIVE_TABLE = build_native_table(_import_native_module())
+calculate_standard_shanten = _NATIVE_TABLE.standard_shanten
+"""通常形向聴数（`calculate_restricted_standard_shanten()`が使う）。"""
 
-`shanten._shanten_from_valid_counts()`と同じ入力（trusted canonical counts,
-`concealed_tile_count == sum(counts)`）を受け取り、通常形と閉じた13 / 14枚の
-七対子・国士無双の最小値を返す。python選択時はNoneで、既存のPython coreを
-そのまま使う。
-"""
+native_shanten_from_valid_counts = _NATIVE_TABLE.shanten_from_valid_counts
+"""numeric shanten core全体（通常形と閉じた13 / 14枚の七対子・国士無双の最小値）。"""
 
-native_evaluate_discards = None
-"""rust選択時だけ設定される、`shanten.evaluate_discards_from_canonical_counts()`の
-native実装（Issue #224）。python選択時はNoneで、Python実装をそのまま使う。
-"""
+native_evaluate_discards = _NATIVE_TABLE.evaluate_discards
+"""`shanten.evaluate_discards_from_canonical_counts()`の実装（Issue #224）。"""
 
-native_evaluate_progression = None
-"""rust選択時だけ設定される、R5 progression探索のnative実装（Issue #232）。
-
-policy側の`_new_progression_evaluator()`だけが使う。python選択時はNoneで、
-Python oracle（`_TerminalShantenProgressionEvaluator`）を使う。
-"""
-
-if BACKEND_NAME == RUST_BACKEND:
-    # rustを明示した場合はimport時にnative API versionの確認とnative table構築まで
-    # 行う。artifactやnative拡張の問題を最初のdecisionではなく起動時にfail closedで
-    # 検出し、hot pathにlazy-load用のPython wrapper frameを挟まない。
-    _NATIVE_TABLE = build_native_table(_import_native_module())
-    calculate_standard_shanten = _NATIVE_TABLE.standard_shanten
-    native_shanten_from_valid_counts = _NATIVE_TABLE.shanten_from_valid_counts
-    native_evaluate_discards = _NATIVE_TABLE.evaluate_discards
-    native_evaluate_progression = _NATIVE_TABLE.evaluate_progression
-else:
-    # Python lookup計算本体はpython選択時だけimportする（Issue #338）。
-    from lisjong.hand_evaluation import _lookup_shanten
-
-    calculate_standard_shanten = _lookup_shanten.calculate_standard_shanten
+native_evaluate_progression = _NATIVE_TABLE.evaluate_progression
+"""R5 progression探索（Issue #232）。policy側の`_new_progression_evaluator()`だけが使う。"""

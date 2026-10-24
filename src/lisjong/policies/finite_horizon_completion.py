@@ -139,8 +139,8 @@ contract（`calculate_shanten_from_canonical_counts()`）へ移した。DP state
 「1回のshanten評価のcost」だけである。DP recurrence、pruning条件、cache構造、
 shanten評価の**回数**はいずれも変更していない。
 
-`_python_shanten`（private backend）をPolicyから直接importしない境界は維持
-する。backendの差し替えは引き続き`hand_evaluation`層の責務である。
+private backend（Issue #346以降はnative拡張）をPolicyから直接importしない境界は
+維持する。backendとの結び付けは引き続き`hand_evaluation`層の責務である。
 
 ## subclass構造
 

@@ -72,9 +72,11 @@ Rust公開APIはまだ設けていないため、bindingを外したlibrary buil
 - shanten artifact・補助配列の供給はPython側が担当する。
 - batched discardの列挙はRust core（`discards.rs`）へ移したが、入力validation・Python結果への変換・
   診断カウンタはbinding側に残る。frontier artifactと補助配列は引き続きPythonから供給する。
-- Python backendがdefaultのままで、batched discardにもPython実装が残る。
+- Python backendがdefaultのままで、batched discardにもPython実装が残る
+  （Issue #346で解消：numeric・batched discard・R5のPython計算実装を削除し、native必須化）。
 - Policy・入力契約・engine・対局runnerは移植していない。
-- Rust指定はopt-in、Pythonがdefaultという現在の選択規則を維持する。
+- Rust指定はopt-in、Pythonがdefaultという現在の選択規則を維持する
+  （Issue #346で変更：未設定 / `rust`でnative必須、`python`は拒否）。
 - API_VERSION=3、SOURCE_REVISION、例外・結果順序・カウンタの意味を変更しない。
 
 したがって、Rust単体のbuild/test成功は本番のPython非依存化完了を意味しない。

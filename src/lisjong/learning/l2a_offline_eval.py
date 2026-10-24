@@ -29,12 +29,12 @@ B-TSとC0固有層の判定に`TwoStepUkeirePolicy`を同じPolicyInputとlegal 
 """
 
 import math
-import os
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 
+from lisjong.hand_evaluation import _shanten_backend
 from lisjong.hand_evaluation.shanten import calculate_shanten
 from lisjong.learning._canonical import (
     canonical_json_text,
@@ -291,7 +291,7 @@ class _Collector:
                 "scores": {
                     name: value.to_value() for name, value in self.scores.items()
                 },
-                "shanten_backend": os.environ.get("LISJONG_SHANTEN_BACKEND", "python"),
+                "shanten_backend": _shanten_backend.BACKEND_NAME,
             },
         )
 

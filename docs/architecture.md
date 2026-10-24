@@ -90,7 +90,7 @@ bulk code movementは行わず、concrete use caseごとに必要なcapability�
 2026-10-03に、対局・判断基盤をRustへ段階移行し、学習・分析はPythonを継続する方針を
 ユーザー承認で確定した。横断作業は[lisjong-project #87](https://github.com/lisbun/lisjong-project/issues/87)、
 lisjong側の移行原則と現在地は[Rustへの段階移行](rust-migration.md)を正本とする。
-これは到達目標であり、現時点のPython Policyやopt-in native backendを即時廃止するものではない。
+これは到達目標であり、現時点のPython Policyやnative backendのPython bindingを即時廃止するものではない。
 ルール・game state transitionはengine、external executionはArenaというownerを維持する。
 
 ## Decision architecture
@@ -319,10 +319,14 @@ Policy入力の具体field / canonicalization / invariantsは[Policy入力の最
 
 具体的backend / lookup artifactはimplementation detailとして扱う。
 
-opt-in native backend（Issue #213、`native/`）はnumeric shanten coreだけを置き換える試作であり、
-`LISJONG_SHANTEN_BACKEND=rust`を明示したprocessだけで使う。defaultはPython backendで、
-native拡張はcore installの依存に含めない。Rust指定時に利用できなければPythonへfallbackせず
-fail closedする。Policyはnative表現へ依存しない。詳細は[Rust backend試作記録](rust-backend-prototype.md)を参照する。
+native backend（Issue #213、`native/`）はnumeric shanten core・打牌候補の一括評価・R5探索の
+唯一の実装である（Issue #346でPython計算実装を削除し必須化）。`LISJONG_SHANTEN_BACKEND`は未設定
+または`rust`だけを受け付け、旧`python`値・未知の値・native不在・`API_VERSION`不一致は
+`lisjong.hand_evaluation.shanten`のimport時に`ShantenBackendError`でfail closedする。
+native拡張は別distribution（`lisjong-native`）のままでroot packageの依存には含めず、同じrevisionの
+wheelを導入する。`lisjong`・`hand_evaluation` package・`scoring`・artifact供給module・offline generatorは
+native拡張なしでimportできる（`calculate_shanten`は遅延公開）。Policyはnative表現へ依存しない。
+経緯は[Rust backend試作記録](rust-backend-prototype.md)と[Python計算backendの段階的廃止](python-compute-backend-retirement.md)を参照する。
 
 役・符・点数計算（Issue #263、`lisjong.hand_evaluation.scoring`）は、仮定の完成手＋明示的な和了contextを
 評価する純粋な計算器である。計算coreは`native/src/scoring.rs`だけにあり、Python版は持たない。

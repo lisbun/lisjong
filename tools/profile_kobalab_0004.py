@@ -15,7 +15,7 @@
   子処理を含む時間（inclusive）・自己時間（self = inclusive − wrapした子処理）を
   集計する。wrap自体のoverheadを含むため、速度比較には`timing`を使う。
   `calculate_shanten`はPython側から見えるnative呼び出しを含む時間であり、
-  Rust内部の内訳ではない（Rust内部はkernel modeの`benchmark_tile_efficiency.py`）。
+  Rust内部の内訳ではない。
 
 decision pickleは自分で生成したlocal fileだけを読むこと（pickleは任意code
 実行を許す）。CIのwall-clock thresholdをここから作らない。

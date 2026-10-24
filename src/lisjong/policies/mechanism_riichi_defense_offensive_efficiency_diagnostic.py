@@ -50,8 +50,7 @@ mutable working stateをuniverse間で共有・再利用しない。
 
 `include_terminal_progression=True`のexplicit opt-inのときだけ、Issue #169 /
 PR #170のexact adaptive expected-terminal-shanten evaluator
-（`terminal_shanten_progression_mechanism_riichi_defense`のPython oracle
-`_TerminalShantenProgressionEvaluator`、またはrust指定時は同じsemanticのnative evaluator。
+（`terminal_shanten_progression_mechanism_riichi_defense`のnative evaluator。
 生成は`_new_progression_evaluator()`）を起動する。R1/R4と同じくfull-legal universeとbaseline-eligible universeを
 分離し、それぞれ`full_legal_terminal_progression_summary` /
 `baseline_eligible_terminal_progression_summary`として別々に保持する。

@@ -28,7 +28,7 @@ derived hand-state beliefである。
 
 standard hand completionの全decomposition列挙、chiitoitsu、kokushiの
 判定はこのmodule専用のprivate exact-completion searchとして実装する
-（Issue #84時点ではshanten計算専用の`_python_shanten._StandardFormSearch`を
+（Issue #84時点ではshanten計算専用の`_python_shanten._StandardFormSearch`（Issue #346で削除）を
 mechanism列挙用へ拡張しない。best block scoreを求める探索と、全decomposition
 列挙 + どのgroupを完成したかのmulti-label分類とは責務が異なるため）。
 """
@@ -306,8 +306,7 @@ def _enumerate_standard_decompositions(
     """通常形（`melds_needed`面子 + 1雀頭）へのすべての有効なdecompositionを
     列挙する。
 
-    `_python_shanten._StandardFormSearch`はshantenのbest block scoreだけを
-    求める専用探索であり、全decomposition列挙や、candidateがどのgroupを
+    向聴計算はshantenのbest block scoreだけを求める専用探索であり、全decomposition列挙や、candidateがどのgroupを
     完成させたかのmulti-label分類は行わない。本Issue専用のこの関数は、
     最も若いindexから貪欲にblockを試すbacktrackingで、重複のない
     decomposition集合を列挙する（同じcanonical indexから複数のblockを

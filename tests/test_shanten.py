@@ -1,20 +1,15 @@
 import ast
-import inspect
 import os
 import pathlib
 import random
 import struct
 import subprocess
 import sys
-import threading
 import unittest
-from unittest.mock import patch
 
 import lisjong.hand_evaluation.shanten as shanten_module
 from lisjong.belief.canonical_axes import tile_type_index
 from lisjong.hand_evaluation import (
-    _lookup_shanten,
-    _python_shanten,
     _shanten_backend,
     _shanten_common,
     _shanten_frontier,
@@ -482,46 +477,6 @@ class CanonicalCountHotPathTest(unittest.TestCase):
         )
 
 
-_MELDLESS = (13, 14)
-
-
-def _fixed_meld_count(concealed_tile_count: int) -> int:
-    return 4 - (concealed_tile_count - 1) // 3
-
-
-def _old_standard_shanten(counts, fixed_meld_count: int) -> int:
-    """Issue #115のexactness oracle。
-
-    PR #114 merge後のmain `477f4031a129e220d62662f0e3735c08c39c54b3` 時点で
-    productionが使っていた再帰探索backendをそのまま呼ぶ。本Issue以降、
-    productionはこの関数を呼ばない（`ProductionBackendBoundaryTest`で固定）。
-    lookup実装と同時に同じ論理へ書き換えてしまわないよう、oracleは既存
-    `_python_shanten` の実装を指すだけに留める。
-    """
-    return _python_shanten.calculate_standard_shanten(counts, fixed_meld_count)
-
-
-def _counts_from_tiles(tiles: list[Tile]) -> list[int]:
-    counts = [0] * 34
-    for tile in tiles:
-        counts[tile_type_index(tile.tile_type)] += 1
-    return counts
-
-
-def _deterministic_hand_counts(seed_index: int, size: int) -> list[int]:
-    """乱数を使わない決定的な規則で作る、再現可能なcorpus hand。"""
-    counts = [0] * 34
-    index = seed_index % 34
-    step = 1 + seed_index % 11
-    total = 0
-    while total < size:
-        if counts[index] < 4:
-            counts[index] += 1
-            total += 1
-        index = (index + step) % 34
-    return counts
-
-
 def _single_group_counts(span: int, seed_index: int, target: int) -> list[int]:
     """1 groupだけを決定的に埋める。stepとspanが互いに素でなくても停止する。
 
@@ -540,90 +495,6 @@ def _single_group_counts(span: int, seed_index: int, target: int) -> list[int]:
             total += 1
         index = (index + step) % span
     return group
-
-
-class LookupBackendExactnessTest(unittest.TestCase):
-    """新lookup backendがold exact DFSと完全一致することを固定する。"""
-
-    def _assert_matches_oracle(self, counts, fixed_meld_count: int) -> None:
-        self.assertEqual(
-            _lookup_shanten.calculate_standard_shanten(counts, fixed_meld_count),
-            _old_standard_shanten(counts, fixed_meld_count),
-            msg=f"counts={counts} fixed_meld_count={fixed_meld_count}",
-        )
-
-    def test_named_structural_fixtures_match_the_oracle(self) -> None:
-        fixtures = {
-            "complete": "123456789m123p11s",
-            "tenpai": "123456789m123p1s",
-            "one shanten": "123456789m12p13s",
-            "deep shanten": "147m258p369s1357z",
-            "sequence heavy": "123456789m123456p",
-            "triplet heavy": "111333m444p777s22z",
-            "overlapping sequences": "111234567899m11p",
-            "pair heavy": "1199m2288p3355s67z",
-            "honor heavy": "1122334455667z",
-            "four copies": "1111m2222p3333s44z",
-            "four copy single kind": "1111m",
-        }
-        for label, notation in fixtures.items():
-            tiles = hand(notation)
-            with self.subTest(label=label, size=len(tiles)):
-                counts = _counts_from_tiles(tiles)
-                self._assert_matches_oracle(counts, _fixed_meld_count(len(tiles)))
-
-    def test_every_fixed_meld_count_matches_the_oracle(self) -> None:
-        # 同じcount stateでも fixed_meld_count 0..4 で結果が変わるため、
-        # budget違いをまたいで一致することを固定する。
-        for seed_index in range(34):
-            counts = _deterministic_hand_counts(seed_index, 8)
-            for fixed_meld_count in range(5):
-                with self.subTest(seed=seed_index, fixed=fixed_meld_count):
-                    self._assert_matches_oracle(counts, fixed_meld_count)
-
-    def test_deterministic_corpus_matches_the_oracle(self) -> None:
-        for size in (1, 2, 4, 5, 7, 8, 10, 11, 13, 14):
-            fixed_meld_count = _fixed_meld_count(size)
-            for seed_index in range(60):
-                counts = _deterministic_hand_counts(seed_index, size)
-                with self.subTest(size=size, seed=seed_index):
-                    self._assert_matches_oracle(counts, fixed_meld_count)
-
-    def test_seeded_sample_corpus_matches_the_oracle(self) -> None:
-        generator = random.Random(20260824)
-        for size in (5, 8, 11, 13, 14):
-            fixed_meld_count = _fixed_meld_count(size)
-            for _ in range(40):
-                counts = [0] * 34
-                total = 0
-                while total < size:
-                    index = generator.randrange(34)
-                    if counts[index] == 4:
-                        continue
-                    counts[index] += 1
-                    total += 1
-                with self.subTest(size=size):
-                    self._assert_matches_oracle(counts, fixed_meld_count)
-
-    def test_single_group_states_match_the_oracle(self) -> None:
-        # 1 groupへ牌が集中した状態はfrontierが最も豊かになる。suit / honors
-        # それぞれで決定的に列挙して一致を確認する。
-        for base, span in ((0, 9), (27, 7)):
-            for seed_index in range(40):
-                counts = [0] * 34
-                counts[base : base + span] = _single_group_counts(span, seed_index, 14)
-                with self.subTest(base=base, seed=seed_index):
-                    self._assert_matches_oracle(counts, 0)
-
-    def test_public_api_matches_the_oracle_semantics(self) -> None:
-        # 公開APIの最終結果（標準形 / 七対子 / 国士のmin）も維持されている。
-        for notation, expected in (
-            ("123456789m123p11s", -1),
-            ("1122334455667z", 0),
-            ("19m19p19s1234567z", 0),
-        ):
-            with self.subTest(notation=notation):
-                self.assertEqual(calculate_shanten(hand(notation)), expected)
 
 
 class LookupTableArtifactTest(unittest.TestCase):
@@ -653,20 +524,6 @@ class LookupTableArtifactTest(unittest.TestCase):
                                 _shanten_table._decode_state(state),
                                 (blocks_used, head_used, meld_seeds, head_seeds),
                             )
-
-    def test_penalty_helper_matches_the_original_backend_exhaustively(self) -> None:
-        # backendのpenalty定義はlookup側にも持つため、全入力で一致を固定する。
-        original = _python_shanten._StandardFormSearch.missing_seed_penalty
-        for blocks_left in range(5):
-            for heads_left in range(2):
-                for meld_seeds in range(6):
-                    for head_seeds in range(6):
-                        self.assertEqual(
-                            _shanten_table._missing_seed_penalty(
-                                blocks_left, heads_left, meld_seeds, head_seeds
-                            ),
-                            original(blocks_left, heads_left, meld_seeds, head_seeds),
-                        )
 
     def test_artifact_header_matches_its_declared_dimensions(self) -> None:
         payload = (
@@ -698,23 +555,8 @@ class LookupTableArtifactTest(unittest.TestCase):
         ):
             _shanten_table._ShantenTable(bytes(broken_span))
 
-        # suit key 0（= 萬子が1枚もない状態）のfrontier idを、存在しない値へ
-        # 差し替える。これもサイズは不変で、参照した時点で弾かれる。
-        broken_id = bytearray(payload)
-        broken_id[header_size : header_size + 2] = (0xFFFF).to_bytes(2, "little")
-        table = _shanten_table._ShantenTable(bytes(broken_id))
-
-        counts = [0] * 34
-        for kind in (9, 10, 11, 18, 19, 20, 27, 27, 28, 28, 29, 29, 30, 30):
-            counts[kind] += 1
-        self.assertEqual(sum(counts), 14)
-        self.assertEqual(sum(counts[0:9]), 0, "萬子groupがkey 0であること")
-
-        with patch.object(_lookup_shanten, "_TABLE", table):
-            with self.assertRaisesRegex(
-                _shanten_table.ShantenTableError, "frontier that does not exist"
-            ):
-                _lookup_shanten.calculate_standard_shanten(counts, 0)
+        # frontier id（参照時に検査）の破損はnative backendの参照時検査が担う
+        # （`test_native_shanten_backend.NativeArtifactIntegrityTest`）。
 
     def test_corrupted_artifacts_fail_closed(self) -> None:
         payload = bytearray(
@@ -733,189 +575,33 @@ class LookupTableArtifactTest(unittest.TestCase):
             _shanten_table._ShantenTable(bytes(payload[:-2]))
 
 
-class ScratchWorkspaceThreadSafetyTest(unittest.TestCase):
-    """Issue #132 review: frontier combineのscratch workspaceがthreadごとに
-    分離されていることを固定する。
-
-    `calculate_shanten()`は一般公開APIであり、呼び出し側がthreadを使わない
-    保証はない。以前の実装はscratch bufferをmodule-globalに1組だけ持って
-    おり、複数threadが同時に`calculate_standard_shanten()`を呼ぶと
-    silentに誤ったshantenを返し得た。
-    """
-
-    def test_each_thread_gets_a_distinct_workspace(self) -> None:
-        # timingに依存しない決定的な確認。「同一threadから複数回呼んでも
-        # 常に同じobjectが返る」「thread間ではobjectが異なる」の2点だけを
-        # 見る。id()はobjectが生きている間しか一意性を保証しないため、
-        # 比較する前に全workspaceへの参照を保持しておく（GC後のid再利用を
-        # 避けるため。実際にこの保持を忘れて書いたら、thread終了直後に
-        # workspaceがGCされ、次のthreadが同じidを再利用してしまい、
-        # 誤って「分離されていない」という結果になった）。
-        thread_count = 8
-        workspaces: list[object | None] = [None] * thread_count
-        same_object_violations: list[int] = []
-        barrier = threading.Barrier(thread_count)
-
-        def worker(thread_index: int) -> None:
-            barrier.wait()
-            first = _lookup_shanten._scratch_workspace()
-            second = _lookup_shanten._scratch_workspace()
-            if first is not second:
-                same_object_violations.append(thread_index)
-            workspaces[thread_index] = first
-
-        threads = [
-            threading.Thread(target=worker, args=(index,))
-            for index in range(thread_count)
-        ]
-        for started in threads:
-            started.start()
-        for joined in threads:
-            joined.join()
-
-        self.assertEqual(
-            same_object_violations,
-            [],
-            "同一threadからの複数callが異なるworkspaceを返した",
-        )
-        self.assertEqual(len(workspaces), thread_count)
-        self.assertEqual(
-            len({id(workspace) for workspace in workspaces}),
-            thread_count,
-            "workspaceがthread間で共有されている",
-        )
-
-    def test_concurrent_shanten_matches_the_oracle(self) -> None:
-        # scratch workspaceの分離が壊れていれば、複数threadが同時に
-        # 異なる牌姿を計算したときに互いのbufferを上書きしてしまい、
-        # oracleと食い違うshantenをsilentに返す。この判定条件自体は
-        # timingに依存しない（分離が正しければ、実際にthread切り替えが
-        # 起きても起きなくても常に一致する）。thread切り替えの機会を
-        # 増やすため、switch intervalを一時的に短くする。
-        #
-        # このtestは、修正前（scratch bufferをmodule-globalに1組だけ持つ
-        # 実装）に対して実行すると2,000回中18回exact mismatchを検出した
-        # （手元でのIssue #132対応時の確認）。
-        thread_count = 8
-        iterations_per_thread = 250
-        errors: list[str] = []
-        errors_lock = threading.Lock()
-        barrier = threading.Barrier(thread_count)
-
-        def worker(thread_index: int) -> None:
-            barrier.wait()
-            for iteration in range(iterations_per_thread):
-                counts = _deterministic_hand_counts(thread_index * 97 + iteration, 14)
-                actual = _lookup_shanten.calculate_standard_shanten(counts, 0)
-                expected = _old_standard_shanten(counts, 0)
-                if actual != expected:
-                    with errors_lock:
-                        errors.append(
-                            f"thread={thread_index} iteration={iteration} "
-                            f"counts={counts} actual={actual} expected={expected}"
-                        )
-
-        threads = [
-            threading.Thread(target=worker, args=(index,))
-            for index in range(thread_count)
-        ]
-        previous_interval = sys.getswitchinterval()
-        sys.setswitchinterval(1e-6)
-        try:
-            for started in threads:
-                started.start()
-            for joined in threads:
-                joined.join()
-        finally:
-            sys.setswitchinterval(previous_interval)
-
-        self.assertEqual(errors, [])
-
-
 class ProductionBackendBoundaryTest(unittest.TestCase):
-    """productionがold DFSへfallbackしないことを固定する。"""
+    """Issue #346: numeric入口はnative実装へ直接結び付き、Python計算moduleはない。"""
 
-    def test_public_api_never_calls_the_old_standard_search(self) -> None:
-        def explode(*_args, **_kwargs):
-            raise AssertionError(
-                "production must not call the old standard-form search"
-            )
-
-        with patch.object(
-            _python_shanten, "calculate_standard_shanten", side_effect=explode
-        ):
-            # 標準形・七対子・国士のいずれの経路でもold DFSを踏まない。
-            self.assertEqual(calculate_shanten(hand("123456789m123p11s")), -1)
-            self.assertEqual(calculate_shanten(hand("1122334455667z")), 0)
-            self.assertEqual(calculate_shanten(hand("19m19p19s1234567z")), 0)
-            self.assertEqual(
-                calculate_shanten_from_canonical_counts(
-                    _counts_from_tiles(hand("123456789m123p11s"))
-                ),
-                -1,
-            )
-
-    def test_lookup_backend_does_not_import_the_old_search_module(self) -> None:
-        tree = ast.parse(
-            (pathlib.Path(_PACKAGE_ROOT) / "_lookup_shanten.py").read_text(
-                encoding="utf-8"
-            )
+    def test_numeric_entries_are_bound_to_the_native_table(self) -> None:
+        self.assertEqual(_shanten_backend.BACKEND_NAME, _shanten_backend.RUST_BACKEND)
+        self.assertIs(
+            shanten_module._shanten_from_valid_counts,
+            _shanten_backend.native_shanten_from_valid_counts,
         )
-        imported = {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module
-        }
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.update(alias.name for alias in node.names)
-
-        self.assertFalse(any("_python_shanten" in name for name in imported))
-        self.assertFalse(any("_shanten_frontier" in name for name in imported))
-
-    def test_production_shanten_module_uses_the_lookup_backend(self) -> None:
-        # Issue #213: production呼び出しはprocess起動時に選んだbackend経由。
-        # defaultのPython backendは`_lookup_shanten`そのもの（wrapperなし）。
-        # rust選択processではnumeric core全体がnative実装へ差し替わるため、
-        # Python coreのsourceは`_python_shanten_from_valid_counts`から読む。
-        source = inspect.getsource(shanten_module._python_shanten_from_valid_counts)
-
-        self.assertIn("_shanten_backend.calculate_standard_shanten", source)
-        self.assertNotIn("_python_shanten.calculate_standard_shanten", source)
-        if _shanten_backend.BACKEND_NAME == _shanten_backend.PYTHON_BACKEND:
-            self.assertIs(
-                _shanten_backend.calculate_standard_shanten,
-                _lookup_shanten.calculate_standard_shanten,
-            )
-            self.assertIs(
-                shanten_module._shanten_from_valid_counts,
-                shanten_module._python_shanten_from_valid_counts,
-            )
-        else:
-            self.assertIs(
-                shanten_module._shanten_from_valid_counts,
-                _shanten_backend.native_shanten_from_valid_counts,
-            )
+        self.assertIs(
+            shanten_module._evaluate_discards,
+            _shanten_backend.native_evaluate_discards,
+        )
+        for name in ("_lookup_shanten", "_python_shanten"):
+            with self.subTest(module=name):
+                self.assertFalse((_PACKAGE_ROOT / f"{name}.py").exists())
+                self.assertNotIn(f"lisjong.hand_evaluation.{name}", sys.modules)
 
 
 class LocalFrontierValidationTest(unittest.TestCase):
-    """local frontier generatorのexactnessを代表stateで固定する。
+    """local frontier generatorの性質を代表stateで固定する。
 
     全suit key (405,350) / honor key (43,130) のexhaustive validationは
-    offline（`tools/`のgenerator実行時とPR記録）で行い、CIでは決定的な
-    representative corpusを回す。
+    offline（`tools/`のgenerator実行時とPR記録）で行う。Python lookup / DFS
+    oracleとの単一group比較はIssue #346で削除した（値は仕様fixtureと外部
+    reference検証が固定する）。
     """
-
-    def test_local_frontier_reproduces_the_oracle_for_single_group_hands(self) -> None:
-        for base, span, _suited in ((0, 9, True), (27, 7, False)):
-            for seed_index in range(30):
-                counts = [0] * 34
-                counts[base : base + span] = _single_group_counts(span, seed_index, 14)
-                with self.subTest(base=base, seed=seed_index):
-                    self.assertEqual(
-                        _lookup_shanten.calculate_standard_shanten(counts, 0),
-                        _old_standard_shanten(counts, 0),
-                    )
 
     def test_dominant_frontier_preserves_the_reachable_optimum(self) -> None:
         # exact-safe dominanceがoptimumを落としていないことを、縮約前後の
@@ -994,6 +680,7 @@ sys.modules["_lisjong_native"] = fake
 from lisjong.hand_evaluation import _shanten_backend, _shanten_table
 
 assert _shanten_backend.BACKEND_NAME == "rust"
+assert "lisjong.hand_evaluation._shanten_backend" in sys.modules
 payload, combine, penalty, error = fake.arguments
 assert payload == _shanten_table.read_table_payload()
 assert combine == _shanten_backend._little_endian_bytes(_shanten_table._COMBINE)
@@ -1011,17 +698,19 @@ import sys
 sys.modules["_lisjong_native"] = None
 from tools import generate_shanten_table, generate_structural_predicate_table
 
-assert "lisjong.hand_evaluation._python_shanten" not in sys.modules
+for name in ("shanten", "_shanten_backend"):
+    assert "lisjong.hand_evaluation." + name not in sys.modules, name
 print("ok")
 """
 
 
 class ArtifactSupplySeparationTest(unittest.TestCase):
-    """Issue #338: artifact供給・共有helperとPython計算本体の依存分離を固定する。
+    """Issue #338 / #346: artifact供給・共有helperとnumeric計算の依存分離を固定する。
 
-    native table構築、structural predicate、offline generatorが、後で削除する
-    Python numeric計算本体（`_lookup_shanten`の計算loop、`_python_shanten`の
-    DFS）へ依存しないことを、import graphと実行時のmodule読込で確認する。
+    native table構築、structural predicate、offline generatorが、Issue #346で
+    削除したPython numeric計算本体（`_lookup_shanten`、`_python_shanten`）にも、
+    native拡張にも依存しないことを、import graphと実行時のmodule読込で確認する。
+    削除済みmodule名もforbiddenに残し、再導入を検出する。
     """
 
     _CALCULATION_MODULES = ("_lookup_shanten", "_python_shanten")
@@ -1068,14 +757,8 @@ class ArtifactSupplySeparationTest(unittest.TestCase):
         self._assert_no_import(_PACKAGE_ROOT / "shanten.py", ("_python_shanten",))
         self.assertIs(shanten_module._shanten_common, _shanten_common)
 
-    def test_lookup_backend_shares_the_supply_objects(self) -> None:
-        self.assertIs(
-            _lookup_shanten.ShantenTableError, _shanten_table.ShantenTableError
-        )
-        self.assertIs(_lookup_shanten._COMBINE, _shanten_table._COMBINE)
-        self.assertIs(_lookup_shanten._PENALTY, _shanten_table._PENALTY)
-
-    def test_generators_import_without_native_extension_or_old_search(self) -> None:
+    def test_generators_import_without_native_extension(self) -> None:
+        # 環境変数未設定（default rust）でもnative拡張なしでimportできる。
         result = _run_python(_GENERATOR_IMPORT_PROGRAM, backend=None)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "ok")
@@ -1086,9 +769,11 @@ class ArtifactSupplySeparationTest(unittest.TestCase):
         # native拡張の代わりに引数を記録するfakeを入れ、rust選択processが
         # `_shanten_table`の供給だけでnative tableを作り、Python計算moduleを
         # importしないことを確認する（API_VERSION検査は実物と同じ経路を通る）。
-        result = _run_python(_FAKE_NATIVE_RUST_PROGRAM, backend="rust")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "ok")
+        for backend in (None, "rust"):
+            with self.subTest(backend=backend):
+                result = _run_python(_FAKE_NATIVE_RUST_PROGRAM, backend=backend)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "ok")
 
 
 class PublicSurfaceTest(unittest.TestCase):
@@ -1137,9 +822,7 @@ class PublicSurfaceTest(unittest.TestCase):
             {
                 "__init__.py",
                 "shanten.py",
-                "_python_shanten.py",
                 "_shanten_frontier.py",
-                "_lookup_shanten.py",
                 "_shanten_backend.py",
                 "_shanten_common.py",
                 "_shanten_table.py",

@@ -53,8 +53,8 @@ fn read_count(item: &Bound<'_, PyAny>) -> PyResult<u8> {
 }
 
 /// Read a canonical 34-count sequence, rejecting values that would index the
-/// dense key space out of range.  The Python backend trusts its caller for
-/// this precondition; the native backend must check it for memory safety.
+/// dense key space out of range.  The trusted Python entries do not check
+/// this precondition; the native boundary must check it for memory safety.
 fn read_counts(counts: &Bound<'_, PyAny>) -> PyResult<[u8; TILE_KIND_COUNT]> {
     let mut values = [0u8; TILE_KIND_COUNT];
     let length_error = || PyValueError::new_err("counts must contain exactly 34 values");

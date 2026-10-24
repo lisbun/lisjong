@@ -10,6 +10,14 @@ Arena [`86ea715`](https://github.com/lisbun/lisjong-arena/tree/86ea7152b0ce3de82
 既存の移行経緯は[rust-migration.md](rust-migration.md)、配布契約は
 [rust-backend-distribution.md](rust-backend-distribution.md)を参照する。
 
+> **2026-10-24 実施（Issue #346）**：§6の5（Rust必須化・Python計算削除）を実装した。
+> `LISJONG_SHANTEN_BACKEND`は未設定 / `rust`でnative必須、`python`は移行案内付きで拒否、未知値も拒否する。
+> 失敗位置は`lisjong.hand_evaluation.shanten`（と`_shanten_backend`）のimport時で、package root
+> （`calculate_shanten`は遅延公開）・`scoring`・artifact供給・generatorはnativeなしでimportできる。
+> `_lookup_shanten`、`_python_shanten`、`shanten._python_evaluate_discards`、R5のPython evaluator、
+> 比較専用test / CI step、benchmarkの`kernel` modeを削除した。Ubuntu CIは同revision wheelを導入する。
+> 削除testごとの代替は§4末尾と[R5仕様検証](r5-spec-verification.md)。以下の「現在」「default」の記述は設計時点のもの。
+
 ## 1. 処理とconsumer
 
 以下のpathは特記のない限りlisjong。private名も実在consumerがあるため、単なる検索置換で削除しない。
@@ -82,6 +90,24 @@ manifestにrevision・wheel filename/bytes/SHA-256・SOURCE_REVISION・API_VERSI
 
 Python oracleの削除は「testがpassした」だけでは進めない。各差分testについて仕様fixture・property・
 境界・binding契約のどれが代替するかを切替PRへ記録する。外部reference検証まで一括削除しない。
+
+### #346で削除した差分testと代替（numeric・batched・artifact）
+
+| 削除したtest | 代替 |
+| --- | --- |
+| `test_shanten.py::LookupBackendExactnessTest`（lookup = DFS）、`test_native_shanten_backend.py`のnative = lookup = DFS（通常形・numeric core、seeded・edge・特殊形） | `test_shanten_spec_fixtures.py`の手計算fixture（全有効枚数・確定面子0〜4・特殊形・4枚・5枚目・赤・色置換・1↔9反転・入力順）を公開・canonical・native入口へ通す。`reference_tests/`の外部実装比較（CIでnative導入済み） |
+| `test_native_shanten_backend.py`の不整合な(counts, fixed)組でのlookup一致 | precondition外の組。native境界の入力検証testが範囲を固定する |
+| `test_shanten.py::ScratchWorkspaceThreadSafetyTest`（Python lookupのthread別workspace） | 対象実装を削除。native側は`NativeStandardShantenBoundaryTest.test_concurrent_calls_are_consistent` |
+| `test_shanten.py`のPython lookup経由のfrontier id破損 | `NativeArtifactIntegrityTest.test_broken_frontier_id_fails_closed_on_reference`。Python readerのspan検証は保持 |
+| `test_shanten.py`のpenalty helper = DFS | `_PENALTY`はnativeへ渡り、spec fixture・reference検証のnumeric値で間接に固定。generatorのpenalty定義は保持 |
+| `test_shanten.py::LocalFrontierValidationTest`の単一group lookup = DFS | exhaustive検証はgenerator実行時（offline）。dominant frontierの性質testは保持 |
+| `test_shanten.py::ProductionBackendBoundaryTest`（old DFSへfallbackしない） | numeric入口がnative tableへ直接結び付き、計算moduleが存在しないことを固定 |
+| `test_evaluate_discards.py`のPython実装 | Python / nativeは同じTile入口由来の期待値で照合していたため、native table入口とpackage入口の2つで同じ期待値・例外・入力不変を確認（coverage減なし）。counter、threshold、None/empty、4枚制限、手計算fixtureは保持 |
+| backend選択test（default python、python選択時のnative非import、旧wheel無視） | default / rustのnative routing、`python`拒否（native有無とも）、未知値拒否、native不在・API不一致（default / rust）、table破損のimport時失敗、nativeなしでimportできるmoduleの固定 |
+| CI `native-backend`の同値性step | 削除。AL2023のbinary-only導入とfull suite、`SOURCE_REVISION`照合は保持 |
+
+保持したもの：native入力境界・malformed input・並行呼出し・counter・artifact破損・API不一致・release異常系
+（subprocess）、generatorのnativeなしimport、public module surface、MLなしcore回帰、外部reference検証。
 
 ## 5. Arena consumerと過去artifact
 

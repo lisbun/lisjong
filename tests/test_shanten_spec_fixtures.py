@@ -12,9 +12,9 @@
 これは入力tableの読込であって期待値の計算ではない。
 
 native入口は`_lisjong_native`がimportできる環境で実行し、
-`LISJONG_REQUIRE_NATIVE=1`ではskipせずfailさせる。Rust backend選択の
-full suite（native CI job）では公開入口・canonical入口もnative numeric coreを
-通ったことをcall counterで確認する。
+`LISJONG_REQUIRE_NATIVE=1`ではskipせずfailさせる。公開入口・canonical入口も
+native numeric coreを通ったことをcall counterで確認する（Issue #346でPython
+計算実装を削除し、これらの期待値がnumeric coreの正本になった）。
 """
 
 import ast
@@ -341,11 +341,7 @@ class NativeNumericEntryTest(_EntryAssertions, unittest.TestCase):
 
 
 class SelectedBackendRoutingTest(unittest.TestCase):
-    """Rust backend選択processで公開・canonical入口がnativeを通ったことを確認する。"""
-
-    def setUp(self) -> None:
-        if _shanten_backend.BACKEND_NAME != "rust":
-            self.skipTest("only meaningful when LISJONG_SHANTEN_BACKEND=rust")
+    """公開・canonical入口がnative numeric coreを通ったことを確認する（Issue #346で常時）。"""
 
     def test_public_and_canonical_entries_use_the_native_core(self) -> None:
         fixture = SHANTEN_SPEC_FIXTURES[0]

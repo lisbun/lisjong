@@ -1,15 +1,15 @@
 """通常形shantenのexact local decomposition frontierを導出するprivate generator。
 
-Issue #115で追加した、lookup-table backend（`_lookup_shanten`）用のtableを
-**生成する**側のmoduleである。runtimeのshanten計算はこのmoduleを呼ばない。
-呼び出すのはoffline generator（`tools/generate_shanten_table.py`）と、
-exactnessを固定するtestsだけである。共有定数は`_shanten_common`から読み、
-旧DFS oracle（`_python_shanten`）やnative拡張をimportしない（Issue #338）。
+Issue #115で追加した、lookup table（`_shanten_table.bin`、runtimeではnative
+backendが読む）を**生成する**側のmoduleである。runtimeのshanten計算はこの
+moduleを呼ばない。呼び出すのはoffline generator（`tools/generate_shanten_table.py`）
+と、frontierの性質を固定するtestsだけである。共有定数は`_shanten_common`から読み、
+native拡張や計算moduleをimportしない（Issue #338）。
 
 ## なぜlocal frontierで足りるのか
 
-current標準形backend（`_python_shanten._StandardFormSearch`）は、34牌種を
-index順に走査しながら次を行う。
+Issue #115当時の標準形backend（`_python_shanten._StandardFormSearch`、再帰探索。
+Issue #346で削除）は、34牌種をindex順に走査しながら次を行う。
 
 - 面子 / 順子 / 塔子 / 対子blockの取り出し（scoreを加算）
 - 余り牌からmeld seed / head seedを数える

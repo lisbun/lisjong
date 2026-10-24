@@ -2,10 +2,9 @@
 
 `_shanten_table.bin`のformat定義、bytesの読込、構造検証（`ShantenTableError`）、
 resource stateのencode / decode、group間combine表とpenalty表の構築をまとめる。
-consumerは次の3つで、どれもPython lookup計算本体（`_lookup_shanten`）を必要としない。
+consumerは次の2つである（Python lookup計算`_lookup_shanten`はIssue #346で削除）。
 
 ```text
-_lookup_shanten              Python lookup計算（default backend）
 _shanten_backend             native table構築（payload / combine / penalty / 例外型）
 tools/generate_*_table.py    offline generator（pack / header / reader）
 ```
@@ -27,7 +26,7 @@ lookup / DFSを切り替えるruntime optionは持たない。
   （本moduleの`_ShantenTable`）。frontierは数千件しかなく、`spawn`
   workerごとに走らせても無視できる。
 - frontier id（`ids[key]`の値）は参照したものだけをO(1)で検証する
-  （`_lookup_shanten.calculate_standard_shanten()`、native側は同等の検査）。
+  （native backendの参照時検査）。
   dense key空間は数百万entryあり、load時に全件走査すると起動コストが
   約30ms増えるため、hot path側の比較1回へ寄せている。
 

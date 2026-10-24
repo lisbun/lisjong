@@ -313,32 +313,45 @@ def _mass(distribution: tuple[int, ...]) -> int:
     return sum(index * count for index, count in enumerate(distribution))
 
 
-class _RecordingEvaluator(progression._TerminalShantenProgressionEvaluator):
-    """productionへ二重pathを足さずにDP遷移を観測するtest-local subclass。"""
+def _progression(
+    hand_counts: tuple[int, ...], remaining_counts: tuple[int, ...], depth: int
+) -> tuple[int, tuple[int, ...]]:
+    """本番factoryのnative evaluatorで1 rootを評価し、`(root shanten, distribution)`。
 
-    __slots__ = ("child_states", "draw_hands", "root_queries")
+    Issue #346でPython evaluatorを削除した。native evaluatorは1 decision / 1 batch
+    の一括APIなので、1 rootでも新しいevaluatorを作って`evaluate_roots()`を呼ぶ。
+    """
+    ((root_shanten, distribution),) = (
+        progression._new_progression_evaluator().evaluate_roots(
+            (hand_counts,), remaining_counts, depth
+        )
+    )
+    return root_shanten, distribution
+
+
+def _distribution(
+    hand_counts: tuple[int, ...], remaining_counts: tuple[int, ...], depth: int
+) -> tuple[int, ...]:
+    return _progression(hand_counts, remaining_counts, depth)[1]
+
+
+_PRODUCTION_FACTORY = progression._new_progression_evaluator
+
+
+class _RecordingEvaluator:
+    """本番evaluatorを包み、`evaluate_roots()`へ渡った入力だけを記録する。
+
+    productionへ二重pathを足さずに、Policyが導出してDPへ渡す値を観測する。
+    """
 
     def __init__(self) -> None:
-        super().__init__()
-        self.root_queries: list[tuple[int, ...]] = []
-        self.child_states: list[tuple[tuple[int, ...], int]] = []
-        self.draw_hands: list[tuple[int, ...]] = []
+        # factoryをpatchして本classを注入するので、元のfactoryを使う。
+        self._inner = _PRODUCTION_FACTORY()
+        self.calls: list[tuple[tuple[tuple[int, ...], ...], tuple[int, ...], int]] = []
 
-    def terminal_shanten_distribution(self, hand_counts, remaining_counts, depth):
-        self.root_queries.append(remaining_counts)
-        return super().terminal_shanten_distribution(
-            hand_counts, remaining_counts, depth
-        )
-
-    def _distribution(self, hand_counts, remaining_counts, depth, remaining_total):
-        self.child_states.append((remaining_counts, depth))
-        return super()._distribution(
-            hand_counts, remaining_counts, depth, remaining_total
-        )
-
-    def best_post_discard_shanten(self, draw_hand_counts):
-        self.draw_hands.append(draw_hand_counts)
-        return super().best_post_discard_shanten(draw_hand_counts)
+    def evaluate_roots(self, root_hand_counts, remaining_counts, horizon):
+        self.calls.append((tuple(root_hand_counts), remaining_counts, horizon))
+        return self._inner.evaluate_roots(root_hand_counts, remaining_counts, horizon)
 
 
 # 探索量を小さく保つためのreference比較用fixture。
@@ -356,10 +369,14 @@ _CLOSED_FAR_HAND = _tile_type_counts(_hand("147m258p369s1357z"))
 
 
 class BestPostDiscardShantenTest(unittest.TestCase):
-    """depth-1 closed formが全打牌列挙とexactに一致することを固定する。"""
+    """depth-1 closed formの前提となるnumeric性質を全打牌列挙で固定する。
+
+    native R5は`min_y shanten(Y - y) == max(0, shanten(Y))`を使ってdepth 1を
+    1回のshanten評価で済ませる。Python evaluator（Issue #346で削除）の同名method
+    を比べる代わりに、この性質を公開`calculate_shanten()`で直接確認する。
+    """
 
     def test_closed_form_matches_exhaustive_discard_enumeration(self) -> None:
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         generator = random.Random(169)
         for draw_size in (14, 11, 8, 5, 2):
             for _ in range(120):
@@ -373,19 +390,22 @@ class BestPostDiscardShantenTest(unittest.TestCase):
                 draw_hand_counts = tuple(counts)
                 with self.subTest(draw_size=draw_size, hand=draw_hand_counts):
                     self.assertEqual(
-                        evaluator.best_post_discard_shanten(draw_hand_counts),
+                        max(0, calculate_shanten(_tiles_for_oracle(draw_hand_counts))),
                         _reference_best_post_discard_shanten(draw_hand_counts),
                     )
 
     def test_complete_draw_hand_falls_back_to_tenpai(self) -> None:
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         complete = _tile_type_counts(_hand("123456789m11122p"))
         self.assertEqual(calculate_shanten(_tiles_for_oracle(complete)), -1)
-        self.assertEqual(evaluator.best_post_discard_shanten(complete), 0)
+        self.assertEqual(_reference_best_post_discard_shanten(complete), 0)
 
 
 class ReferenceEvaluatorAgreementTest(unittest.TestCase):
-    """optimized production DPがunpruned exact referenceと一致することを固定する。"""
+    """optimized native DPがunpruned exact referenceと一致することを固定する。
+
+    referenceは同じcanonical順のtie-breakを持つため、同mass childの先頭採用の
+    検証は代替しない（Rust unit test`equal_mass_children_keep_the_first_canonical_distribution`）。
+    """
 
     def _assert_matches_reference(
         self,
@@ -393,11 +413,8 @@ class ReferenceEvaluatorAgreementTest(unittest.TestCase):
         remaining_counts: tuple[int, ...],
         depth: int,
     ) -> None:
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         self.assertEqual(
-            evaluator.terminal_shanten_distribution(
-                hand_counts, remaining_counts, depth
-            ),
+            _distribution(hand_counts, remaining_counts, depth),
             _reference_distribution(hand_counts, remaining_counts, depth),
         )
 
@@ -433,14 +450,14 @@ class ReferenceEvaluatorAgreementTest(unittest.TestCase):
         )
 
     def test_cache_reuse_does_not_change_the_result(self) -> None:
+        # 1 batch内で同じrootを再評価すると共有cacheを使うが、結果は単独評価と同じ。
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
-        shared = progression._TerminalShantenProgressionEvaluator()
-        for hand_counts in (_THREE_MELD_HAND, _TWO_MELD_HAND, _THREE_MELD_HAND):
-            fresh = progression._TerminalShantenProgressionEvaluator()
-            expected = fresh.terminal_shanten_distribution(hand_counts, remaining, 2)
-            first = shared.terminal_shanten_distribution(hand_counts, remaining, 2)
-            second = shared.terminal_shanten_distribution(hand_counts, remaining, 2)
-            self.assertEqual((first, second), (expected, expected))
+        roots = (_THREE_MELD_HAND, _TWO_MELD_HAND, _THREE_MELD_HAND)
+        shared = progression._new_progression_evaluator()
+        batched = shared.evaluate_roots(roots, remaining, 2)
+        self.assertEqual(
+            batched, tuple(_progression(root, remaining, 2) for root in roots)
+        )
         self.assertGreater(shared.cache_hits, 0)
 
 
@@ -450,25 +467,19 @@ class ProgressionRecurrenceTest(unittest.TestCase):
     def test_distribution_sums_to_the_ordered_sequence_denominator(self) -> None:
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
         hidden = sum(remaining)
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         for depth in (1, 2, DEFAULT_HORIZON):
             with self.subTest(depth=depth):
-                distribution = evaluator.terminal_shanten_distribution(
-                    _THREE_MELD_HAND, remaining, depth
-                )
+                distribution = _distribution(_THREE_MELD_HAND, remaining, depth)
                 self.assertEqual(sum(distribution), _falling_factorial(hidden, depth))
 
     def test_mass_stays_inside_the_exact_shanten_bounds(self) -> None:
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
         hidden = sum(remaining)
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         for hand_counts in (_THREE_MELD_HAND, _TWO_MELD_HAND, _CLOSED_FAR_HAND):
             shanten = calculate_shanten(_tiles_for_oracle(hand_counts))
             for depth in (1, 2, DEFAULT_HORIZON):
                 denominator = _falling_factorial(hidden, depth)
-                distribution = evaluator.terminal_shanten_distribution(
-                    hand_counts, remaining, depth
-                )
+                distribution = _distribution(hand_counts, remaining, depth)
                 with self.subTest(hand=hand_counts, depth=depth):
                     self.assertGreaterEqual(
                         _mass(distribution),
@@ -480,10 +491,7 @@ class ProgressionRecurrenceTest(unittest.TestCase):
         tenpai = _tile_type_counts(_hand("345m9s"))
         self.assertEqual(calculate_shanten(_tiles_for_oracle(tenpai)), 0)
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
-        evaluator = progression._TerminalShantenProgressionEvaluator()
-        distribution = evaluator.terminal_shanten_distribution(
-            tenpai, remaining, DEFAULT_HORIZON
-        )
+        distribution = _distribution(tenpai, remaining, DEFAULT_HORIZON)
         self.assertEqual(_mass(distribution), 0)
         self.assertEqual(
             distribution[0], _falling_factorial(sum(remaining), DEFAULT_HORIZON)
@@ -491,58 +499,27 @@ class ProgressionRecurrenceTest(unittest.TestCase):
 
     def test_future_draw_uses_without_replacement_inventory(self) -> None:
         """single-copy牌種は同じsequence内で二度drawされない。"""
-        hand_counts = _FOUR_MELD_HAND
-        remaining = _counts(m2=1, m6=1)
-        evaluator = progression._TerminalShantenProgressionEvaluator()
-        distribution = evaluator.terminal_shanten_distribution(
-            hand_counts, remaining, 2
-        )
+        distribution = _distribution(_FOUR_MELD_HAND, _counts(m2=1, m6=1), 2)
         self.assertEqual(sum(distribution), _falling_factorial(2, 2))
 
     def test_hypothetical_discard_is_not_returned_to_the_inventory(self) -> None:
-        evaluator = _RecordingEvaluator()
-        remaining = _counts(m2=2, m6=1)
-        evaluator.terminal_shanten_distribution(_THREE_MELD_HAND, remaining, 2)
-        depth_one_states = [child for child in evaluator.child_states if child[1] == 1]
-        self.assertTrue(depth_one_states)
-        for child_remaining, _depth in depth_one_states:
-            self.assertEqual(sum(child_remaining), sum(remaining) - 1)
-            self.assertTrue(
-                all(
-                    child <= root
-                    for child, root in zip(child_remaining, remaining, strict=True)
-                )
-            )
+        # 仮想打牌を残牌へ戻すと、2巡目の母数が3のまま（3 * 3 = 9列）になる。
+        # 戻さないので列数は3 * 2 = 6。Python evaluatorの遷移観測（Issue #346で
+        # 削除）の代わりに、母数そのものを固定する。
+        distribution = _distribution(_THREE_MELD_HAND, _counts(m2=2, m6=1), 2)
+        self.assertEqual(sum(distribution), 6)
 
     def test_every_drawable_tile_type_opens_a_future_branch(self) -> None:
-        """improvement drawのbranchを「即効牌」で限定していないことを固定する。"""
-        hand_counts = _THREE_MELD_HAND
-        shanten = calculate_shanten(_tiles_for_oracle(hand_counts))
-        remaining = _counts(m2=4, m5=4, s9=4, p7=4)
-        evaluator = _RecordingEvaluator()
-        evaluator.terminal_shanten_distribution(hand_counts, remaining, 1)
-        drawn_indices = {
-            index
-            for draw_hand_counts in evaluator.draw_hands
-            for index in range(TILE_TYPE_COUNT)
-            if draw_hand_counts[index] > hand_counts[index]
-        }
-        expected = {index for index, count in enumerate(remaining) if count}
-        self.assertEqual(drawn_indices, expected)
-        non_effective = {
-            index
-            for index in expected
-            if calculate_shanten(
-                _tiles_for_oracle(
-                    tuple(
-                        value + (1 if position == index else 0)
-                        for position, value in enumerate(hand_counts)
-                    )
-                )
-            )
-            >= shanten
-        }
-        self.assertTrue(non_effective)
+        """improvement drawのbranchを「即効牌」で限定していないことを固定する。
+
+        1m5m9s3z（確定3面子、孤立4枚の2向聴）に対し、2mは12mの塔子、5m / 9sは
+        対子を作って1向聴になる。7pは孤立牌のままで2向聴を維持する。即効牌だけを
+        展開すると7pの4列が消え、総列数16（全drawable牌の物理枚数）にならない。
+        """
+        distribution = _distribution(
+            _THREE_MELD_HAND, _counts(m2=4, m5=4, s9=4, p7=4), 1
+        )
+        self.assertEqual(distribution, (0, 12, 4, 0, 0, 0, 0, 0, 0))
 
     def test_completion_impossible_hand_still_has_progression_value(self) -> None:
         """completion不能 != progression valueなしを固定するregression。"""
@@ -553,34 +530,15 @@ class ProgressionRecurrenceTest(unittest.TestCase):
         )
         self.assertEqual(completion, 0)
         shanten = calculate_shanten(_tiles_for_oracle(_CLOSED_FAR_HAND))
-        distribution = progression._TerminalShantenProgressionEvaluator().terminal_shanten_distribution(
-            _CLOSED_FAR_HAND, remaining, DEFAULT_HORIZON
-        )
+        distribution = _distribution(_CLOSED_FAR_HAND, remaining, DEFAULT_HORIZON)
         self.assertLess(
             _mass(distribution),
             shanten * _falling_factorial(hidden, DEFAULT_HORIZON),
         )
 
-    def test_zero_depth_is_the_current_structural_shanten(self) -> None:
-        """`T(H, R, 0)`のbase caseがcurrent向聴数の1本だけになる。"""
-        evaluator = progression._TerminalShantenProgressionEvaluator()
-        remaining = _counts(m2=3, m6=2, s9=2, z3=1)
-        for hand_counts in (_THREE_MELD_HAND, _TWO_MELD_HAND, _CLOSED_FAR_HAND):
-            with self.subTest(hand=hand_counts):
-                distribution = evaluator.terminal_shanten_distribution(
-                    hand_counts, remaining, 0
-                )
-                self.assertEqual(sum(distribution), 1)
-                self.assertEqual(
-                    _mass(distribution),
-                    calculate_shanten(_tiles_for_oracle(hand_counts)),
-                )
-
     def test_selection_values_are_exact_integers(self) -> None:
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
-        distribution = progression._TerminalShantenProgressionEvaluator().terminal_shanten_distribution(
-            _THREE_MELD_HAND, remaining, DEFAULT_HORIZON
-        )
+        distribution = _distribution(_THREE_MELD_HAND, remaining, DEFAULT_HORIZON)
         self.assertTrue(all(type(count) is int for count in distribution))
         self.assertIs(type(_mass(distribution)), int)
 
@@ -946,38 +904,34 @@ class InformationBoundaryTest(unittest.TestCase):
             recorded.append(evaluator)
             return evaluator
 
-        # 本番配線はfactory経由である。oracleの遷移観測にはfactoryへ注入する。
+        # 本番配線はfactory経由である。DPへ渡る入力の観測にはfactoryへ注入する。
         with patch.object(progression, "_new_progression_evaluator", build):
             progression._evaluate_and_choose_discard(policy_input, actions)
         self.assertEqual(len(recorded), 1)
-        self.assertEqual(len(recorded[0].root_queries), len(actions))
-        self.assertTrue(all(counts == expected for counts in recorded[0].root_queries))
+        ((roots, remaining, horizon),) = recorded[0].calls
+        self.assertEqual(len(roots), len(actions))
+        self.assertEqual(remaining, expected)
+        self.assertEqual(horizon, DEFAULT_HORIZON)
 
     def test_red_and_normal_five_share_one_structural_state(self) -> None:
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         remaining = _counts(m2=3, m6=2, s9=2)
         red = _tile_type_counts(_hand("30m9s") + (_tile(TileCategory.SOUZU, 9),))
         normal = _tile_type_counts(_hand("35m9s") + (_tile(TileCategory.SOUZU, 9),))
         self.assertEqual(red, normal)
         self.assertEqual(
-            evaluator.terminal_shanten_distribution(red, remaining, 2),
-            evaluator.terminal_shanten_distribution(normal, remaining, 2),
+            _progression(red, remaining, 2), _progression(normal, remaining, 2)
         )
 
     def test_open_hand_fixed_meld_context_uses_current_shanten_semantics(
         self,
     ) -> None:
-        evaluator = progression._TerminalShantenProgressionEvaluator()
         remaining = _counts(m2=3, m6=2, s9=2)
-        distribution = evaluator.terminal_shanten_distribution(
-            _THREE_MELD_HAND, remaining, 1
-        )
+        root_shanten, distribution = _progression(_THREE_MELD_HAND, remaining, 1)
         self.assertEqual(
             distribution, _reference_distribution(_THREE_MELD_HAND, remaining, 1)
         )
         self.assertEqual(
-            evaluator.shanten(_THREE_MELD_HAND),
-            calculate_shanten(_tiles_for_oracle(_THREE_MELD_HAND)),
+            root_shanten, calculate_shanten(_tiles_for_oracle(_THREE_MELD_HAND))
         )
 
     def test_malformed_inventory_fails_closed(self) -> None:
@@ -1000,12 +954,6 @@ class InformationBoundaryTest(unittest.TestCase):
         ):
             with self.assertRaises(FiniteHorizonCompletionPolicyError):
                 progression._evaluate_and_choose_discard(policy_input, actions)
-
-    def test_out_of_axis_terminal_shanten_fails_closed(self) -> None:
-        with self.assertRaises(progression.TerminalShantenProgressionPolicyError):
-            progression._unit_distribution(progression.TERMINAL_SHANTEN_AXIS)
-        with self.assertRaises(progression.TerminalShantenProgressionPolicyError):
-            progression._unit_distribution(-1)
 
 
 class AnalysisValueTest(unittest.TestCase):

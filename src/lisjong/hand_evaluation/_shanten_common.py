@@ -1,10 +1,9 @@
 """向聴計算の各経路が共有するprivateな定数と特殊形helper（Issue #338）。
 
-`_python_shanten`（旧DFS oracle）、`_lookup_shanten`（Python lookup計算）、
 `_shanten_table`（artifact供給）、`_shanten_frontier`（offline generator）、
-`shanten.py`（numeric dispatch・structural predicate）が同じ値を参照する。
-Python numeric計算本体を将来削除しても、structural predicateとgeneratorが
-依存するhelper・定数がここに残るよう、計算本体から分離している。
+`shanten.py`（structural predicate）が同じ値を参照する。Python numeric計算本体
+（`_lookup_shanten`、`_python_shanten`）はIssue #346で削除したが、structural
+predicateとgeneratorが依存するhelper・定数はここに残す。
 
 このmoduleはpackage内の他moduleをimportしない。
 """

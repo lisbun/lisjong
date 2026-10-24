@@ -148,8 +148,8 @@ def _require_native(test: unittest.TestCase) -> None:
 
 
 def _run_python(code: str) -> subprocess.CompletedProcess:
-    # native拡張を隠したprocessでshanten backendのrust指定（native CI job）を
-    # 継承すると、scoringと無関係なshanten backendのimport時エラーになる。
+    # 親processの`LISJONG_SHANTEN_BACKEND`（旧`python`指定等）を継承しない。
+    # scoringのimportはshanten backendを読み込まない。
     environment = dict(os.environ)
     environment.pop("LISJONG_SHANTEN_BACKEND", None)
     return subprocess.run(
@@ -163,14 +163,20 @@ def _run_python(code: str) -> subprocess.CompletedProcess:
 
 
 class NativeBoundaryTest(unittest.TestCase):
-    """native拡張がなくてもimportでき、呼び出しだけが明確に失敗する。"""
+    """native拡張がなくてもimportでき、呼び出しだけが明確に失敗する。
+
+    Issue #346で向聴計算はnative必須になり、`calculate_shanten`の参照はnativeなしでは
+    失敗する（`test_native_shanten_backend.BackendSelectionTest`）。scoringの遅延
+    import契約は変えないので、ここでは向聴moduleを読み込まないことも確認する。
+    """
 
     def test_missing_native_fails_only_on_call(self) -> None:
         code = (
             "import sys\n"
             "sys.modules['_lisjong_native'] = None\n"
             "import lisjong, lisjong.hand_evaluation\n"
-            "from lisjong.hand_evaluation import scoring, calculate_shanten\n"
+            "from lisjong.hand_evaluation import scoring\n"
+            "assert 'lisjong.hand_evaluation.shanten' not in sys.modules\n"
             "from lisjong.policy_contract.tile import Tile, TileCategory, TileType\n"
             "t = Tile(TileType(TileCategory.MANZU, 1))\n"
             "hand = scoring.WinningHand((t,) * 13, (), t)\n"
