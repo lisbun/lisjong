@@ -1817,6 +1817,7 @@ class PolicyGenerationAndScopeTest(unittest.TestCase):
                 "OpenHandYakuAwareCallPolicy",
                 "PassedTileGenbutsuPlacementAwareSpeedCallPolicy",
                 "PlacementAwareSpeedCallSuitedPaijiaTiePolicy",
+                "SingleOpenGenbutsuPlacementAwareSpeedCallPolicy",
                 "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
                 "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
                 "PlacementAwareSpeedCallPolicy",

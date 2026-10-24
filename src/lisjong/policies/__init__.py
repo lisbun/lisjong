@@ -53,6 +53,9 @@ from lisjong.policies.placement_aware_speed_call_suited_paijia_tie import (
     PlacementAwareSpeedCallSuitedPaijiaTiePolicy,
 )
 from lisjong.policies.shanten import ShantenPolicy
+from lisjong.policies.single_open_genbutsu_placement_aware_speed_call import (
+    SingleOpenGenbutsuPlacementAwareSpeedCallPolicy,
+)
 from lisjong.policies.targeted_honor_release_terminal_progression import (
     TargetedHonorReleaseTerminalProgressionPolicy,
 )
@@ -88,6 +91,7 @@ __all__ = [
     "PlacementAwareSpeedCallSuitedPaijiaTiePolicy",
     "OneShantenDefensePlacementAwareSpeedCallPolicy",
     "ShantenPolicy",
+    "SingleOpenGenbutsuPlacementAwareSpeedCallPolicy",
     "TargetedHonorReleaseTerminalProgressionPolicy",
     "TerminalShantenProgressionMechanismRiichiDefensePolicy",
     "TwoStepUkeirePolicy",
