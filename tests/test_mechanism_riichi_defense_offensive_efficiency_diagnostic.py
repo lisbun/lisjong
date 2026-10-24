@@ -582,7 +582,9 @@ class TerminalProgressionOptInTest(unittest.TestCase):
                 completion_evaluations,
                 remaining_counts,
                 DEFAULT_HORIZON,
-                progression._TerminalShantenProgressionEvaluator(),
+                # #169のcandidate評価を診断とは別のevaluatorで直接呼ぶ（Issue #346
+                # 以降、本番factoryはnative evaluatorだけを返す）。
+                progression._new_progression_evaluator(),
             )
         }
         actual = {

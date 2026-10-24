@@ -240,24 +240,33 @@ source .venv/bin/activate
 ```text
 python -m ruff format --check .
 python -m ruff check .
-python -m unittest discover -s tests -v
+LISJONG_REQUIRE_NATIVE=1 python -m unittest discover -s tests -v
 ```
 
-### Opt-in native shanten backend（試作）
+testはnative拡張が導入された環境で実行します（`LISJONG_REQUIRE_NATIVE=1`でnative不在をskipではなく失敗にします）。
 
-defaultはPython backendで、native拡張なしの通常installで動作します。
-Rust toolchain（`native/rust-toolchain.toml`で固定）がある環境では、
-numeric shanten coreのRust試作を明示的に選択できます。
+### Native shanten backend（必須）
 
-```powershell
+向聴数・打牌候補の一括評価・R5探索はnative拡張`_lisjong_native`（`native/`のRust crate）で
+計算します。Issue #346でPython計算実装を削除したため、Policyを使うにはlisjongと
+**同じrevision**のnative拡張が必要です。対応環境はLinux x86_64 / CPython 3.14通常版で、
+WindowsではWSLを使います（Windows native wheelは提供しません）。
+
+```bash
+# 推奨: 同revisionのsourceとmain CI wheelの組を新規venvへ導入・検証する
+python3.14 tools/native_bundle.py install <bundle> <new-venv>
+# Rust toolchain（native/rust-toolchain.toml）がある環境でのsource build
 python -m pip install ./native
-$env:LISJONG_SHANTEN_BACKEND = "rust"
 ```
 
-`rust`を指定してnative拡張を読み込めない場合はPythonへfallbackせず起動時に失敗します。
-結果・同値性・対応環境は [Rust backend試作記録](docs/rust-backend-prototype.md) を参照してください。
-AWS Arena worker（Amazon Linux 2023 x86_64 / CPython 3.14）向けのcompiler不要なwheelは、
-[Rust backend wheel配布記録](docs/rust-backend-distribution.md) を参照してください。
+`LISJONG_SHANTEN_BACKEND`は未設定（または`rust`）にします。旧値`python`や未知の値、
+native拡張の不在・`API_VERSION`不一致は、`lisjong.hand_evaluation.shanten`のimport時に
+`ShantenBackendError`で失敗します（Pythonへのfallbackはありません）。`lisjong`、
+`lisjong.hand_evaluation.scoring`、artifact供給moduleとoffline generatorのimportは
+native拡張なしでも成功します。Python backendで行った過去の実行は、記録済みrevisionと環境で再現します。
+導入・配布は [Rust backend wheel配布記録](docs/rust-backend-distribution.md)、
+経緯は [Rust backend試作記録](docs/rust-backend-prototype.md) と
+[Python計算backendの段階的廃止](docs/python-compute-backend-retirement.md) を参照してください。
 
 `lisjong` 自体はRiichiEnv / RiichiLab execution runtimeを所有しません。
 external/local integration testや実対局の実行方法は

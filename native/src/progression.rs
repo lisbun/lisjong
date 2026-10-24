@@ -1,10 +1,12 @@
 //! Exact terminal-shanten progression search (Issue #232).
 //!
-//! Native port of `_TerminalShantenProgressionEvaluator` (R5, Issue #169): the
-//! sequential draw / discard DP over `horizon` self-draws whose value is the
-//! exact integer distribution of terminal structural shanten.  The Python
-//! evaluator stays the oracle; this module mirrors it step by step so that the
-//! distributions, masses and the four instrumentation counters match exactly:
+//! Native implementation of the R5 progression DP (Issue #169): the sequential
+//! draw / discard DP over `horizon` self-draws whose value is the exact integer
+//! distribution of terminal structural shanten.  It was ported from the Python
+//! evaluator `_TerminalShantenProgressionEvaluator`, which Issue #346 removed;
+//! this module is now the only implementation.  Its selection contract is fixed
+//! by hand-derived fixtures (`tests/test_progression_spec_fixtures.py`) and by
+//! the synthetic min-node tests below:
 //!
 //! - children of a draw hand are ordered by `(shanten, hand_counts)`;
 //! - the best child is replaced only on a strictly smaller mass;
@@ -39,7 +41,7 @@ pub(crate) type Distribution = [u64; TERMINAL_SHANTEN_AXIS];
 pub(crate) enum SearchError {
     /// Shanten table artifact failure (`ShantenTableError`).
     Table(String),
-    /// Semantic failure the Python evaluator reports as
+    /// Semantic failure reported to Python as
     /// `TerminalShantenProgressionPolicyError` (axis range, arithmetic range,
     /// a draw hand without a discard).
     Policy(String),
@@ -345,8 +347,8 @@ fn draw_tile(hand: &Counts, drawn: usize) -> Result<Counts, SearchError> {
 
 /// Evaluate every root (post-discard) hand with one shared cache.
 ///
-/// Mirrors `_evaluate_progression_candidates()` on the Python evaluator: for
-/// each root in order, the terminal distribution, then the root shanten.
+/// The batch entry used by `_evaluate_progression_candidates()`: for each root
+/// in order, the terminal distribution, then the root shanten.
 pub(crate) fn search_roots(
     core: &ShantenCore,
     roots: &[Counts],
@@ -459,6 +461,112 @@ mod tests {
         let empty = [0u8; TILE_KIND_COUNT];
         let result = search.best_discard_distribution(&empty, &empty, 1, 1, 1);
         assert!(matches!(result, Err(SearchError::Policy(_))));
+    }
+
+    /// Feed synthetic child distributions through the production min node.
+    ///
+    /// The draw hand holds one tile of kinds 0..=4, so its five children are
+    /// `draw_hand - one(kind)`.  Child shanten and depth-2 distributions are
+    /// pre-seeded in the search caches (the table is never consulted), so the
+    /// real `best_discard_distribution` selects among exactly these values.
+    /// Returns the selected distribution and the counters of the call.
+    fn select_among_synthetic_children(
+        children: [(i32, Distribution); 5],
+    ) -> (Distribution, Counters) {
+        const DEPTH: u8 = 2;
+        let core = unused_core();
+        let mut search = Search {
+            core: &core,
+            shanten_cache: FastMap::default(),
+            distribution_cache: FastMap::default(),
+            counters: Counters::default(),
+        };
+        let mut draw_hand = [0u8; TILE_KIND_COUNT];
+        draw_hand[..5].fill(1);
+        let mut remaining = [0u8; TILE_KIND_COUNT];
+        remaining[30] = 3;
+        let denominator = falling_factorial(3, DEPTH).unwrap();
+        for (kind, (shanten, distribution)) in children.into_iter().enumerate() {
+            assert_eq!(distribution.iter().sum::<u64>(), denominator);
+            let mut child = draw_hand;
+            child[kind] -= 1;
+            search.shanten_cache.insert(child, shanten);
+            search.distribution_cache.insert(
+                StateKey {
+                    hand: child,
+                    remaining,
+                    depth: DEPTH,
+                },
+                distribution,
+            );
+        }
+        let selected = search
+            .best_discard_distribution(&draw_hand, &remaining, DEPTH, 3, denominator)
+            .unwrap();
+        (selected, search.counters)
+    }
+
+    fn distribution(values: &[u64]) -> Distribution {
+        let mut counts = [0u64; TERMINAL_SHANTEN_AXIS];
+        counts[..values.len()].copy_from_slice(values);
+        counts
+    }
+
+    #[test]
+    fn equal_mass_children_keep_the_first_canonical_distribution() {
+        // Same denominator 6 and mass 6 for kinds 0, 1, 2 and 4, with four
+        // different distributions; kind 3 is worse (mass 12).  All children
+        // have shanten 1, so canonical order is ascending hand counts:
+        // removing kind 0 gives the smallest counts, removing kind 4 the
+        // largest.  The first canonical child (kind 0) must be kept; a `<=`
+        // comparison would select the last tied child (kind 4) instead.
+        let (selected, counters) = select_among_synthetic_children([
+            (1, distribution(&[2, 2, 2])),
+            (1, distribution(&[0, 6, 0])),
+            (1, distribution(&[3, 0, 3])),
+            (1, distribution(&[0, 0, 6])),
+            (1, distribution(&[1, 4, 1])),
+        ]);
+        assert_eq!(selected, distribution(&[2, 2, 2]));
+        // Every child was read from the seeded cache: no lower-bound cut (all
+        // bounds are 0), no search and no table access.
+        assert_eq!(
+            counters,
+            Counters {
+                cache_hits: 5,
+                ..Counters::default()
+            }
+        );
+    }
+
+    #[test]
+    fn shanten_orders_children_before_hand_counts_on_equal_mass() {
+        // Removing kind 4 has the largest counts but the smallest shanten, so
+        // it is the first canonical child.  Kinds 1 and 2 tie with it on mass
+        // 6 with other distributions; kind 0 (mass 9) comes first by counts but
+        // is not a minimum.  The shanten-first child must be kept.
+        let (selected, _) = select_among_synthetic_children([
+            (2, distribution(&[0, 3, 3])),
+            (2, distribution(&[0, 6, 0])),
+            (2, distribution(&[2, 2, 2])),
+            (2, distribution(&[0, 0, 6])),
+            (1, distribution(&[3, 0, 3])),
+        ]);
+        assert_eq!(selected, distribution(&[3, 0, 3]));
+    }
+
+    #[test]
+    fn a_later_strictly_smaller_mass_replaces_the_best() {
+        // The tie rule must not freeze the first child: a strictly smaller
+        // mass later in canonical order wins, and later ties keep it.
+        let (selected, _) = select_among_synthetic_children([
+            (1, distribution(&[0, 6, 0])),
+            (1, distribution(&[1, 4, 1])),
+            (1, distribution(&[4, 0, 2])),
+            (1, distribution(&[2, 4, 0])),
+            (1, distribution(&[3, 2, 1])),
+        ]);
+        assert_eq!(selected, distribution(&[4, 0, 2]));
     }
 
     #[test]

@@ -3,6 +3,12 @@
 牌効率計算の律速を計測し、1つの計算境界だけをopt-in Rust backendとして試作・評価した記録である。
 アルゴリズムと麻雀上の意味は変更しない。default backendはPythonのままである。
 
+> **2026-10-24 追記（Issue #346）**：Python計算実装（`_lookup_shanten`、`_python_shanten`、
+> Python版の一括打牌評価、R5のPython evaluator）を削除し、native拡張を必須にした。
+> `LISJONG_SHANTEN_BACKEND`は未設定または`rust`だけを受け付ける。本書のPython backend・
+> default・比較手順の記述は当時の記録であり、現行の手順は
+> [配布記録](rust-backend-distribution.md)と[段階的廃止](python-compute-backend-retirement.md)を参照する。
+
 ## 1. 計測条件（固定）
 
 | 項目 | 値 |
@@ -296,7 +302,7 @@ Remove-Item Env:PYTHONPATH
 # 2. native build（opt-in、lisjong checkout）
 python -m pip install ./native
 
-# 固定decision再生（backendごとに別process）
+# 固定decision再生（当時はbackendごとに別processで実行した）
 $env:LISJONG_SHANTEN_BACKEND = "python"   # または "rust"
 python tools/benchmark_tile_efficiency.py policy `
   --decisions decisions-placement-aware-speed-call.pickle `
@@ -308,6 +314,9 @@ python tools/benchmark_tile_efficiency.py kernel `
   --decisions decisions-placement-aware-speed-call.pickle `
   --policy lisjong.policies:PlacementAwareSpeedCallPolicy --repeat 3 --limit-decisions 80
 ```
+
+Issue #346以降、`python` backendと`kernel` modeは存在しない。上記の再現には当時のrevisionを使う。
+現行revisionでは環境変数を設定せずに`policy` modeだけを実行する。
 
 元artifactの採取に使ったscript（`capture_decisions.py`）は、artifact rootの`scripts/`にそのまま保存した。
 Arena PR #399の`scripts/capture_policy_decisions.py`は、同じwrapper方式にmanifestとdigestを加えたものである。

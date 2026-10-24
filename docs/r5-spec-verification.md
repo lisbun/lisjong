@@ -73,3 +73,27 @@ caller fixtureは`111m222p333s11234z`、合法候補を`1z/3z/4z`切りに限定
 追加native testは既存`_require_native`を使用する。通常のnative未導入環境ではskip、
 `LISJONG_REQUIRE_NATIVE=1`では不在をfailにする。既存AL2023 native full suiteの
 `discover -s tests`でこのmoduleも実行される。CIを変更してskipを増やすことはしない。
+
+## #346: Python evaluator削除と代替coverage
+
+[#346](https://github.com/lisbun/lisjong/issues/346)で`_TerminalShantenProgressionEvaluator`を削除し、
+生成関数`_new_progression_evaluator()`はnative evaluatorだけを返す。削除・置換したtestと代替は次のとおり。
+
+| 削除・置換したtest | 代替 |
+| --- | --- |
+| `test_native_progression_backend.py`: oracleとのdistribution・root shanten・counter一致（horizon 1〜3、root順・重複、3 caller比較） | 分布値は本書の手計算fixture。unpruned referenceとの一致（horizon 1〜3、開いた手・閉じた手）。root順・重複はbatch評価と単独評価の一致で固定。3 callerは実native値で各activation stage・candidate順・分母を確認 |
+| 同 `test_mass_equal_children_keep_the_same_diagnostic_distribution` | Rust unit test（`native/src/progression.rs`）。合成した同分母・同mass・異分布を`Search`のcacheへ入れ、本番`best_discard_distribution`がcanonical順の先頭を保持することを確認する。比較を`<`から`<=`にすると3件とも失敗する（確認済み）。下記のとおり旧testはこの同点を実際には通っていなかった |
+| `test_terminal_shanten_progression_mechanism_riichi_defense_policy.py`: Python evaluatorのdepth-1 closed form | 閉形式が依存するnumeric性質`min_y shanten(Y - y) == max(0, shanten(Y))`を公開`calculate_shanten()`の全打牌列挙で直接確認 |
+| 同 reference一致・recurrence・mass bounds・tenpai・非復元・赤5・副露文脈 | 同じ内容を本番factory（native）で確認 |
+| 同 `_RecordingEvaluator`による遷移観測（仮想打牌を戻さない、全drawable牌を展開する） | 結果値で固定。2巡目の母数（3×2=6列）と、1m5m9s3z・残牌2m/5m/9s/7p各4枚のhorizon 1分布(0,12,4)を手計算 |
+| 同 depth 0のbase case | native APIのhorizonは1〜3。0の拒否はnative境界testが固定 |
+| 同 axis範囲外のfail closed | Rust unit test`terminal_shanten_outside_the_axis_is_an_error` |
+| `test_mechanism_riichi_defense_offensive_efficiency_diagnostic.py`: #169評価との一致 | 診断とは別の本番evaluatorで`_evaluate_progression_candidates`を直接呼んで一致を確認（一括APIは同じ） |
+
+**同mass・異分布の実在局面について**：#346の作業中に、字牌だけの手と混合牌の小さな範囲での全数探索、
+および全34種からの無作為抽出で、min nodeの最小mass childが異なる分布を持つ局面を探したが見つからなかった。
+旧`test_mass_equal_children_keep_the_same_diagnostic_distribution`の入力も、どのmin nodeでもこの同点を
+生じていなかった。horizon 1では1回のツモで向聴が高々1しか動かないため、massが分布を決め、この同点は起きない。
+horizon 2〜3で実在局面が到達可能かは**未確認**である（探索で見つからないことは到達不能の証明ではない）。
+そのため同点処理は実在局面の探索に依存せず、上記Rust unit testで直接固定する。
+unpruned referenceとの一致は同じtie-breakを持つため、同点処理の検証を代替しない。

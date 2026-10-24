@@ -65,12 +65,12 @@ AIの判断と分析が、仮定の完成形（推定した相手の手、反実
 
 ## native未導入時
 
-計算coreはopt-in native拡張`_lisjong_native`にだけあり、Python版の計算器は持たない。
+計算coreはnative拡張`_lisjong_native`にだけあり、Python版の計算器は持たない。
 native拡張が未導入でも既存coreと`lisjong.hand_evaluation.scoring`のimport、入力型の構築は成功し、
 `evaluate_win()`を呼び出したときだけ`ScoringBackendUnavailableError`になる。
 `SCORING_API_VERSION`が一致しない古いwheelも同じエラーでfail closedする。
-shanten backendの選択（`LISJONG_SHANTEN_BACKEND`）と`API_VERSION`には影響しない。
-既存consumerへのnative必須化はしていない。
+shanten backendの`LISJONG_SHANTEN_BACKEND`と`API_VERSION`には影響しない。
+Issue #346で向聴計算はnative必須になったが、scoringの遅延import（importは成功し、評価時だけ失敗する）は変えていない。
 
 ## 検証
 

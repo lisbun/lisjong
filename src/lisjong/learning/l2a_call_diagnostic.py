@@ -356,15 +356,13 @@ def runtime_record():
     from lisjong.learning.model import require_torch
 
     torch = require_torch()
-    native = None
-    if BACKEND_NAME == "rust":
-        import _lisjong_native
+    import _lisjong_native
 
-        native = {
-            "api_version": _lisjong_native.API_VERSION,
-            "source_revision": _lisjong_native.SOURCE_REVISION,
-            "file": file_digest(Path(_lisjong_native.__file__)),
-        }
+    native = {
+        "api_version": _lisjong_native.API_VERSION,
+        "source_revision": _lisjong_native.SOURCE_REVISION,
+        "file": file_digest(Path(_lisjong_native.__file__)),
+    }
     root = Path(__file__).resolve().parents[3]
     revision = subprocess.run(
         ["git", "rev-parse", "HEAD"],

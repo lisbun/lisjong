@@ -1,22 +1,25 @@
-"""Issue #232: R5 progression探索のnative化とPython oracleの同等性を固定する。
+"""Issue #232 / #346: R5 progression探索（native）の契約を固定する。
 
-- factory選択testはnative拡張の有無に依存せず常に実行する。
-- native同値性testは`_lisjong_native`がimportできる環境だけで実行し、
-  `LISJONG_REQUIRE_NATIVE=1`（native CI job）ではskipせずfailさせる。
-- Python oracle（`_TerminalShantenProgressionEvaluator`）は独立した型として
-  残っており、ここでは明示的に生成して比較する。本番factoryの選択は変えない。
+Issue #346でPython evaluator（`_TerminalShantenProgressionEvaluator`）と、それとの
+差分test（distribution・root shanten・counterの一致）を削除した。代替は次のとおり。
+
+- 分布の値: 手計算の`test_progression_spec_fixtures.py`と、unpruned referenceとの
+  一致（本module、`test_terminal_shanten_progression_mechanism_riichi_defense_policy.py`）
+- 同mass・異分布childのcanonical先頭採用: 合成分布を本番選択処理へ渡すRust unit
+  test（`native/src/progression.rs`）。referenceも同じtie-breakを持つため代替しない
+- factory、入力境界、cache lifetime、counter、release異常系、GIL、3 callerの配線:
+  本module
 """
 
 import threading
 import time
 import unittest
 from dataclasses import replace
-from unittest.mock import patch
 
 import lisjong.policies.mechanism_riichi_defense_offensive_efficiency_diagnostic as diagnostic
 import lisjong.policies.targeted_honor_release_terminal_progression as targeted
 import lisjong.policies.terminal_shanten_progression_mechanism_riichi_defense as progression
-from lisjong.hand_evaluation import _shanten_backend
+from lisjong.hand_evaluation import _shanten_backend, calculate_shanten
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
     _evaluate_completion_masses,
@@ -43,6 +46,7 @@ from tests.test_terminal_shanten_progression_mechanism_riichi_defense_policy imp
     _distinct_discard_actions,
     _reference_distribution,
     _restricted_input,
+    _tiles_for_oracle,
 )
 from tests.test_terminal_shanten_progression_mechanism_riichi_defense_policy import (
     _hand as _progression_hand,
@@ -69,31 +73,25 @@ def _counters(evaluator) -> tuple[int, ...]:
 
 
 class FactorySelectionTest(unittest.TestCase):
-    """本番factoryはprocess単位のbackend選択に従う（native拡張なしでも実行）。"""
+    """本番factoryは呼び出しごとに新しいnative evaluatorを返す（Issue #346）。"""
 
-    def test_factory_follows_the_selected_backend(self) -> None:
+    def test_factory_returns_the_native_evaluator(self) -> None:
         evaluator = progression._new_progression_evaluator()
-        if _shanten_backend.BACKEND_NAME == _shanten_backend.RUST_BACKEND:
-            self.assertIsInstance(
-                evaluator, progression._NativeTerminalShantenProgressionEvaluator
-            )
-        else:
-            self.assertIs(
-                type(evaluator), progression._TerminalShantenProgressionEvaluator
-            )
+        self.assertIs(
+            type(evaluator), progression._NativeTerminalShantenProgressionEvaluator
+        )
+        self.assertEqual(
+            evaluator._evaluate, _shanten_backend.native_evaluate_progression
+        )
+        self.assertFalse(
+            hasattr(progression, "_TerminalShantenProgressionEvaluator"),
+            "the Python R5 evaluator was removed in Issue #346",
+        )
 
     def test_factory_returns_a_fresh_evaluator_every_call(self) -> None:
         first = progression._new_progression_evaluator()
         second = progression._new_progression_evaluator()
         self.assertIsNot(first, second)
-
-    def test_python_oracle_and_native_evaluator_are_independent_types(self) -> None:
-        self.assertFalse(
-            issubclass(
-                progression._NativeTerminalShantenProgressionEvaluator,
-                progression._TerminalShantenProgressionEvaluator,
-            )
-        )
 
     def test_all_three_production_callers_use_the_shared_factory(self) -> None:
         self.assertIs(
@@ -105,34 +103,12 @@ class FactorySelectionTest(unittest.TestCase):
             progression._new_progression_evaluator,
         )
 
-    def test_python_selection_never_exposes_a_native_entry(self) -> None:
-        if _shanten_backend.BACKEND_NAME == _shanten_backend.PYTHON_BACKEND:
-            self.assertIsNone(_shanten_backend.native_evaluate_progression)
-        else:
-            self.assertIsNotNone(_shanten_backend.native_evaluate_progression)
 
-
-class NativeProgressionEquivalenceTest(unittest.TestCase):
-    """nativeがPython oracleとdistribution・root shanten・counterまで一致する。"""
+class NativeProgressionContractTest(unittest.TestCase):
+    """native探索の値・root順序・cache lifetime・counterの契約。"""
 
     def setUp(self) -> None:
         _require_native(self)
-
-    def _assert_same_as_oracle(self, roots, remaining, horizon) -> None:
-        oracle = progression._TerminalShantenProgressionEvaluator()
-        native = _native_evaluator()
-        expected = oracle.evaluate_roots(roots, remaining, horizon)
-        actual = native.evaluate_roots(roots, remaining, horizon)
-        self.assertEqual(actual, expected)
-        # 子の評価順・cache共有範囲が同じなので、counterも完全に一致する。
-        self.assertEqual(_counters(native), _counters(oracle))
-
-    def test_horizons_one_to_three_match_the_oracle(self) -> None:
-        remaining = _counts(m2=3, m6=2, s9=2, z3=1)
-        roots = (_THREE_MELD_HAND, _TWO_MELD_HAND, _FOUR_MELD_HAND, _CLOSED_FAR_HAND)
-        for horizon in (1, 2, 3):
-            with self.subTest(horizon=horizon):
-                self._assert_same_as_oracle(roots, remaining, horizon)
 
     def test_matches_the_unpruned_reference_for_small_remaining(self) -> None:
         for horizon, remaining, hands in (
@@ -148,10 +124,7 @@ class NativeProgressionEquivalenceTest(unittest.TestCase):
                         distribution, _reference_distribution(hand, remaining, horizon)
                     )
                     self.assertEqual(
-                        root_shanten,
-                        progression._TerminalShantenProgressionEvaluator().shanten(
-                            hand
-                        ),
+                        root_shanten, calculate_shanten(_tiles_for_oracle(hand))
                     )
                     self.assertEqual(
                         sum(distribution),
@@ -161,17 +134,17 @@ class NativeProgressionEquivalenceTest(unittest.TestCase):
     def test_input_root_order_and_duplicates_are_preserved(self) -> None:
         remaining = _counts(m2=3, m6=2, s9=2, z3=1)
         roots = (_TWO_MELD_HAND, _THREE_MELD_HAND, _TWO_MELD_HAND)
-        self._assert_same_as_oracle(roots, remaining, 2)
+        separate = tuple(
+            _native_evaluator().evaluate_roots((root,), remaining, 2)[0]
+            for root in roots
+        )
+        self.assertEqual(
+            _native_evaluator().evaluate_roots(roots, remaining, 2), separate
+        )
         reversed_roots = tuple(reversed(roots))
         forward = _native_evaluator().evaluate_roots(roots, remaining, 2)
         backward = _native_evaluator().evaluate_roots(reversed_roots, remaining, 2)
         self.assertEqual(forward, tuple(reversed(backward)))
-
-    def test_mass_equal_children_keep_the_same_diagnostic_distribution(self) -> None:
-        # canonical順の先頭採用が変わると、massが同じでもdistributionが変わる。
-        remaining = _counts(m2=3, m6=2, s9=2, z3=1, p5=2)
-        roots = (_THREE_MELD_HAND, _TWO_MELD_HAND)
-        self._assert_same_as_oracle(roots, remaining, 3)
 
     def test_counters_are_measured_not_zero_filled(self) -> None:
         native = _native_evaluator()
@@ -385,8 +358,13 @@ class NativeProgressionGilTest(unittest.TestCase):
         )
 
 
-class ThreeCallersEquivalenceTest(unittest.TestCase):
-    """R5の3呼出し元すべてで、Python oracleとnativeの結果が一致する。"""
+class ThreeCallersNativeTest(unittest.TestCase):
+    """R5の3呼出し元が実native値で各経路へ到達する。
+
+    Python oracleとの一致比較（Issue #232）はIssue #346で削除した。選択規則は
+    各Policyのtestが固定massで、分布値は仕様fixtureが固定する。ここでは実native
+    値で期待したactivation stage・candidate順が得られることを固定する。
+    """
 
     # R5発動が確認済みのclosed 14枚手（手牌、drawable牌種、期待activation stage）。
     _TARGETED_CASES = (
@@ -409,17 +387,6 @@ class ThreeCallersEquivalenceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         _require_native(self)
-        table = _native_table()
-        self._oracle_factory = progression._TerminalShantenProgressionEvaluator
-        self._native_factory = lambda: (
-            progression._NativeTerminalShantenProgressionEvaluator(
-                table.evaluate_progression
-            )
-        )
-
-    def _run_with(self, module, factory, call):
-        with patch.object(module, "_new_progression_evaluator", factory):
-            return call()
 
     def _drawn_input(self, notation: str, drawable):
         tiles = tuple(_progression_hand(notation))
@@ -430,7 +397,7 @@ class ThreeCallersEquivalenceTest(unittest.TestCase):
         )
         return policy_input, _distinct_discard_actions(tiles)
 
-    def test_progression_policy_matches_for_all_zero_decisions(self) -> None:
+    def test_progression_policy_activates_for_all_zero_decisions(self) -> None:
         concealed = _progression_hand("147m258p369s13577z")
         actions = _distinct_discard_actions(concealed)
         for drawable in (
@@ -438,64 +405,42 @@ class ThreeCallersEquivalenceTest(unittest.TestCase):
             tuple(f"{rank}m" for rank in range(1, 10)),
         ):
             policy_input = _restricted_input(concealed, drawable)
-            expected = self._run_with(
-                progression,
-                self._oracle_factory,
-                lambda: progression._evaluate_and_choose_discard(policy_input, actions),
+            selected, analysis = progression._evaluate_and_choose_discard(
+                policy_input, actions
             )
-            actual = self._run_with(
-                progression,
-                self._native_factory,
-                lambda: progression._evaluate_and_choose_discard(policy_input, actions),
+            self.assertTrue(analysis.progression_activated)
+            self.assertIn(selected, actions)
+            self.assertEqual(
+                tuple(c.action for c in analysis.candidate_evaluations), actions
             )
-            self.assertTrue(expected[1].progression_activated)
-            self.assertEqual(actual, expected)
 
-    def test_targeted_gate_matches_action_stage_and_progression_values(self) -> None:
+    def test_targeted_gate_reaches_each_activation_stage(self) -> None:
         seen_stages = set()
         for notation, drawable, stage in self._TARGETED_CASES:
             with self.subTest(stage=stage):
                 policy_input, actions = self._drawn_input(notation, drawable)
-                expected = self._run_with(
-                    targeted,
-                    self._oracle_factory,
-                    lambda: targeted._evaluate_and_choose_discard(
-                        policy_input, actions
-                    ),
+                _, analysis = targeted._evaluate_and_choose_discard(
+                    policy_input, actions
                 )
-                actual = self._run_with(
-                    targeted,
-                    self._native_factory,
-                    lambda: targeted._evaluate_and_choose_discard(
-                        policy_input, actions
-                    ),
-                )
-                self.assertEqual(expected[1].activation_stage.name, stage)
-                seen_stages.add(expected[1].activation_stage.name)
-                self.assertEqual(actual, expected)
+                self.assertEqual(analysis.activation_stage.name, stage)
+                seen_stages.add(analysis.activation_stage.name)
         self.assertEqual(len(seen_stages), len(self._TARGETED_CASES))
 
-    def test_diagnostic_matches_both_candidate_sets(self) -> None:
+    def test_diagnostic_reports_both_candidate_sets(self) -> None:
         for fixture in (
             _all_zero_progression_fixture,
             _all_zero_progression_with_excluded_better_fixture,
         ):
             policy_input, actions = fixture()
-
-            def analyze():
-                return diagnostic.analyze_mechanism_riichi_defense_offensive_efficiency(
-                    policy_input, actions, include_terminal_progression=True
-                )
-
-            expected = self._run_with(diagnostic, self._oracle_factory, analyze)
-            actual = self._run_with(diagnostic, self._native_factory, analyze)
-            self.assertIsNotNone(expected.full_legal_terminal_progression_summary)
-            self.assertIsNotNone(
-                expected.baseline_eligible_terminal_progression_summary
+            analysis = diagnostic.analyze_mechanism_riichi_defense_offensive_efficiency(
+                policy_input, actions, include_terminal_progression=True
             )
-            self.assertEqual(actual, expected)
+            self.assertIsNotNone(analysis.full_legal_terminal_progression_summary)
+            self.assertIsNotNone(
+                analysis.baseline_eligible_terminal_progression_summary
+            )
 
-    def test_candidate_helper_matches_with_both_evaluators(self) -> None:
+    def test_candidate_helper_keeps_the_completion_order(self) -> None:
         concealed = _progression_hand("147m258p369s13577z")
         actions = _distinct_discard_actions(concealed)
         policy_input = _restricted_input(
@@ -505,29 +450,24 @@ class ThreeCallersEquivalenceTest(unittest.TestCase):
         completions = _evaluate_completion_masses(
             policy_input, actions, remaining, DEFAULT_HORIZON, _FiniteHorizonEvaluator()
         )
-        expected = progression._evaluate_progression_candidates(
-            policy_input,
-            completions,
-            remaining,
-            DEFAULT_HORIZON,
-            self._oracle_factory(),
-        )
         actual = progression._evaluate_progression_candidates(
             policy_input,
             completions,
             remaining,
             DEFAULT_HORIZON,
-            self._native_factory(),
+            progression._new_progression_evaluator(),
         )
-        self.assertEqual(actual, expected)
         self.assertEqual(
             tuple(candidate.action for candidate in actual),
             tuple(evaluation.action for evaluation in completions),
         )
+        denominator = _falling_factorial(sum(remaining), DEFAULT_HORIZON)
+        for candidate in actual:
+            self.assertEqual(sum(candidate.terminal_shanten_counts), denominator)
 
 
 class RustSelectedProductionWiringTest(unittest.TestCase):
-    """rust指定のprocessでは3呼出し元がnative R5を実行する（subprocess）。"""
+    """環境変数未設定のprocessでも3呼出し元がnative R5を実行する（subprocess）。"""
 
     def setUp(self) -> None:
         _require_native(self)
@@ -541,14 +481,14 @@ class RustSelectedProductionWiringTest(unittest.TestCase):
             "import lisjong.policies.targeted_honor_release_terminal_progression as targeted\n"
             "import lisjong.policies.mechanism_riichi_defense_offensive_efficiency_diagnostic as diagnostic\n"
             "from lisjong.policy_contract.own_hand_state import OwnHandState\n"
-            "from tests.test_native_progression_backend import ThreeCallersEquivalenceTest\n"
+            "from tests.test_native_progression_backend import ThreeCallersNativeTest\n"
             "from tests.test_mechanism_riichi_defense_offensive_efficiency_diagnostic import _all_zero_progression_fixture\n"
             "from tests.test_terminal_shanten_progression_mechanism_riichi_defense_policy import _hand, _distinct_discard_actions, _restricted_input\n"
             "assert _shanten_backend.BACKEND_NAME == 'rust'\n"
             "def calls():\n"
             "    return _lisjong_native.progression_evaluation_call_count()\n"
             f"{body}",
-            backend="rust",
+            backend=None,
         )
 
     def test_progression_policy_runs_the_native_search(self) -> None:
@@ -566,7 +506,7 @@ class RustSelectedProductionWiringTest(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "ok")
 
     def test_targeted_gate_runs_the_native_search(self) -> None:
-        notation, drawable, _ = ThreeCallersEquivalenceTest._TARGETED_CASES[2]
+        notation, drawable, _ = ThreeCallersNativeTest._TARGETED_CASES[2]
         result = self._run(
             f"tiles = tuple(_hand({notation!r}))\n"
             f"policy_input = _restricted_input(tiles, {drawable!r})\n"

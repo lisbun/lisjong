@@ -3,6 +3,13 @@
 Championが使うR5（expected terminal shanten progression, Issue #169 / #174）の探索本体を
 opt-in Rust backendへ移した記録である。評価値・選択actionは変えない。default backendはPythonのままである。
 
+> **2026-10-24 追記（Issue #346）**：Python計算実装（`_lookup_shanten`、`_python_shanten`、
+> Python版の一括打牌評価、R5のPython evaluator）を削除し、native拡張を必須にした。
+> `LISJONG_SHANTEN_BACKEND`は未設定または`rust`だけを受け付ける。R5はnative evaluatorだけになり、同mass childのcanonical先頭採用は
+> 合成分布を本番選択処理へ渡すRust unit test、分布値は手計算fixture（[R5仕様検証](r5-spec-verification.md)）で固定する。
+> 本書のPython oracle・default・比較手順の記述は当時の記録であり、現行の手順は
+> [配布記録](rust-backend-distribution.md)と[段階的廃止](python-compute-backend-retirement.md)を参照する。
+
 ## 1. 適用範囲と有効化
 
 `LISJONG_SHANTEN_BACKEND=rust`は名前が向聴専用に見えるが、実際の適用範囲は次の3つである

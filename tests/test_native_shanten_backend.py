@@ -1,8 +1,12 @@
-"""Issue #213: opt-in native shanten backendの選択・同値性・fail closedを固定する。
+"""Issue #213 / #346: native shanten backendの必須化・境界・fail closedを固定する。
 
-backend選択testはnative拡張の有無に依存せず常に実行する。nativeの同値性testは
-`_lisjong_native`がimportできる環境だけで実行し、`LISJONG_REQUIRE_NATIVE=1`
-（native CI job）ではskipせずfailさせる。
+Issue #346でPython計算実装を削除し、native拡張が必須になった。backend選択testは
+subprocessでnative拡張を隠す・偽装するため、実物の有無に依存せず実行する。
+numeric値の正本は`test_shanten_spec_fixtures.py`（仕様由来fixture）と
+`reference_tests/`（外部実装）であり、本moduleはnative境界の契約を扱う。
+
+このmodule自体が`shanten`をimportするため、native拡張がなければimport時に
+失敗する（skipにならない）。`_require_native`は他moduleとの互換のために残す。
 """
 
 import os
@@ -13,12 +17,8 @@ import sys
 import threading
 import unittest
 
-import lisjong.hand_evaluation.shanten as shanten_module
 from lisjong.hand_evaluation import (
-    _lookup_shanten,
-    _python_shanten,
     _shanten_backend,
-    _shanten_common,
     _shanten_table,
     calculate_shanten,
 )
@@ -38,7 +38,6 @@ _TABLE_PATH = (
     / "hand_evaluation"
     / _shanten_table.TABLE_RESOURCE
 )
-_HAND_SIZES = (1, 2, 4, 5, 7, 8, 10, 11, 13, 14)
 
 
 def _fixed_meld_count(concealed_tile_count: int) -> int:
@@ -79,62 +78,117 @@ def _require_native(test: unittest.TestCase) -> None:
     test.skipTest("opt-in native extension _lisjong_native is not installed")
 
 
+_ROUTING_PROGRAM = """
+import sys
+import _lisjong_native
+import lisjong.hand_evaluation.shanten as shanten
+from lisjong.hand_evaluation import _shanten_backend
+
+assert _shanten_backend.BACKEND_NAME == "rust"
+table = _shanten_backend._NATIVE_TABLE
+assert type(table) is _lisjong_native.StandardShantenTable
+assert shanten._shanten_from_valid_counts == table.shanten_from_valid_counts
+assert shanten._evaluate_discards == table.evaluate_discards
+assert _shanten_backend.calculate_standard_shanten == table.standard_shanten
+assert _shanten_backend.native_evaluate_progression == table.evaluate_progression
+for name in ("_lookup_shanten", "_python_shanten"):
+    assert "lisjong.hand_evaluation." + name not in sys.modules, name
+print("ok")
+"""
+
+
+_HIDDEN_NATIVE = "import sys\nsys.modules['_lisjong_native'] = None\n"
+
+
 class BackendSelectionTest(unittest.TestCase):
-    """native拡張がなくても成立するbackend選択contract。"""
+    """Issue #346: 未設定 / rustはnative必須、pythonと未知値は拒否する。"""
 
-    def test_default_backend_is_the_python_lookup_backend(self) -> None:
-        result = _run_python(
-            "from lisjong.hand_evaluation import _lookup_shanten, _shanten_backend\n"
-            "assert _shanten_backend.BACKEND_NAME == 'python'\n"
-            "assert (_shanten_backend.calculate_standard_shanten\n"
-            "        is _lookup_shanten.calculate_standard_shanten)\n"
-            "import sys\n"
-            "assert '_lisjong_native' not in sys.modules\n",
-            backend=None,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def _assert_fails(self, result, *fragments: str) -> None:
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ShantenBackendError", result.stderr)
+        for fragment in fragments:
+            self.assertIn(fragment, result.stderr)
 
-    def test_explicit_python_backend_does_not_import_native(self) -> None:
-        result = _run_python(
-            "import sys\n"
-            "from lisjong.hand_evaluation import calculate_shanten, _shanten_backend\n"
-            "assert _shanten_backend.BACKEND_NAME == 'python'\n"
-            "assert '_lisjong_native' not in sys.modules\n",
-            backend="python",
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_default_and_explicit_rust_route_every_entry_to_native(self) -> None:
+        for backend in (None, "rust"):
+            with self.subTest(backend=backend):
+                result = _run_python(_ROUTING_PROGRAM, backend=backend)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_retired_python_backend_is_rejected_with_migration_guidance(
+        self,
+    ) -> None:
+        # 旧値を黙ってRustへ読み替えない。native拡張の有無によらず拒否する。
+        for prefix in ("", _HIDDEN_NATIVE):
+            with self.subTest(native_hidden=bool(prefix)):
+                result = _run_python(
+                    prefix + "import lisjong.hand_evaluation.shanten\n",
+                    backend="python",
+                )
+                self._assert_fails(result, "no longer supported", "Issue #346")
 
     def test_unknown_backend_name_fails_closed(self) -> None:
-        result = _run_python("import lisjong.hand_evaluation\n", backend="Rust")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ShantenBackendError", result.stderr)
+        for name in ("Rust", "", "native"):
+            with self.subTest(name=name):
+                result = _run_python(
+                    "import lisjong.hand_evaluation.shanten\n", backend=name
+                )
+                self._assert_fails(result, "must be unset or 'rust'")
 
-    def test_rust_backend_without_native_extension_does_not_fall_back(self) -> None:
-        # sys.modulesのNone entryはImportErrorを起こす。native拡張の有無に
-        # よらず「rust指定で利用不能ならimport時にfail closed」を固定する。
-        result = _run_python(
-            "import sys\n"
-            "sys.modules['_lisjong_native'] = None\n"
-            "import lisjong.hand_evaluation\n",
-            backend="rust",
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ShantenBackendError", result.stderr)
-        self.assertIn("refusing to fall back", result.stderr)
+    def test_missing_native_extension_fails_at_shanten_import(self) -> None:
+        # 失敗位置は`shanten`（と`_shanten_backend`）のimport時。Pythonへ
+        # fallbackする経路は存在しない。
+        for backend in (None, "rust"):
+            for statement in (
+                "import lisjong.hand_evaluation.shanten",
+                "from lisjong.hand_evaluation import calculate_shanten",
+                "import lisjong.policies",
+            ):
+                with self.subTest(backend=backend, statement=statement):
+                    result = _run_python(
+                        _HIDDEN_NATIVE + statement + "\n", backend=backend
+                    )
+                    self._assert_fails(
+                        result, "requires the native extension '_lisjong_native'"
+                    )
 
-    def test_core_package_does_not_require_native_extension(self) -> None:
+    def test_packages_without_shanten_import_without_native_extension(self) -> None:
+        # package root、scoring binding、artifact供給・共有helper・frontier・
+        # structural predicateはnative拡張なしでimportできる。
         result = _run_python(
-            "import sys\n"
-            "sys.modules['_lisjong_native'] = None\n"
-            "import lisjong, lisjong.policies\n"
-            "from lisjong.hand_evaluation import calculate_shanten\n",
+            _HIDDEN_NATIVE + "import lisjong, lisjong.hand_evaluation\n"
+            "from lisjong.hand_evaluation import (\n"
+            "    scoring, _shanten_common, _shanten_frontier, _shanten_table,\n"
+            "    _structural_predicates,\n"
+            ")\n"
+            "assert 'lisjong.hand_evaluation.shanten' not in sys.modules\n"
+            "assert 'lisjong.hand_evaluation._shanten_backend' not in sys.modules\n"
+            "print('ok')\n",
             backend=None,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "ok")
+
+    def test_corrupted_table_fails_closed_at_shanten_import(self) -> None:
+        # artifact破損はimport時のnative table構築で`ShantenTableError`になる。
+        result = _run_python(
+            "from lisjong.hand_evaluation import _shanten_table\n"
+            "payload = _shanten_table.read_table_payload()\n"
+            "_shanten_table.read_table_payload = lambda: payload[:-2]\n"
+            "import lisjong.hand_evaluation.shanten\n",
+            backend=None,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("ShantenTableError", result.stderr)
 
 
-class NativeStandardShantenEquivalenceTest(unittest.TestCase):
-    """native frontier combineがPython lookupと独立DFS oracleに一致する。"""
+class NativeStandardShantenBoundaryTest(unittest.TestCase):
+    """native通常形入口の入力境界・決定性・並行呼出し・counter。
+
+    Python lookup / DFS oracleとの差分test（Issue #213）はIssue #346で削除した。
+    値は`test_shanten_spec_fixtures.py`と`reference_tests/`が固定する。
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -146,65 +200,6 @@ class NativeStandardShantenEquivalenceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         _require_native(self)
-
-    def _assert_all_backends_match(self, counts, fixed_meld_count: int) -> None:
-        native = self.table.standard_shanten(counts, fixed_meld_count)
-        self.assertEqual(
-            native,
-            _lookup_shanten.calculate_standard_shanten(counts, fixed_meld_count),
-            msg=f"counts={counts} fixed_meld_count={fixed_meld_count}",
-        )
-        # 独立oracle（Issue #115以前の再帰探索）とも比較し、Python lookupと
-        # nativeが同じ誤りを共有するだけの検証にしない。
-        self.assertEqual(
-            native,
-            _python_shanten.calculate_standard_shanten(counts, fixed_meld_count),
-            msg=f"counts={counts} fixed_meld_count={fixed_meld_count}",
-        )
-
-    def test_seeded_valid_hands_match_lookup_and_oracle(self) -> None:
-        generator = random.Random(213_2026)
-        for size in _HAND_SIZES:
-            for _ in range(60):
-                counts = _random_counts(generator, size)
-                with self.subTest(size=size, counts=counts):
-                    self._assert_all_backends_match(counts, _fixed_meld_count(size))
-
-    def test_edge_shapes_match_lookup_and_oracle(self) -> None:
-        shapes = {
-            "empty-heavy single": [0] * 33 + [1],
-            "four copies": [4, 4, 4] + [0] * 30 + [2],
-            "four copies with honors": [0] * 27 + [4, 4, 4, 1, 1, 0, 0],
-            "all terminals": [1, 0, 0, 0, 0, 0, 0, 0, 1] * 3 + [1] * 7,
-            "pure suit": [3, 1, 1, 1, 1, 1, 1, 1, 3] + [0] * 25,
-            "pairs": [2, 2, 2, 2, 2, 2, 2] + [0] * 27,
-        }
-        for label, counts in shapes.items():
-            size = sum(counts)
-            with self.subTest(label=label):
-                self._assert_all_backends_match(counts, _fixed_meld_count(size))
-
-    def test_every_fixed_meld_count_matches_the_python_lookup(self) -> None:
-        # precondition上の枚数とfixed_meld_countが食い違う組でも、count 0..4 /
-        # fixed 0..4の範囲ならbackend間で同じ値を返す。
-        generator = random.Random(2130)
-        for _ in range(300):
-            counts = _random_counts(generator, generator.randrange(0, 15))
-            for fixed_meld_count in range(5):
-                try:
-                    expected = _lookup_shanten.calculate_standard_shanten(
-                        counts, fixed_meld_count
-                    )
-                except _shanten_table.ShantenTableError as error:
-                    with self.assertRaises(_shanten_table.ShantenTableError) as raised:
-                        self.table.standard_shanten(counts, fixed_meld_count)
-                    self.assertEqual(str(raised.exception), str(error))
-                    continue
-                with self.subTest(counts=counts, fixed=fixed_meld_count):
-                    self.assertEqual(
-                        self.table.standard_shanten(counts, fixed_meld_count),
-                        expected,
-                    )
 
     def test_input_order_and_container_type_do_not_change_results(self) -> None:
         counts = [1, 1, 1, 0, 2, 0, 1, 1, 1, 0, 3, 0, 0, 0, 0, 0, 1, 1] + [0] * 16
@@ -266,21 +261,8 @@ class NativeStandardShantenEquivalenceTest(unittest.TestCase):
         self.assertEqual(_lisjong_native.standard_shanten_call_count(), before + 1)
 
 
-def _oracle_numeric_shanten(counts) -> int:
-    """独立oracle: 再帰探索の通常形と、閉じた手の七対子・国士の最小値。"""
-    size = sum(counts)
-    value = _python_shanten.calculate_standard_shanten(counts, _fixed_meld_count(size))
-    if size in (13, 14):
-        value = min(
-            value,
-            _shanten_common.calculate_seven_pairs_shanten(counts),
-            _shanten_common.calculate_thirteen_orphans_shanten(counts),
-        )
-    return value
-
-
-class NativeNumericCoreEquivalenceTest(unittest.TestCase):
-    """native numeric core（通常形 + 特殊形dispatch）がPython coreに一致する。"""
+class NativeNumericCoreBoundaryTest(unittest.TestCase):
+    """native numeric core（通常形 + 特殊形dispatch）の入力境界。"""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -292,49 +274,6 @@ class NativeNumericCoreEquivalenceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         _require_native(self)
-
-    def _assert_core_matches(self, counts) -> None:
-        size = sum(counts)
-        native = self.table.shanten_from_valid_counts(counts, size)
-        message = f"counts={counts}"
-        self.assertEqual(
-            native,
-            shanten_module._python_shanten_from_valid_counts(counts, size),
-            msg=message,
-        )
-        self.assertEqual(native, _oracle_numeric_shanten(counts), msg=message)
-
-    def test_seeded_valid_hands_match_python_core_and_oracle(self) -> None:
-        generator = random.Random(213_0013)
-        for size in _HAND_SIZES:
-            for _ in range(80):
-                counts = _random_counts(generator, size)
-                with self.subTest(size=size, counts=counts):
-                    self._assert_core_matches(counts)
-
-    def test_special_hand_shapes_match_python_core_and_oracle(self) -> None:
-        # 七対子・国士が通常形より小さくなる形、4枚持ちで七対子を数えない形、
-        # 么九牌が偏った形を含める。
-        generator = random.Random(213_0714)
-        terminals = (0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33)
-        for size in (13, 14):
-            for _ in range(150):
-                counts = [0] * 34
-                while sum(counts) < size:
-                    pool = terminals if generator.random() < 0.7 else range(34)
-                    index = generator.choice(tuple(pool))
-                    if counts[index] < 4:
-                        counts[index] += 1
-                with self.subTest(size=size, counts=counts):
-                    self._assert_core_matches(counts)
-            for _ in range(150):
-                counts = [0] * 34
-                while sum(counts) < size:
-                    index = generator.randrange(34)
-                    add = min(2, 4 - counts[index], size - sum(counts))
-                    counts[index] += add
-                with self.subTest(size=size, pair_heavy=counts):
-                    self._assert_core_matches(counts)
 
     def test_invalid_core_inputs_are_rejected(self) -> None:
         counts = [0] * 34
@@ -366,7 +305,7 @@ class _ArraySequence:
 
 
 class NativeArtifactIntegrityTest(unittest.TestCase):
-    """native側のartifact検証がPython backendと同じくfail closedする。"""
+    """native側のartifact検証がfail closedする。"""
 
     def setUp(self) -> None:
         _require_native(self)
@@ -516,7 +455,7 @@ class NativeBuildIdentityTest(unittest.TestCase):
 
 
 class NativeBackendSelectedProcessTest(unittest.TestCase):
-    """`LISJONG_SHANTEN_BACKEND=rust`のprocessで公開APIの結果が変わらない。"""
+    """環境変数未設定の別processでも公開APIがnativeを通り、同じ値を返す。"""
 
     def setUp(self) -> None:
         _require_native(self)
@@ -546,7 +485,7 @@ class NativeBackendSelectedProcessTest(unittest.TestCase):
             "values = [calculate_shanten(_hand(n)) for n in notations]\n"
             "assert _lisjong_native.standard_shanten_call_count() == len(values)\n"
             "print(values)\n",
-            backend="rust",
+            backend=None,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), repr(expected))

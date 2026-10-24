@@ -134,6 +134,11 @@ Monte Carlo、beam search、heuristic branch cut、approximate rolloutは使用�
 新しいpruningを追加する場合も、test-localなunpruned reference evaluatorとの一致で
 exactnessを固定する。
 
+recurrence・短絡・同点時の選択はnative拡張（`native/src/progression.rs`）が実装し、
+本moduleは`_NativeTerminalShantenProgressionEvaluator`経由で呼ぶ（Issue #232）。
+Python evaluatorはIssue #346で削除した。同mass childのcanonical先頭採用はRustの
+unit test（合成分布を本番選択処理へ渡す）で、分布の値は手計算の仕様fixtureで固定する。
+
 ## selection
 
 all-zero branch内では
@@ -156,9 +161,7 @@ parentと同じく`None`のままにする。
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from lisjong.belief.tile_inventory import TILE_TYPE_COUNT
 from lisjong.hand_evaluation import _shanten_backend
-from lisjong.hand_evaluation.shanten import calculate_shanten_from_canonical_counts
 from lisjong.policies.finite_horizon_completion import (
     DEFAULT_HORIZON,
     FiniteHorizonCandidateEvaluation,
@@ -197,22 +200,6 @@ class TerminalShantenProgressionPolicyError(Exception):
 def _distribution_mass(distribution: tuple[int, ...]) -> int:
     """terminal shanten distributionからexact integer massを導出する。"""
     return sum(index * count for index, count in enumerate(distribution))
-
-
-def _unit_distribution(shanten: int) -> tuple[int, ...]:
-    """1本のterminal sequenceだけを持つdistributionを返す。"""
-    _require_supported_terminal_shanten(shanten)
-    counts = [0] * TERMINAL_SHANTEN_AXIS
-    counts[shanten] = 1
-    return tuple(counts)
-
-
-def _require_supported_terminal_shanten(shanten: int) -> None:
-    """terminal structural shantenがdistribution axisへ収まることを確認する。"""
-    if not 0 <= shanten < TERMINAL_SHANTEN_AXIS:
-        raise TerminalShantenProgressionPolicyError(
-            f"terminal structural shanten is outside the supported axis: {shanten}"
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,238 +346,11 @@ class ProgressionDecisionAnalysis:
             )
 
 
-class _TerminalShantenProgressionEvaluator:
-    """1 discard decision内だけで共有するexact progression DPとcache。
-
-    1 decisionにつき1 instanceを生成し、全root discard candidateで同じ
-    transposition table・numeric shanten cacheを共有する。candidateごとに
-    cacheを作り直さない。Policy instance、module global、decision間、対局間へ
-    cacheを持ち越さない。
-
-    `visited_states` / `cache_hits` / `cache_misses` / `shanten_evaluations`は
-    development benchmark用のprivate instrumentationであり、Policyの公開APIでは
-    ない。
-    """
-
-    __slots__ = (
-        "_distribution_cache",
-        "_shanten_cache",
-        "cache_hits",
-        "cache_misses",
-        "shanten_evaluations",
-        "visited_states",
-    )
-
-    def __init__(self) -> None:
-        self._shanten_cache: dict[tuple[int, ...], int] = {}
-        self._distribution_cache: dict[
-            tuple[tuple[int, ...], tuple[int, ...], int], tuple[int, ...]
-        ] = {}
-        self.visited_states = 0
-        self.cache_hits = 0
-        self.cache_misses = 0
-        self.shanten_evaluations = 0
-
-    def evaluate_roots(
-        self,
-        root_hand_counts: Sequence[tuple[int, ...]],
-        remaining_counts: tuple[int, ...],
-        horizon: int,
-    ) -> tuple[tuple[int, tuple[int, ...]], ...]:
-        """root手牌ごとの`(root_post_discard_shanten, terminal distribution)`。
-
-        native evaluatorと同じ一括入口である。全rootで同じcacheを共有し、
-        rootごとにdistribution、続いてroot向聴数の順で評価する。
-        """
-        results: list[tuple[int, tuple[int, ...]]] = []
-        for hand_counts in root_hand_counts:
-            distribution = self.terminal_shanten_distribution(
-                hand_counts, remaining_counts, horizon
-            )
-            results.append((self.shanten(hand_counts), distribution))
-        return tuple(results)
-
-    def shanten(self, hand_counts: tuple[int, ...]) -> int:
-        """`hand_evaluation`のcount-native contractによるcache付き向聴数。
-
-        standard / 七対子 / 国士無双 / 確定面子の解釈は`calculate_shanten()`と
-        同じsemantic coreに従う。本moduleは新しい向聴semanticを実装せず、
-        private backendも直接呼ばない。
-        """
-        cached = self._shanten_cache.get(hand_counts)
-        if cached is not None:
-            return cached
-        self.shanten_evaluations += 1
-        value = calculate_shanten_from_canonical_counts(hand_counts)
-        self._shanten_cache[hand_counts] = value
-        return value
-
-    def best_post_discard_shanten(self, draw_hand_counts: tuple[int, ...]) -> int:
-        """draw hand `Y`から1枚切った後に到達できる最小structural shanten。
-
-        moduleのdocstringにある通り`min_y shanten(Y - y) == max(0, shanten(Y))`
-        なので、打牌候補を列挙せず1回のshanten評価で求まる。
-        """
-        return max(0, self.shanten(draw_hand_counts))
-
-    def terminal_shanten_distribution(
-        self,
-        hand_counts: tuple[int, ...],
-        remaining_counts: tuple[int, ...],
-        depth: int,
-    ) -> tuple[int, ...]:
-        """`T(H, R, depth)`をtransposition cache経由でexactに返す。
-
-        `remaining_total`は`R`から一意に決まる導出値なので、ここで1回だけ数えて
-        再帰へ渡す。DP stateのidentityは`(hand_counts, remaining_counts, depth)`
-        であり、`remaining_total`をstate identityへ加えていない。
-        """
-        return self._distribution(
-            hand_counts, remaining_counts, depth, sum(remaining_counts)
-        )
-
-    def _distribution(
-        self,
-        hand_counts: tuple[int, ...],
-        remaining_counts: tuple[int, ...],
-        depth: int,
-        remaining_total: int,
-    ) -> tuple[int, ...]:
-        """`terminal_shanten_distribution()`の本体。"""
-        if depth <= 0:
-            return _unit_distribution(self.shanten(hand_counts))
-        key = (hand_counts, remaining_counts, depth)
-        cached = self._distribution_cache.get(key)
-        if cached is not None:
-            self.cache_hits += 1
-            return cached
-        self.cache_misses += 1
-        distribution = self._search(
-            hand_counts, remaining_counts, depth, remaining_total
-        )
-        self._distribution_cache[key] = distribution
-        return distribution
-
-    def _search(
-        self,
-        hand_counts: tuple[int, ...],
-        remaining_counts: tuple[int, ...],
-        depth: int,
-        remaining_total: int,
-    ) -> tuple[int, ...]:
-        """exact recurrenceそのもの。近似・heuristic枝刈りを持たない。
-
-        `remaining_total`は常に`sum(remaining_counts)`と等しい導出値である。
-        future drawでは`R' = R - one(t)`なので、childへは`remaining_total - 1`
-        を渡す。
-
-        exact-safeな短絡はmodule docstringの3点だけである。
-        """
-        self.visited_states += 1
-        current_shanten = self.shanten(hand_counts)
-        counts = [0] * TERMINAL_SHANTEN_AXIS
-        if current_shanten == 0:
-            counts[0] = _falling_factorial(remaining_total, depth)
-            return tuple(counts)
-
-        # draw / discardごとに`list(...)`を作り直さず、1本のscratch bufferを
-        # mutate -> materialize -> restoreする。materializeした`tuple`だけが
-        # cache keyとして外へ出るので、mutable stateがkeyになることはない。
-        draw_scratch = list(hand_counts)
-        if depth == 1:
-            for drawn_index in range(TILE_TYPE_COUNT):
-                available = remaining_counts[drawn_index]
-                if available == 0:
-                    continue
-                draw_scratch[drawn_index] += 1
-                draw_hand_counts = tuple(draw_scratch)
-                draw_scratch[drawn_index] -= 1
-                terminal = self.best_post_discard_shanten(draw_hand_counts)
-                _require_supported_terminal_shanten(terminal)
-                counts[terminal] += available
-            return tuple(counts)
-
-        child_depth = depth - 1
-        child_remaining_total = remaining_total - 1
-        child_denominator = _falling_factorial(child_remaining_total, child_depth)
-        for drawn_index in range(TILE_TYPE_COUNT):
-            available = remaining_counts[drawn_index]
-            if available == 0:
-                continue
-
-            draw_scratch[drawn_index] += 1
-            draw_hand_counts = tuple(draw_scratch)
-            draw_scratch[drawn_index] -= 1
-
-            next_remaining = list(remaining_counts)
-            next_remaining[drawn_index] -= 1
-            best = self._best_discard_distribution(
-                draw_hand_counts,
-                tuple(next_remaining),
-                child_depth,
-                child_remaining_total,
-                child_denominator,
-            )
-            for index, value in enumerate(best):
-                if value:
-                    counts[index] += available * value
-        return tuple(counts)
-
-    def _best_discard_distribution(
-        self,
-        draw_hand_counts: tuple[int, ...],
-        remaining_counts: tuple[int, ...],
-        depth: int,
-        remaining_total: int,
-        denominator: int,
-    ) -> tuple[int, ...]:
-        """draw後のbest structural discard childのdistributionを返す。
-
-        仮想discardは34基礎牌種単位でdeduplicateする。childは
-        `(post_discard_shanten, hand_counts)`のcanonical昇順で評価し、同じmassの
-        childが複数あるときは常に先頭を採用するのでdiagnostic distributionも
-        deterministicである。
-
-        `max(0, shanten(C) - depth) * denominator`はそのchildのmassのexactな
-        下界なので、暫定best massへ達したchild以降は打ち切ってよい。childは
-        shanten昇順なので下界は単調非減少であり、打ち切ったchildはmin値を
-        改善し得ない。
-        """
-        discard_scratch = list(draw_hand_counts)
-        children: list[tuple[int, tuple[int, ...]]] = []
-        for discard_index in range(TILE_TYPE_COUNT):
-            if draw_hand_counts[discard_index] == 0:
-                continue
-            discard_scratch[discard_index] -= 1
-            child_counts = tuple(discard_scratch)
-            discard_scratch[discard_index] += 1
-            children.append((self.shanten(child_counts), child_counts))
-        children.sort()
-
-        best_distribution: tuple[int, ...] | None = None
-        best_mass = 0
-        for child_shanten, child_counts in children:
-            lower_bound = max(0, child_shanten - depth) * denominator
-            if best_distribution is not None and lower_bound >= best_mass:
-                break
-            distribution = self._distribution(
-                child_counts, remaining_counts, depth, remaining_total
-            )
-            mass = _distribution_mass(distribution)
-            if best_distribution is None or mass < best_mass:
-                best_distribution = distribution
-                best_mass = mass
-        if best_distribution is None:
-            raise TerminalShantenProgressionPolicyError(
-                "a draw hand must have at least one structural discard candidate"
-            )
-        return best_distribution
-
-
 class _NativeTerminalShantenProgressionEvaluator:
     """R5探索本体をnative（`_lisjong_native`）で実行するevaluator（Issue #232）。
 
-    Python oracle（`_TerminalShantenProgressionEvaluator`）とは別の型である。
+    Issue #346でPython evaluator（`_TerminalShantenProgressionEvaluator`）を削除し、
+    R5の唯一の実装になった。
     root候補群を1回の`evaluate_roots()`でまとめてnativeへ渡し、同一decision内の
     cacheをnative側で共有する。探索中のPython往復はなく、native側はGILを解放して
     実行する。nativeはRustが所有するデータだけを探索し、Python objectを
@@ -600,8 +360,8 @@ class _NativeTerminalShantenProgressionEvaluator:
     持ち越さないため、1 instanceにつき`evaluate_roots()`は1回だけ呼べる。
 
     `visited_states` / `cache_hits` / `cache_misses` / `shanten_evaluations`は
-    Python oracleと同じ定義でnativeが数えた、root群を共有評価したdecision全体の
-    実測値である。`evaluate_roots()`前は`None`（未計測を0で埋めない）。
+    nativeが数えた、root群を共有評価したdecision全体の実測値である
+    （development benchmark用のprivate instrumentationで、Policyの公開APIではない）。`evaluate_roots()`前は`None`（未計測を0で埋めない）。
     """
 
     __slots__ = (
@@ -649,20 +409,15 @@ class _NativeTerminalShantenProgressionEvaluator:
         return roots
 
 
-def _new_progression_evaluator() -> (
-    _TerminalShantenProgressionEvaluator | _NativeTerminalShantenProgressionEvaluator
-):
-    """本番3呼出し元が共通で使うR5 evaluatorのfactory（Issue #232）。
+def _new_progression_evaluator() -> _NativeTerminalShantenProgressionEvaluator:
+    """本番3呼出し元が共通で使うR5 evaluatorのfactory（Issue #232 / #346）。
 
-    process単位のshanten backend選択（`LISJONG_SHANTEN_BACKEND`）に従う。rust指定
-    ならnative evaluator、それ以外はPython oracleを返す。rust指定でnativeを使え
-    ない場合は`_shanten_backend`がimport時にfail closedしているため、ここでPython
-    へ黙って戻ることはない。
+    呼び出しごとに新しいnative evaluatorを返す（1 decision / 1 batch）。native拡張を
+    使えない場合は`_shanten_backend`がimport時にfail closedしている。
     """
-    native_evaluate = _shanten_backend.native_evaluate_progression
-    if native_evaluate is not None:
-        return _NativeTerminalShantenProgressionEvaluator(native_evaluate)
-    return _TerminalShantenProgressionEvaluator()
+    return _NativeTerminalShantenProgressionEvaluator(
+        _shanten_backend.native_evaluate_progression
+    )
 
 
 def _evaluate_progression_candidates(
@@ -670,10 +425,7 @@ def _evaluate_progression_candidates(
     evaluations: tuple[FiniteHorizonCandidateEvaluation, ...],
     remaining_counts: tuple[int, ...],
     horizon: int,
-    evaluator: (
-        _TerminalShantenProgressionEvaluator
-        | _NativeTerminalShantenProgressionEvaluator
-    ),
+    evaluator: _NativeTerminalShantenProgressionEvaluator,
 ) -> tuple[ProgressionCandidateEvaluation, ...]:
     """canonical順のroot candidateごとにexact terminal shanten massを評価する。
 

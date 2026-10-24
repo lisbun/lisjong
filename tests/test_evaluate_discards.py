@@ -1,8 +1,10 @@
 """Issue #224: 打牌候補の一括構造評価（`evaluate_discards_from_canonical_counts`）。
 
-期待値はTile入口の`calculate_shanten()`から独立に作り、Python実装と
-native実装（`_lisjong_native`がimportできる場合）を同じ期待値・同じ例外契約で
-照合する。一括入口自体を期待値の生成に使わない。
+期待値はTile入口の`calculate_shanten()`から独立に作り、native tableの入口と
+package-internal入口（`evaluate_discards_from_canonical_counts()`）を同じ期待値・
+同じ例外契約で照合する。一括入口自体を期待値の生成に使わない。Python実装
+（`_python_evaluate_discards`）はIssue #346で削除した。それまでのPython / native
+比較も同じTile入口由来の期待値に対して行っていたため、coverageは減らない。
 """
 
 import random
@@ -69,15 +71,15 @@ def _expected(counts, discard_indexes, improving_max_shanten):
 
 
 def _implementations():
-    implementations = [("python", shanten_module._python_evaluate_discards)]
-    if _lisjong_native is not None:
-        table = _shanten_backend.build_native_table(_lisjong_native)
-        implementations.append(("native", table.evaluate_discards))
-    return implementations
+    table = _shanten_backend.build_native_table(_lisjong_native)
+    return [
+        ("native table", table.evaluate_discards),
+        ("package entry", shanten_module.evaluate_discards_from_canonical_counts),
+    ]
 
 
 class EvaluateDiscardsContractTest(unittest.TestCase):
-    """Python / native実装がTile入口の期待値と一致する（nativeは存在時のみ）。"""
+    """native実装とpackage入口がTile入口の期待値と一致する。"""
 
     def _assert_matches(self, counts, discard_indexes, improving_max_shanten) -> None:
         expected = _expected(counts, discard_indexes, improving_max_shanten)
@@ -200,13 +202,15 @@ class EvaluateDiscardsContractTest(unittest.TestCase):
                         evaluate(counts, indexes, threshold)
                     self.assertEqual(counts, snapshot)
 
-    def test_selected_backend_dispatch(self) -> None:
-        expected = (
-            shanten_module._python_evaluate_discards
-            if _shanten_backend.native_evaluate_discards is None
-            else _shanten_backend.native_evaluate_discards
+    def test_package_entry_dispatches_to_native(self) -> None:
+        self.assertIs(
+            shanten_module._evaluate_discards,
+            _shanten_backend.native_evaluate_discards,
         )
-        self.assertIs(shanten_module._evaluate_discards, expected)
+        counts = _counts(_hand("123m456p789s1234z5z"))
+        before = _lisjong_native.discard_evaluation_call_count()
+        shanten_module.evaluate_discards_from_canonical_counts(counts, [31])
+        self.assertEqual(_lisjong_native.discard_evaluation_call_count(), before + 1)
 
 
 class NativeEvaluateDiscardsCounterTest(unittest.TestCase):
@@ -235,9 +239,13 @@ class NativeEvaluateDiscardsCounterTest(unittest.TestCase):
 
 
 class NativeApiVersionSelectionTest(unittest.TestCase):
-    """rust選択時のnative API version検査（native拡張の有無によらず実行する）。"""
+    """native API version検査（native拡張の有無によらず実行する）。
 
-    def _run_with_fake_native(self, api_line: str, backend: str):
+    未設定（default）と明示`rust`は同じ検査を通る。旧`python`指定はwheelの
+    versionにかかわらず拒否し、旧wheelを無視して動く経路はない（Issue #346）。
+    """
+
+    def _run_with_fake_native(self, api_line: str, backend: str | None):
         return _run_python(
             "import sys, types\n"
             "fake = types.ModuleType('_lisjong_native')\n"
@@ -248,27 +256,34 @@ class NativeApiVersionSelectionTest(unittest.TestCase):
             backend=backend,
         )
 
-    def test_old_wheel_without_api_version_fails_closed_under_rust(self) -> None:
-        result = self._run_with_fake_native("pass", "rust")
+    def _assert_rejected(self, api_line: str, backend, fragment: str) -> None:
+        result = self._run_with_fake_native(api_line, backend)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ShantenBackendError", result.stderr)
-        self.assertIn("API_VERSION 3, got 1", result.stderr)
+        self.assertIn(fragment, result.stderr)
 
-    def test_pre_progression_wheel_fails_closed_under_rust(self) -> None:
+    def test_old_wheel_without_api_version_fails_closed(self) -> None:
+        for backend in (None, "rust"):
+            with self.subTest(backend=backend):
+                self._assert_rejected("pass", backend, "API_VERSION 3, got 1")
+
+    def test_pre_progression_wheel_fails_closed(self) -> None:
         # Issue #232: API_VERSION 2 wheels have no `evaluate_progression`.
-        result = self._run_with_fake_native("fake.API_VERSION = 2", "rust")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ShantenBackendError", result.stderr)
-        self.assertIn("API_VERSION 3, got 2", result.stderr)
+        for backend in (None, "rust"):
+            with self.subTest(backend=backend):
+                self._assert_rejected(
+                    "fake.API_VERSION = 2", backend, "API_VERSION 3, got 2"
+                )
 
-    def test_mismatched_api_version_fails_closed_under_rust(self) -> None:
-        result = self._run_with_fake_native("fake.API_VERSION = 4", "rust")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("ShantenBackendError", result.stderr)
+    def test_mismatched_api_version_fails_closed(self) -> None:
+        for backend in (None, "rust"):
+            with self.subTest(backend=backend):
+                self._assert_rejected(
+                    "fake.API_VERSION = 4", backend, "API_VERSION 3, got 4"
+                )
 
-    def test_python_backend_ignores_an_old_wheel(self) -> None:
-        result = self._run_with_fake_native("pass", "python")
-        self.assertEqual(result.returncode, 0, result.stderr)
+    def test_retired_python_backend_does_not_bypass_the_wheel_check(self) -> None:
+        self._assert_rejected("pass", "python", "no longer supported")
 
 
 if __name__ == "__main__":

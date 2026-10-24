@@ -89,12 +89,14 @@ class BaselineTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             model.predict(public, Seat(1), "unknown")
 
-    def test_inference_without_truth_source_or_native_imports(self):
+    def test_inference_without_truth_source_imports(self):
+        # Issue #346: the native shanten extension is required computation, not a
+        # privileged source, so only the truth / source modules are blocked here.
         code = """
 import importlib.abc,sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
-        if name.startswith(("lisjong.learning.ron_legal_accuracy", "lisjong.learning.ron_legal_source", "lisjong.belief.ron_legal_ground_truth", "_lisjong_native")):
+        if name.startswith(("lisjong.learning.ron_legal_accuracy", "lisjong.learning.ron_legal_source", "lisjong.belief.ron_legal_ground_truth")):
             raise AssertionError("privileged import: " + name)
 sys.meta_path.insert(0, Block())
 from test_learning_hand_belief_source import A_OWN,A_PLAYERS,make_decision
@@ -110,8 +112,7 @@ assert m.predict(p,Seat(1),"wait_genbutsu") is not None
             cwd=Path(__file__).resolve().parents[1],
             capture_output=True,
             text=True,
-            # The Rust shanten backend legitimately loads the native module;
-            # the baseline itself must work on the default Python backend.
+            # Run on the default backend selection (the parent's value is dropped).
             env={
                 k: v for k, v in os.environ.items() if k != BACKEND_ENVIRONMENT_VARIABLE
             },

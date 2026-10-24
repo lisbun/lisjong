@@ -1,4 +1,5 @@
-//! Opt-in native backend prototype for `lisjong.hand_evaluation` (Issue #213).
+//! Native backend for `lisjong.hand_evaluation` (Issue #213; required since
+//! Issue #346, which removed the Python numeric / batched discard / R5 code).
 //!
 //! Plain Rust numeric shanten core and exact R5 search, with an optional
 //! Python boundary (Issue #240). The default `python` feature preserves the
