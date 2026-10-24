@@ -129,5 +129,7 @@ R4は受入が同じ3枚で、massの差は約0.15%しかないが、proxyは5�
 - 「鳴いた直後の打牌で速度と保持価値をどう交換するか」を再設計するなら、先に**一度だけ**限定shadowの
   計画を別途固定し、実際に打牌が変わる頻度と速度 / 打点tradeoffを確認してから、候補仕様・identity・
   S1/S2予算を決める
+- 限定shadow（Arena #533 call-value-shadow-v1）用に、本診断の比較量をproduction-ownedな解析APIへ
+  移した（#350、[解析API](call-value-shadow-analysis-api.md)）。本testは診断記録として維持する
 - R4のように速度差がごく小さいままproxyが大きく下がる局面と、R2 / R3のように受入1枚と
   ドラ1枚を交換する局面は性質が違う。shadowではこの2つを分けて数えるのがよい
