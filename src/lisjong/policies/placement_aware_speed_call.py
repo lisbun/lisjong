@@ -263,6 +263,18 @@ def _best_route_evaluation(
     return best_shanten, best_value
 
 
+def _minimum_call_value(
+    mode: GameSituationMode, *, closed: bool, route_shanten: int
+) -> int:
+    """call前の門前状態とcall後route shantenに対するmode別の採用閾値。"""
+    acceptance = _CALL_ACCEPTANCE[mode]
+    if not closed:
+        return acceptance.open_minimum_value
+    if route_shanten == 0:
+        return acceptance.closed_tenpai_minimum_value
+    return acceptance.closed_non_tenpai_minimum_value
+
+
 def _speed_call_candidates(
     policy_input: PolicyInput,
     call_actions: tuple[_CallAction, ...],
@@ -310,13 +322,9 @@ def _speed_call_candidates(
             continue
         if route_shanten > acceptance.maximum_route_shanten:
             continue
-        if not closed:
-            minimum_value = acceptance.open_minimum_value
-        elif route_shanten == 0:
-            minimum_value = acceptance.closed_tenpai_minimum_value
-        else:
-            minimum_value = acceptance.closed_non_tenpai_minimum_value
-        if value < minimum_value:
+        if value < _minimum_call_value(
+            mode, closed=closed, route_shanten=route_shanten
+        ):
             continue
         candidates.append(_SpeedCallCandidate(action, route_shanten, value))
     return tuple(candidates)
@@ -397,37 +405,49 @@ def _eligible_discard_actions(
     return eligible_actions
 
 
+def _select_speed_call(
+    decision: DecisionContext, parent_decision: PolicyDecision
+) -> _SpeedCallCandidate | None:
+    """parentがPassした判断で、スピード鳴きとして選ぶcallを返す（なければNone）。
+
+    Policyの判断と`speed_call_analysis`が同じ経路を使うための唯一の実装。
+    """
+    if not isinstance(parent_decision.action, PassAction):
+        return None
+
+    call_actions = tuple(
+        action
+        for action in decision.legal_actions
+        if isinstance(action, (ChiAction, PonAction))
+    )
+    if not call_actions or _opponent_riichi_players(decision.input):
+        return None
+    if _has_open_yakuhai(decision.input):
+        return None
+
+    candidates = _speed_call_candidates(
+        decision.input, call_actions, situation_mode(decision.input)
+    )
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda candidate: (
+            candidate.route_shanten,
+            -candidate.value,
+            _call_action_sort_key(candidate.action),
+        ),
+    )
+
+
 class PlacementAwareSpeedCallPolicy(TargetedHonorReleaseTerminalProgressionPolicy):
     """Issue #199: 役確定型スピード鳴き + 役保持打牌 + オーラスmode。"""
 
     def _decide(self, decision: DecisionContext) -> PolicyDecision:
         parent_decision = super()._decide(decision)
-        if not isinstance(parent_decision.action, PassAction):
+        selected = _select_speed_call(decision, parent_decision)
+        if selected is None:
             return parent_decision
-
-        call_actions = tuple(
-            action
-            for action in decision.legal_actions
-            if isinstance(action, (ChiAction, PonAction))
-        )
-        if not call_actions or _opponent_riichi_players(decision.input):
-            return parent_decision
-        if _has_open_yakuhai(decision.input):
-            return parent_decision
-
-        candidates = _speed_call_candidates(
-            decision.input, call_actions, situation_mode(decision.input)
-        )
-        if not candidates:
-            return parent_decision
-        selected = min(
-            candidates,
-            key=lambda candidate: (
-                candidate.route_shanten,
-                -candidate.value,
-                _call_action_sort_key(candidate.action),
-            ),
-        )
         return PolicyDecision(action=selected.action)
 
     def _decide_discard(
