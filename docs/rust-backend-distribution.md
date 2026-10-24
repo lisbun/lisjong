@@ -22,6 +22,7 @@ Arena側の導入・worker設定・AWS実行と、測定条件・結果・利用
 container上の確認は実機AWS workerでの確認を代替しない（実機はArena側で確認する）。
 
 対象外：Windows / macOS / aarch64 / 他のPython version / free-threaded build（3.14t）向けwheel。
+Windows上の開発・実行はWSL（Linux x86_64）を標準とする（Issue #342のD1、§7）。
 
 ## 2. wheel
 
@@ -95,6 +96,7 @@ source buildした環境での成功は、wheel導入の確認として扱わな
 3. 保持：GitHub Actions artifactは90日で消えるため、正本の保持先はproject既定のlocal artifact root
    （`C:\Dev\lisjong-artifacts\issue-216-rust-wheel\`、wheel・`SHA256SUMS`・`BUILD-INFO.txt`）とする。
    PyPIやGitHub Releaseでの公開は行わない。
+   Issue #342以降は、wheelと同revisionのsource archiveを組にしたbundleとして保存する（§7）。
 4. AWS workerへの受け渡しは、Arena runnerの既存run input（S3 transfer bucketの`input/`、`manifest.sha256`でSHA-256照合）を使う。
    workerがGitHubから直接取得する経路は作らない。
 
@@ -118,3 +120,83 @@ export LISJONG_SHANTEN_BACKEND=rust   # worker processへ環境変数で継承�
   Pythonへfallbackしない（#213）。
 - Pythonへ戻すには`LISJONG_SHANTEN_BACKEND`を未設定または`python`にする（wheelのuninstallは不要）。
   Python-onlyの実行にはwheelもRust toolchainも要らない。
+
+## 7. 同revision source・wheel bundle（Issue #342）
+
+2026-10-24の決定（#342）：
+
+- D1：通常版CPython 3.14 / Linux x86_64を優先する。Windows上の開発・実行はWSLを標準とし、
+  Windows native wheel、macOS、aarch64、3.14tは追加しない。WSL個別環境の互換性は導入時に検証する
+  （方針決定を動作確認済みと扱わない）。
+- D2：exact lisjong revisionと、そのmain push CIでbuildしたwheelを組で保存する。
+  保存先は既存のlocal artifact root（`C:\Dev\lisjong-artifacts\issue-342-native-bundle\<revision>\`）で、
+  Actions artifactの90日期限だけに依存しない。自動公開・PyPI・新しいS3/課金・credential自動処理・
+  latestへの追随は行わない。
+
+### bundleの構成と作成（ユーザー管理環境）
+
+```text
+<bundle>/
+  bundle-manifest.json        # tools/native_bundle.py manifest が作る
+  lisjong-<revision>.tar      # git archive --format=tar --prefix=lisjong/ <revision>
+  wheel/                      # §5のCI artifactをそのまま（*.whl、SHA256SUMS、BUILD-INFO.txt）
+```
+
+```bash
+R=<main revision>   # 完全なcommit id
+gh run download <main push run-id> --repo lisbun/lisjong --name lisjong-native-wheel-$R --dir <bundle>/wheel
+git archive --format=tar --prefix=lisjong/ -o <bundle>/lisjong-$R.tar $R   # WSL/Linuxのgitで作る
+python3.14 tools/native_bundle.py manifest <bundle>
+```
+
+source archiveは改行変換のないgit（WSL/Linux、`core.autocrlf`未設定）で作る。Windowsの
+`core.autocrlf=true`では`git archive`がCRLFへ変換し、別bytesのarchiveになる。
+`manifest`は、archiveのcommit id（git archiveのpax header）、`BUILD-INFO.txt`の
+wheel名・SHA-256・revision・`push` / `refs/heads/main`、`SHA256SUMS`、wheel tag
+（`cp314-cp314-manylinux_2_28_x86_64`）、sourceの`REQUIRED_NATIVE_API_VERSION`を照合してから、
+revision、source archive / wheelのfilename・bytes・SHA-256、期待する`SOURCE_REVISION` / `API_VERSION`、
+CI run URL、build Python、対象Python / platformを記録する。既存manifestは上書きしない。
+
+### 導入・検証（1 command）
+
+```bash
+python3.14 tools/native_bundle.py install <bundle> <新規venv path>
+```
+
+- 開始前：実行中interpreterがCPython 3.14通常版 / `linux-x86_64`であること、manifest形式、
+  source archiveとwheelのbytes・SHA-256、archiveのcommit idとrevision、sourceの要求API versionを照合する。
+  不一致・wheel欠落・出力先が既に存在する場合は何も作らずに失敗する（既存環境を削除・上書きしない）。
+- 導入：新規venvへwheelを`--only-binary=:all: --no-index --no-deps`で、展開したsourceを`--no-deps`で入れる
+  （sourceのbuild backend setuptoolsだけはpip既定のbuild isolationで取得する）。
+- 導入後：`LISJONG_SHANTEN_BACKEND=rust`の別process（`python -I`）で、`SOURCE_REVISION` / `API_VERSION`、
+  `_lisjong_native`と拡張`.so`・`lisjong`がそのvenv内からロードされたこと、公開`calculate_shanten`と
+  R5 evaluator（`_new_progression_evaluator`）がnative counterを進めること、`_lookup_shanten` /
+  `_python_shanten`をimportしていないことを確認する。比較用のPython対局は起動しない。
+- 成功時だけ`<venv>/lisjong-native-bundle-install.json`（manifest、host、検証結果）を書く。
+  途中で失敗した場合は、このcommandが作ったvenvを削除し成功記録を残さない。
+
+拒否の各条件はnetwork不要のfocused test（`tests/test_native_bundle_tool.py`）で固定する。
+実native拡張での検証scriptは`_lisjong_native`がある環境（CI `native-backend`）で実行する。
+
+### 責務と復元
+
+| 段階 | 担当 / 手順 |
+| --- | --- |
+| build | lisjong CI（main push、§4） |
+| 取得・bundle作成・保存 | ユーザー管理環境。上記手順でlocal artifact rootへ保存し、READMEにrevision・hash・run・確認環境を記録 |
+| 復元 | 保存済みbundleから`install`で新規venvを作る。`main`のlatestへは追随せず、記録したrevisionで再現する |
+| Arena worker | 従来どおりArena run input経由（§5.4、§6）。本toolはArena側の導入手順を置き換えない |
+
+過去artifactの再現は記録済みrevision・環境のbundleで行う。全過去artifactを最新codeで再実行する基盤は作らない
+（CLI別の保証範囲はArena互換準備で確定する）。
+
+### 保存済みbundleと確認環境
+
+| revision | 保存 | 導入確認 |
+| --- | --- | --- |
+| `c0e1dfbc220ea3c114cf18e788608897b7853244`（#338 / PR #341） | 保存済み（2026-10-24、`issue-342-native-bundle\c0e1dfb…\`、wheel SHA-256 `e7cccce1…0a49`、CI run 39996162089） | WSL2 Ubuntu 24.04.4（glibc 2.39）、uv管理CPython 3.14.7で`install`成功（2026-10-24） |
+
+未確認：Ubuntu以外のWSL distribution、distro提供のCPython 3.14、ユーザーの他のWSL / Linux開発環境。
+AL2023のbinary-only導入はCI `native-backend`の証拠であり、本toolでの導入は未実施。
+`issue-216-rust-wheel`のwheel（`2553c1b`、#224以前のためAPI_VERSION 1）は現行lisjongのrust選択では起動時に拒否され、
+source archiveと組にもなっていないため、本bundle形式の保存済みbundleとして扱わない。

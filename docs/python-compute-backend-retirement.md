@@ -54,19 +54,21 @@ scoringのAPI versionは別契約である。
 | CPython 3.14通常版、manylinux_2_28 x86_64 | CIでrelease wheelをbuild。native coreは`--no-default-features`でPyO3なしtest | 同一revisionのwheel供給、checksum、SOURCE_REVISIONを維持 |
 | AL2023 x86_64、distro CPython 3.14 | compilerなしcontainerでbinary-only install、native/full suite。live workerは別の実行証拠 | 配布手順とartifact保存を維持。CI合格をlive実測と呼ばない |
 | Ubuntu CIのquality / ml-tests / reference-validation | 現在はnativeなしのPython計算経路。mlはCPU torch、referenceは外部mahjong | 同revision wheelを先にinstallしRust検証へ移す。ML未導入coreの回帰も残す |
-| Windows開発環境 | 保存先のWindows pathは配布文書にあるが、Windows native wheelの検証証拠ではない | native build/wheel/install/API smokeを用意するか、検証済みLinux/WSL利用への合意が必要 |
-| macOS / aarch64 / 他Python / 3.14t | 初期wheel対象外。source build可能性は検証済みsupportではない | 対応追加か対象外の明示判断。推測で対応済みにしない |
+| Windows開発環境 | D1でWSL（Linux x86_64）を標準とし、Windows native wheelは追加しない（#342）。WSL2 Ubuntu 24.04.4 / uv CPython 3.14.7で保存済みbundleの導入・検証を確認 | 各利用者のWSL環境で`tools/native_bundle.py install`による導入確認。他のdistribution / distro Pythonは未確認 |
+| macOS / aarch64 / 他Python / 3.14t | D1で今回は対象外と決定（#342）。source build可能性は検証済みsupportではない | 必要が生じた時点で別Issueで追加判断する。推測で対応済みにしない |
 
 root packageと`lisjong-native`は別distributionで、rootのdependenciesは現在空。
 wheelはActions artifact（90日）と既存の外部保存であり、PyPI/Releaseへの恒久公開は未整備。
-必須化前に「明示的な同revision二段install」を推奨案として文書化・CIで検証する。
+同revisionのsource archiveとwheelを組にしたbundleを、`tools/native_bundle.py`で新規venvへ
+二段install・検証する（#342、手順は[配布文書](rust-backend-distribution.md)§7）。
 自動dependency解決や単一package化は別案で、無断で公開先を追加しない。
 main pushのwheelを採用し、PR merge-ref wheelをruntimeの正本にしない。
 
-未決判断D1: Windowsをnative対応するか、検証済みLinux開発経路を採るか。
-未決判断D2: wheel永続保存・取得手順と二段installを運用標準にできるか。
-推奨は既存Linux経路を先に維持し、必要なWindows consumerを確認すること。
-D1/D2は配布・必須化をblockするが、#337/#338と本設計の完了はblockしない。
+決定D1（2026-10-24、#342）: CPython 3.14通常版 / Linux x86_64を優先し、Windows上はWSLを標準とする。
+Windows native wheel、macOS、aarch64、3.14tは今回追加しない。
+決定D2（2026-10-24、#342）: exact revisionとそのmain CI wheelを組でlocal artifact rootへ保存し、
+manifestにrevision・wheel filename/bytes/SHA-256・SOURCE_REVISION・API_VERSION・CI run URL・Python/platformを記録する。
+保存済みbundleからの導入を1 commandにし、自動公開・PyPI・新S3/課金・latest追随は行わない。
 
 ## 4. 代替検証の充足と不足
 
@@ -113,13 +115,13 @@ seed管理、P3、候補固有の確認や正式評価承認は省略しない�
 | --- | --- | --- |
 | 完了 | #332 / #333、lisjong | numeric fixtureとbatched Rust core。追加作業なし |
 | 1 検証実装済み | [#337](https://github.com/lisbun/lisjong/issues/337)、lisjong | R5の独立fixtureと選択契約の不足補完。完了状態・CI証拠はIssue/PRを参照。削除なし |
-| 2 実装済み | [#338](https://github.com/lisbun/lisjong/issues/338)、Claude Code | artifact/helper供給分離、bytes/API/default不変、generator回帰。完了状態・CI証拠はIssue/PRを参照 |
-| 3 判断後に起票 | 配布準備 / lisjong、環境確認はユーザー管理環境 | D1/D2を確定し対象platformのbuild/installを検証。同revision二段install、永続取得と失敗動作を文書化 |
+| 2 完了 | [#338](https://github.com/lisbun/lisjong/issues/338)、Claude Code | PR #341（main `c0e1dfb`）でmerge。artifact/helper供給分離、bytes/API/default不変、generator回帰 |
+| 3 準備実装 | [#342](https://github.com/lisbun/lisjong/issues/342)、lisjong、環境確認はユーザー管理環境 | D1/D2決定。同revision bundleのmanifest・1 command導入/検証・拒否testと、`c0e1dfb` bundleの保存とWSL導入確認 |
 | 4 設計から起票 | Arena互換準備 / Arena owner | D3、CLI/schema別検証、旧protocol保持、新gate仕様を確定。旧pinで読取/新旧gate準備をmergeし、まだ実行切替しない |
 | 5 BLOCKED | Rust必須化・Python計算削除 / lisjong | #337/#338、配布、Arena準備完了後。numeric/batched/R5と比較専用test/CIを限定削除。保持項目、env失敗契約、同revision CI/full suiteを確認 |
 | 6 BLOCKED | Arena採用 / Arena owner | 5のmain wheelを保存・hash確定後、package/native pin・新規CLI/gate/CIを整合して更新。歴史的証拠は保持 |
 
-3〜6は後続Issue案でありREADYの実装依頼ではない。各Issue起票時に具体的な対象file・検証command・
+4〜6は後続Issue案でありREADYの実装依頼ではない。各Issue起票時に具体的な対象file・検証command・
 未決判断の決定記録を追加する。#328はこれらが完了するまでopenを維持する。
 対象fileの入口は、3がroot/nativeの`pyproject.toml`、`.github/workflows/ci.yml`と配布文書、
 4がArenaの`shanten_backend_verification`、`heuristic_candidate_engine_aabb`と各CLI/test・評価文書、
@@ -127,6 +129,17 @@ seed管理、P3、候補固有の確認や正式評価承認は省略しない�
 `shanten_backend_verification/backend.py`、CI・新規実行CLI・評価文書である。
 中間commitでArenaのpinが未配布nativeを要求する状態を作らない。必要なら5を処理別PRに分けるが、
 default変更と利用可能なwheel/失敗契約を切り離して壊れた状態をmergeしない。
+
+### Rust必須化（5）前に残るgate
+
+- 配布（3）：#342のtool・文書・保存済み`c0e1dfb` bundleで準備実装は完了。必須化PRのrevisionについて、
+  main CI wheelとsourceのbundleを改めて作成・保存し、導入確認を記録する（`c0e1dfb`のbundleは
+  そのrevisionの再現用であり、後続revisionの代替にしない）。
+- 利用者環境：各利用者のWSL / Linux開発環境での`install`確認。未確認環境（Ubuntu以外のdistribution、
+  distro提供CPython 3.14、AL2023での本tool利用）を確認済みとしない。
+- CI：Ubuntu CIのquality / ml-tests / reference-validationを同revision wheel導入でのRust検証へ移すこと（§3）。
+- Arena互換準備（4）：D3、CLI/schema別の保証範囲、旧protocol保持、新gate仕様。
+- 計算削除前の代替検証の対応付け（§4）。
 
 ### rollbackと停止条件
 
