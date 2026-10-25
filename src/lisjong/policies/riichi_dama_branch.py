@@ -16,7 +16,10 @@ current Heuristic Champion `PlacementAwareSpeedCallPolicy`と既存Policyの挙�
   判断時点の手牌で1回だけ数えた値がそのまま打牌後の値になる（二重に数えない）
 - 振聴: 打牌後の自分の河（鳴かれた牌を含む）＋宣言牌の牌種にWのどれかがある
 - 待ちごとの点数: ダマのロン / ツモ、リーチのロン / ツモを`evaluate_win`で評価する。
-  和了牌は赤でない牌、一発なし、状況役なし（`WinSituation.NORMAL`）。ダマは裏ドラなしを
+  和了牌は原則として赤でない牌で、ルール上の通常牌の上限（赤ありでは各色の5は通常3枚）を
+  評価入力（宣言後の手牌・副露・和了牌・ドラ表示牌）が超える場合だけ赤牌で評価する
+  （lisjong #354）。実際に評価した和了牌（`winning_tile`）と赤の加点（`red_dora`）を返す。
+  赤でも成立しない場合は解析エラー。一発なし、状況役なし（`WinSituation.NORMAL`）。ダマは裏ドラなしを
   明示し、リーチは`URA_DORA_EXCLUDED`。ダブルリーチになる場合はそのstatusで評価する。
   振聴でもロンの点数は計算する（振聴の判定は`furiten`で行う）
 - ダブルリーチ: 自分がまだ打牌しておらず、局内でどの席にも副露（暗槓を含む）がない。
@@ -64,6 +67,7 @@ from lisjong.belief.canonical_axes import tile_type_index, wind_for_seat
 from lisjong.belief.tile_conservation import derive_remaining_tile_inventory
 from lisjong.hand_evaluation import calculate_shanten
 from lisjong.hand_evaluation.scoring import (
+    PROJECT_STANDARD_SCORING_RULES,
     URA_DORA_EXCLUDED,
     EvaluationStatus,
     RiichiStatus,
@@ -102,10 +106,15 @@ from lisjong.structural_efficiency import (
     post_discard_concealed_hand,
 )
 
-RIICHI_DAMA_FEATURES_VERSION = "riichi-dama-features-v1"
-"""`RiichiDecisionFeatures`のJSON projectionと意味定義（Arena #539 §4）のversion。"""
+RIICHI_DAMA_FEATURES_VERSION = "riichi-dama-features-v2"
+"""`RiichiDecisionFeatures`のJSON projectionと意味定義（Arena #539 §4）のversion。
+
+v2（lisjong #354）: 通常牌の上限を超える待ちを赤牌で評価し、`WaitFeatures.winning_tile`と
+`WaitScore.red_dora`を追加した。v1は読まない。"""
 
 _MAX_COPIES = 4
+_PLAIN_FIVE_LIMIT = _MAX_COPIES - 1
+"""赤ありのルールで各色の5の通常牌の枚数（赤1枚 + 通常3枚）。"""
 _SEAT_COUNT = 4
 
 
@@ -130,6 +139,8 @@ class WaitScore:
     `SCORED`なら`han` / `limit` / `winner_points`は値を持ち、`fu`は役満で`None`になりうる。
     支払点はロンなら`ron_payment`、ツモなら`tsumo_*_payment`（親のツモでは
     `tsumo_dealer_payment`が`None`）で、本場・供託を含まない。
+    `red_dora`は翻に含まれる赤ドラの枚数（和了牌が赤ならそれを含む）。役満などドラの内訳が
+    ない場合は`None`。
     """
 
     status: EvaluationStatus
@@ -140,9 +151,11 @@ class WaitScore:
     ron_payment: int | None = None
     tsumo_dealer_payment: int | None = None
     tsumo_non_dealer_payment: int | None = None
+    red_dora: int | None = None
 
     def __post_init__(self) -> None:
         values = (
+            self.red_dora,
             self.han,
             self.fu,
             self.limit,
@@ -170,6 +183,10 @@ class WaitScore:
         ):
             if value is not None and type(value) is not int:
                 raise ValueError(f"{name} must be an int or None")
+        if self.red_dora is not None and (
+            type(self.red_dora) is not int or self.red_dora < 0
+        ):
+            raise ValueError("red_dora must be a non-negative int or None")
         if self.ron_payment is None and self.tsumo_non_dealer_payment is None:
             raise ValueError("a scored wait requires a ron or tsumo payment")
 
@@ -180,9 +197,15 @@ class WaitScore:
 
 @dataclass(frozen=True, slots=True)
 class WaitFeatures:
-    """1つの待ち牌種の、見えない残り枚数と4通りの点数。"""
+    """1つの待ち牌種の、見えない残り枚数と4通りの点数。
+
+    `winning_tile`は4通りの点数を評価した和了牌（通常牌、または通常牌の上限を超える場合の
+    赤牌）。`unseen_count`は公開情報から数えた値で、`winning_tile`が赤でもその赤が見えて
+    いないとは限らない。
+    """
 
     tile_type: TileType
+    winning_tile: Tile
     unseen_count: int
     dama_ron: WaitScore
     dama_tsumo: WaitScore
@@ -192,6 +215,11 @@ class WaitFeatures:
     def __post_init__(self) -> None:
         if not isinstance(self.tile_type, TileType):
             raise ValueError("tile_type must be a TileType")
+        if (
+            not isinstance(self.winning_tile, Tile)
+            or self.winning_tile.tile_type != self.tile_type
+        ):
+            raise ValueError("winning_tile must be a Tile of tile_type")
         if type(self.unseen_count) is not int or not (
             0 <= self.unseen_count <= _MAX_COPIES
         ):
@@ -285,7 +313,27 @@ def _wait_score(evaluation) -> WaitScore:
         ron_payment=score.ron_payment,
         tsumo_dealer_payment=score.tsumo_dealer_payment,
         tsumo_non_dealer_payment=score.tsumo_non_dealer_payment,
+        red_dora=None if score.dora is None else score.dora.red,
     )
+
+
+def winning_tile_for(tile_type: TileType, physical: tuple[Tile, ...]) -> Tile:
+    """待ち牌種の和了牌（lisjong #354）。
+
+    原則は通常牌。赤ありのルールで5の牌種のとき、評価入力の物理牌（宣言後の手牌・副露・
+    ドラ表示牌）の通常牌と和了牌の合計が通常牌の上限（3枚）を超える場合だけ赤牌を返す。
+    赤牌でも成立しない入力は、`evaluate_win`の拒否として呼び出し側で解析エラーにする。
+    """
+    plain = Tile(tile_type)
+    if (
+        not PROJECT_STANDARD_SCORING_RULES.red_dora_enabled
+        or tile_type.category is TileCategory.HONOR
+        or tile_type.rank != 5
+    ):
+        return plain
+    if sum(1 for tile in physical if tile == plain) + 1 <= _PLAIN_FIVE_LIMIT:
+        return plain
+    return Tile(tile_type, is_red=True)
 
 
 def _is_double_riichi(decision: DecisionContext) -> bool:
@@ -329,7 +377,13 @@ def analyze_riichi_decision(
     round_state = policy_input.round
     seat_wind = wind_for_seat(seat, round_state.dealer_seat)
 
-    def evaluate(tile_type: TileType, method: WinMethod, riichi: bool) -> WaitScore:
+    physical = (
+        *hand,
+        *(tile for meld in own.melds for tile in meld.tiles),
+        *round_state.dora_indicators,
+    )
+
+    def evaluate(winning: Tile, method: WinMethod, riichi: bool) -> WaitScore:
         context = WinContext(
             method=method,
             seat_wind=seat_wind,
@@ -340,18 +394,27 @@ def analyze_riichi_decision(
             dora_indicators=round_state.dora_indicators,
             ura_dora=URA_DORA_EXCLUDED if riichi else UraDoraIndicators(()),
         )
-        return _wait_score(
-            evaluate_win(WinningHand(hand, melds, Tile(tile_type)), context)
-        )
+        try:
+            evaluation = evaluate_win(WinningHand(hand, melds, winning), context)
+        except ValueError as error:
+            raise RiichiDamaAnalysisError(
+                f"the wait {winning.tile_type} cannot complete with a physical tile: {error}"
+            ) from None
+        return _wait_score(evaluation)
+
+    winning_tiles = {
+        tile_type: winning_tile_for(tile_type, physical) for tile_type in wait_types
+    }
 
     waits = tuple(
         WaitFeatures(
             tile_type=tile_type,
+            winning_tile=winning_tiles[tile_type],
             unseen_count=remaining[tile_type_index(tile_type)],
-            dama_ron=evaluate(tile_type, WinMethod.RON, False),
-            dama_tsumo=evaluate(tile_type, WinMethod.TSUMO, False),
-            riichi_ron=evaluate(tile_type, WinMethod.RON, True),
-            riichi_tsumo=evaluate(tile_type, WinMethod.TSUMO, True),
+            dama_ron=evaluate(winning_tiles[tile_type], WinMethod.RON, False),
+            dama_tsumo=evaluate(winning_tiles[tile_type], WinMethod.TSUMO, False),
+            riichi_ron=evaluate(winning_tiles[tile_type], WinMethod.RON, True),
+            riichi_tsumo=evaluate(winning_tiles[tile_type], WinMethod.TSUMO, True),
         )
         for tile_type in wait_types
     )
@@ -420,9 +483,11 @@ _SCORE_FIELDS = {
     "ron_payment",
     "tsumo_dealer_payment",
     "tsumo_non_dealer_payment",
+    "red_dora",
 }
 _WAIT_FIELDS = {
     "tile_type",
+    "winning_tile",
     "unseen_count",
     "dama_ron",
     "dama_tsumo",
@@ -485,6 +550,7 @@ def _score_value(score: WaitScore) -> dict:
         "ron_payment": score.ron_payment,
         "tsumo_dealer_payment": score.tsumo_dealer_payment,
         "tsumo_non_dealer_payment": score.tsumo_non_dealer_payment,
+        "red_dora": score.red_dora,
     }
 
 
@@ -499,6 +565,7 @@ def riichi_decision_features_to_value(features: RiichiDecisionFeatures) -> dict:
         "waits": [
             {
                 "tile_type": _tile_type_value(wait.tile_type),
+                "winning_tile": _tile_value(wait.winning_tile),
                 "unseen_count": wait.unseen_count,
                 "dama_ron": _score_value(wait.dama_ron),
                 "dama_tsumo": _score_value(wait.dama_tsumo),
@@ -650,6 +717,7 @@ def _parse_score(value: object, context: str) -> WaitScore:
             tsumo_non_dealer_payment=_optional_int(
                 raw["tsumo_non_dealer_payment"], f"{context}.tsumo_non_dealer_payment"
             ),
+            red_dora=_optional_int(raw["red_dora"], f"{context}.red_dora"),
         )
     except ValueError as error:
         raise RiichiDamaAnalysisError(f"{context}: {error}") from None
@@ -660,6 +728,7 @@ def _parse_wait(value: object, context: str) -> WaitFeatures:
     try:
         return WaitFeatures(
             tile_type=_parse_tile_type(raw["tile_type"], f"{context}.tile_type"),
+            winning_tile=_parse_tile(raw["winning_tile"], f"{context}.winning_tile"),
             unseen_count=_int(raw["unseen_count"], f"{context}.unseen_count"),
             dama_ron=_parse_score(raw["dama_ron"], f"{context}.dama_ron"),
             dama_tsumo=_parse_score(raw["dama_tsumo"], f"{context}.dama_tsumo"),
@@ -845,6 +914,7 @@ __all__ = [
     "WaitFeatures",
     "WaitScore",
     "analyze_riichi_decision",
+    "winning_tile_for",
     "parse_riichi_decision_features",
     "riichi_decision_features_to_value",
 ]
