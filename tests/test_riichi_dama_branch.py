@@ -24,11 +24,13 @@ from lisjong.hand_evaluation.scoring import EvaluationStatus, ScoreLimit
 from lisjong.policies import PlacementAwareSpeedCallPolicy
 from lisjong.policies.riichi_dama_branch import (
     RIICHI_DAMA_FEATURES_VERSION,
+    RIICHI_FIRST_DAMA_BRANCH_VERSION,
     BranchStatus,
     RiichiDamaAnalysisError,
     RiichiDamaBranchError,
     RiichiDamaBranchPolicy,
     RiichiDecisionFeatures,
+    RiichiFirstDamaBranchPolicy,
     RoundIdentity,
     WaitScore,
     analyze_riichi_decision,
@@ -608,6 +610,133 @@ class BranchPolicyTest(unittest.TestCase):
             RiichiDamaBranchPolicy(CHAMPION, (Wind.EAST, 1, 0), _discard("1z"))
         with self.assertRaises(TypeError):
             RiichiDamaBranchPolicy(CHAMPION, TARGET, RIICHI)
+
+
+class FirstBranchPolicyTest(unittest.TestCase):
+    """R1（#357）: 分岐点の1回だけ差し替え、以後はリーチを含めinnerへ戻す。"""
+
+    def _wrapper(self, inner=CHAMPION, discard=None) -> RiichiFirstDamaBranchPolicy:
+        return RiichiFirstDamaBranchPolicy(inner, TARGET, discard or _discard("1z"))
+
+    def test_identity_is_distinct_from_old_wrapper(self) -> None:
+        wrapper = self._wrapper()
+        self.assertEqual(wrapper.version, RIICHI_FIRST_DAMA_BRANCH_VERSION)
+        self.assertNotIsInstance(wrapper, RiichiDamaBranchPolicy)
+        self.assertFalse(hasattr(RiichiDamaBranchPolicy, "version"))
+
+    def test_other_rounds_pass_through_including_riichi(self) -> None:
+        wrapper = self._wrapper()
+        decision = _riichi_decision(PINFU, **OTHER_ROUND)
+        self.assertEqual(wrapper.choose_action(decision), RIICHI)
+        self.assertEqual(wrapper.status, BranchStatus.PENDING)
+        self.assertEqual(wrapper.riichi_after_branch_count, 0)
+
+    def test_branch_point_returns_specified_discard(self) -> None:
+        wrapper = self._wrapper()
+        decision = _riichi_decision(PINFU)
+        self.assertEqual(CHAMPION.choose_action(decision), RIICHI)
+        self.assertEqual(wrapper.choose_action(decision), _discard("1z"))
+        self.assertEqual(wrapper.status, BranchStatus.BRANCHED)
+        self.assertEqual(wrapper.riichi_after_branch_count, 0)
+
+    def test_branch_discard_must_match_exactly(self) -> None:
+        decision = _riichi_decision(PINFU)
+        for discard in (
+            _discard("1z", tsumogiri=True),
+            _discard("9p"),
+            DiscardAction(actor=Seat.SEAT_1, tile=_tile("1z"), tsumogiri=False),
+        ):
+            wrapper = self._wrapper(discard=discard)
+            with (
+                self.subTest(discard=discard),
+                self.assertRaises(RiichiDamaBranchError),
+            ):
+                wrapper.choose_action(decision)
+            self.assertEqual(wrapper.status, BranchStatus.PENDING)
+
+    def test_later_riichi_in_target_round_is_returned_unchanged(self) -> None:
+        wrapper = self._wrapper()
+        wrapper.choose_action(_riichi_decision(PINFU))
+        later = _riichi_decision(PINFU, river="9m1z")
+        self.assertEqual(CHAMPION.choose_action(later), RIICHI)
+        self.assertEqual(wrapper.choose_action(later), RIICHI)
+        self.assertEqual(wrapper.riichi_after_branch_count, 1)
+        self.assertEqual(wrapper.status, BranchStatus.BRANCHED)
+
+    def test_only_one_replacement_and_inner_called_once_per_decision(self) -> None:
+        inner = _Scripted([RIICHI, RIICHI, _discard("1z"), RIICHI])
+        wrapper = self._wrapper(inner=inner)
+        decision = _riichi_decision(PINFU)
+        returned = [wrapper.choose_action(decision) for _ in range(4)]
+        self.assertEqual(returned, [_discard("1z"), RIICHI, _discard("1z"), RIICHI])
+        self.assertEqual(len(inner.calls), 4)
+        # innerへ渡す合法手は元のまま（リーチを除いて作り直さない）
+        for call in inner.calls:
+            self.assertIs(call, decision)
+        self.assertEqual(wrapper.riichi_after_branch_count, 2)
+
+    def test_non_riichi_actions_pass_through_before_and_after_branch(self) -> None:
+        tsumo = TsumoAction(actor=SELF, winning_tile=_tile("4s"))
+        decision = _riichi_decision(PINFU)
+        decision = replace(decision, legal_actions=(*decision.legal_actions, tsumo))
+        inner = _Scripted([tsumo, RIICHI, tsumo])
+        wrapper = self._wrapper(inner=inner)
+        self.assertEqual(wrapper.choose_action(decision), tsumo)
+        self.assertEqual(wrapper.status, BranchStatus.PENDING)
+        self.assertEqual(wrapper.choose_action(decision), _discard("1z"))
+        self.assertEqual(wrapper.choose_action(decision), tsumo)
+        self.assertEqual(wrapper.riichi_after_branch_count, 0)
+
+    def test_round_left_without_branch_is_missed(self) -> None:
+        inner = _Scripted([_discard("1z"), RIICHI])
+        wrapper = self._wrapper(inner=inner)
+        wrapper.choose_action(_riichi_decision(PINFU))
+        wrapper.choose_action(_riichi_decision(PINFU, **OTHER_ROUND))
+        self.assertEqual(wrapper.status, BranchStatus.MISSED)
+
+    def test_target_round_appearing_again_is_rejected(self) -> None:
+        for first in (_discard("1z"), RIICHI):
+            inner = _Scripted([first, RIICHI])
+            wrapper = self._wrapper(inner=inner)
+            wrapper.choose_action(_riichi_decision(PINFU))
+            wrapper.choose_action(_riichi_decision(PINFU, **OTHER_ROUND))
+            with self.subTest(first=first), self.assertRaises(RiichiDamaBranchError):
+                wrapper.choose_action(_riichi_decision(PINFU))
+
+    def test_riichi_in_other_round_after_branch_is_not_counted(self) -> None:
+        inner = _Scripted([RIICHI, RIICHI])
+        wrapper = self._wrapper(inner=inner)
+        wrapper.choose_action(_riichi_decision(PINFU))
+        self.assertEqual(
+            wrapper.choose_action(_riichi_decision(PINFU, **OTHER_ROUND)), RIICHI
+        )
+        self.assertEqual(wrapper.riichi_after_branch_count, 0)
+        self.assertEqual(wrapper.status, BranchStatus.BRANCHED)
+
+    def test_champion_behaviour_unchanged_outside_branch(self) -> None:
+        decisions = [
+            _riichi_decision(PINFU, **OTHER_ROUND),
+            _riichi_decision(SANSHOKU, **OTHER_ROUND),
+            DecisionContext(
+                input=_input(KANCHAN), legal_actions=_discards(_input(KANCHAN))
+            ),
+        ]
+        wrapper = self._wrapper()
+        for decision in decisions:
+            self.assertEqual(
+                wrapper.choose_action(decision),
+                PlacementAwareSpeedCallPolicy().choose_action(decision),
+            )
+
+    def test_input_and_constructor_types(self) -> None:
+        with self.assertRaises(TypeError):
+            RiichiFirstDamaBranchPolicy(object(), TARGET, _discard("1z"))
+        with self.assertRaises(TypeError):
+            RiichiFirstDamaBranchPolicy(CHAMPION, (Wind.EAST, 1, 0), _discard("1z"))
+        with self.assertRaises(TypeError):
+            RiichiFirstDamaBranchPolicy(CHAMPION, TARGET, RIICHI)
+        with self.assertRaises(TypeError):
+            self._wrapper().choose_action(object())
 
 
 class BoundaryTest(unittest.TestCase):

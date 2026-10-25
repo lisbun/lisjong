@@ -1,4 +1,4 @@
-# リーチ判断の特徴APIとD arm用リーチ抑止wrapper（Issue #352）
+# リーチ判断の特徴APIとD arm用wrapper（Issue #352・#357）
 
 設計の正本: [Arena #539](https://github.com/lisbun/lisjong-arena/issues/539)の「設計確定」§2・§4
 （**riichi-dama-branch-v1**）。consumer: [Arena #540](https://github.com/lisbun/lisjong-arena/issues/540)。
@@ -12,7 +12,8 @@ module: [`lisjong.policies.riichi_dama_branch`](../src/lisjong/policies/riichi_d
 | --- | --- |
 | `analyze_riichi_decision(decision, declaration_tile)` → `RiichiDecisionFeatures` | 判断時点の特徴（§4） |
 | `riichi_decision_features_to_value(features)` / `parse_riichi_decision_features(value)` | version付きJSON objectとの往復 |
-| `RiichiDamaBranchPolicy(inner, target_round, branch_discard)` | D armのwrapper（§2） |
+| `RiichiDamaBranchPolicy(inner, target_round, branch_discard)` | D armのwrapper（§2、riichi-dama-branch-v1） |
+| `RiichiFirstDamaBranchPolicy(inner, target_round, branch_discard)` | R1介入のD arm wrapper（§3、lisjong #357） |
 
 ## 1. 解析API
 
@@ -156,6 +157,29 @@ tile conservationの不整合は`derive_remaining_tile_inventory`の例外がそ
   ごとに新しいinstanceを使う。分岐の特定には局のidentityと`inner`の選択だけを使い、他席・山の情報は
   受け取らない
 
+## 3. R1 wrapper `RiichiFirstDamaBranchPolicy`（lisjong #357）
+
+設計: [#356](https://github.com/lisbun/lisjong/issues/356)のR1介入。consumer: [Arena #544](https://github.com/lisbun/lisjong-arena/issues/544)。
+**Rの宣言牌をリーチせずに打ち、その後はリーチを含めChampionへ戻す。** 差し替えは分岐点の1回だけである。
+§2の旧wrapper（対象局の残りもリーチを抑止）とは別の介入で、別class・別identityとする
+（`RiichiFirstDamaBranchPolicy.version = RIICHI_FIRST_DAMA_BRANCH_VERSION = "riichi-first-dama-branch-wrapper-v1"`）。
+旧wrapperのsubclassではなく、旧wrapperのclass・挙動は変えない。引数は§2と同じ。
+
+| 判断 | 返す行動 |
+| --- | --- |
+| 対象局以外 | `inner.choose_action(decision)`をそのまま返す（リーチを含む） |
+| 分岐前、対象局で`inner`がリーチ以外を選んだ | `inner`の行動のまま |
+| 対象局で`inner`が初めて`RiichiAction`を選んだ（分岐点） | `branch_discard`。合法手に完全一致で含まれなければ`RiichiDamaBranchError` |
+| 分岐後（同じ局） | `inner`の行動をそのまま返す。**`RiichiAction`も差し替えない**。合法手を作り直さず、`inner`は1判断につき1回だけ呼ぶ |
+
+- 状態は§2と同じ`BranchStatus`（`PENDING` / `BRANCHED` / `MISSED`）と、対象局の再出現の`RiichiDamaBranchError`
+- `riichi_after_branch_count`: 分岐後に対象局で`inner`の`RiichiAction`をそのまま返した回数。
+  分岐点の判断ではリーチは返らない（指定の打牌を返す）ので、分岐点の宣言が成立していないことと、
+  後続の正常なリーチを区別できる。後続のリーチがどの判断かはArenaが行動列から記録する
+- 判断をまたぐ状態を持つのはこのwrapperだけで、inner（Champion）は判断をまたぐ状態を持たない前提に立つ
+  （#356で静的に確認）。1つの対局・1つの席ごとに新しいinstanceを使う
+- 入力はその判断の`DecisionContext`と自分の宣言牌だけで、他席・山・privileged observer dataは受け取らない
+
 ## 検証
 
 [`tests/test_riichi_dama_branch.py`](../tests/test_riichi_dama_branch.py)で次を固定する
@@ -172,6 +196,9 @@ tile conservationの不整合は`derive_remaining_tile_inventory`の例外がそ
 - wrapper: 対象外の局の素通し、分岐点で指定の打牌、指定の打牌が合法でない場合（ツモ切りflag・赤・actor）の
   拒否、それ以降のリーチの差し替えと回数、innerがリーチを選ばない場合、`MISSED`、対象局の再出現の拒否、
   分岐以外でChampionと同じ行動
+- R1 wrapper（#357）: 旧wrapperと別identity・非subclass、分岐点で指定の打牌、指定の打牌が合法でない場合の拒否、
+  分岐後のリーチをそのまま返すこと、差し替えが1回だけでinnerを1判断1回だけ元の合法手で呼ぶこと、
+  別の局のリーチを数えないこと、`MISSED`、対象局の再出現の拒否、分岐以外でChampionと同じ行動、型検査
 - `check_candidate_imports`による情報境界（#296）の検査
 
 ## consumerへの引継ぎ
