@@ -903,13 +903,102 @@ class RiichiDamaBranchPolicy:
         return replacement
 
 
+RIICHI_FIRST_DAMA_BRANCH_VERSION = "riichi-first-dama-branch-wrapper-v1"
+"""`RiichiFirstDamaBranchPolicy`の介入の意味定義（lisjong #357、#356のR1）のversion。
+
+旧wrapper（`RiichiDamaBranchPolicy`、対象局の残りもリーチを抑止）とは別の介入である。"""
+
+
+class RiichiFirstDamaBranchPolicy:
+    """対象局の最初のリーチだけを指定の打牌へ替え、以後はリーチを含め`inner`へ戻すwrapper。
+
+    #356のR1介入（Rの宣言牌をリーチせずに打ち、その後はChampionのまま）。差し替えは分岐点の
+    1回だけで、分岐後の`RiichiAction`は差し替えずにそのまま返す。`RiichiDamaBranchPolicy`の
+    subclassではない（旧介入と同一視されないため）。
+    """
+
+    version = RIICHI_FIRST_DAMA_BRANCH_VERSION
+
+    def __init__(
+        self,
+        inner: Policy,
+        target_round: RoundIdentity,
+        branch_discard: DiscardAction,
+    ) -> None:
+        try:
+            choose_action = inner.choose_action
+        except AttributeError:
+            raise TypeError("inner must provide choose_action") from None
+        if not callable(choose_action):
+            raise TypeError("inner must provide choose_action")
+        if not isinstance(target_round, RoundIdentity):
+            raise TypeError("target_round must be a RoundIdentity")
+        if not isinstance(branch_discard, DiscardAction):
+            raise TypeError("branch_discard must be a DiscardAction")
+        self._inner = inner
+        self._target_round = target_round
+        self._branch_discard = branch_discard
+        self._seen_target = False
+        self._left_target = False
+        self._branched = False
+        self._riichi_after_branch_count = 0
+
+    @property
+    def target_round(self) -> RoundIdentity:
+        return self._target_round
+
+    @property
+    def branch_discard(self) -> DiscardAction:
+        return self._branch_discard
+
+    @property
+    def status(self) -> BranchStatus:
+        if self._branched:
+            return BranchStatus.BRANCHED
+        if self._left_target:
+            return BranchStatus.MISSED
+        return BranchStatus.PENDING
+
+    @property
+    def riichi_after_branch_count(self) -> int:
+        """分岐後に、対象局で`inner`の`RiichiAction`をそのまま返した回数。"""
+        return self._riichi_after_branch_count
+
+    def choose_action(self, decision: DecisionContext) -> InternalAction:
+        if not isinstance(decision, DecisionContext):
+            raise TypeError("decision must be a DecisionContext")
+        if RoundIdentity.of(decision.input.round) != self._target_round:
+            if self._seen_target:
+                self._left_target = True
+            return self._inner.choose_action(decision)
+        if self._left_target:
+            raise RiichiDamaBranchError("the target round appeared again")
+        self._seen_target = True
+
+        action = self._inner.choose_action(decision)
+        if self._branched:
+            if isinstance(action, RiichiAction):
+                self._riichi_after_branch_count += 1
+            return action
+        if not isinstance(action, RiichiAction):
+            return action
+        if self._branch_discard not in decision.legal_actions:
+            raise RiichiDamaBranchError(
+                "the branch discard is not an exact legal action"
+            )
+        self._branched = True
+        return self._branch_discard
+
+
 __all__ = [
     "RIICHI_DAMA_FEATURES_VERSION",
+    "RIICHI_FIRST_DAMA_BRANCH_VERSION",
     "BranchStatus",
     "RiichiDamaAnalysisError",
     "RiichiDamaBranchError",
     "RiichiDamaBranchPolicy",
     "RiichiDecisionFeatures",
+    "RiichiFirstDamaBranchPolicy",
     "RoundIdentity",
     "WaitFeatures",
     "WaitScore",
