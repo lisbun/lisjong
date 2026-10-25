@@ -121,8 +121,10 @@ class WaitAndScoreTest(unittest.TestCase):
                 limit=ScoreLimit.NONE,
                 winner_points=1000,
                 ron_payment=1000,
+                red_dora=0,
             ),
         )
+        self.assertEqual(wait.winning_tile, _tile("4s"))
         self.assertEqual((wait.dama_tsumo.han, wait.dama_tsumo.fu), (2, 20))
         self.assertEqual(
             (
@@ -320,6 +322,73 @@ class InvalidInputTest(unittest.TestCase):
 
 
 @_needs_scoring
+@_needs_scoring
+class RedFiveWinningTileTest(unittest.TestCase):
+    """#354: 通常5の上限を超える待ちだけ赤5で評価し、和了牌と赤の加点を返す。"""
+
+    # Arena #542 rehearsal-2の分岐 472006-9-1: 打7sで 123m 11p 333p 555p 67p（待ち5p・8p）
+    THREE_PLAIN_FIVES = "123m11p333p555p67p7s"
+    # 123m 789s 111p 4556p + 1z: 打1zで5p待ち（手に通常5pが2枚）
+    TWO_PLAIN_FIVES = "123m789s111p4556p1z"
+
+    def test_three_plain_fives_in_hand_evaluate_the_red_five(self) -> None:
+        features = analyze_riichi_decision(
+            _riichi_decision(self.THREE_PLAIN_FIVES), _tile("7s")
+        )
+        five, eight = _wait(features, "5p"), _wait(features, "8p")
+        self.assertEqual(five.winning_tile, _tile("0p"))
+        self.assertEqual(eight.winning_tile, _tile("8p"))
+        for score in (five.dama_tsumo, five.riichi_ron, five.riichi_tsumo):
+            self.assertEqual(score.red_dora, 1)
+        for score in (eight.dama_tsumo, eight.riichi_ron, eight.riichi_tsumo):
+            self.assertEqual(score.red_dora, 0)
+        # 赤で評価しても残り枚数は公開情報から数える（通常5p 3枚が手にある -> 残り1枚）
+        self.assertEqual(five.unseen_count, 1)
+        self.assertGreater(five.riichi_ron.han, eight.riichi_ron.han)
+
+    def test_plain_five_is_used_when_it_exists(self) -> None:
+        features = analyze_riichi_decision(
+            _riichi_decision(self.TWO_PLAIN_FIVES), _tile("1z")
+        )
+        five = _wait(features, "5p")
+        self.assertEqual(five.winning_tile, _tile("5p"))
+        self.assertEqual(five.riichi_ron.red_dora, 0)
+
+    def test_dora_indicator_counts_toward_the_plain_limit(self) -> None:
+        decision = _riichi_decision(self.TWO_PLAIN_FIVES, dora_indicators="5p")
+        five = _wait(analyze_riichi_decision(decision, _tile("1z")), "5p")
+        self.assertEqual(five.winning_tile, _tile("0p"))
+        self.assertEqual(five.riichi_ron.red_dora, 1)
+
+    def test_no_physical_winning_tile_is_rejected(self) -> None:
+        # 通常5p 3枚が手にあり、赤5pはドラ表示牌: 5p待ちはどの牌でも成立しない
+        decision = _riichi_decision(self.THREE_PLAIN_FIVES, dora_indicators="0p")
+        with self.assertRaises(RiichiDamaAnalysisError):
+            analyze_riichi_decision(decision, _tile("7s"))
+
+    def test_winning_tile_and_red_dora_round_trip(self) -> None:
+        features = analyze_riichi_decision(
+            _riichi_decision(self.THREE_PLAIN_FIVES), _tile("7s")
+        )
+        value = riichi_decision_features_to_value(features)
+        self.assertEqual(value["version"], "riichi-dama-features-v2")
+        (five,) = [wait for wait in value["waits"] if wait["tile_type"]["rank"] == 5]
+        self.assertEqual(
+            five["winning_tile"], {"category": "pinzu", "is_red": True, "rank": 5}
+        )
+        self.assertEqual(five["riichi_ron"]["red_dora"], 1)
+        text = json.dumps(value, sort_keys=True)
+        self.assertEqual(parse_riichi_decision_features(json.loads(text)), features)
+        broken = json.loads(text)
+        broken["waits"][0]["winning_tile"]["rank"] = 9
+        with self.assertRaises(RiichiDamaAnalysisError):
+            parse_riichi_decision_features(broken)
+        broken = json.loads(text)
+        broken["waits"][0]["riichi_ron"]["red_dora"] = -1
+        with self.assertRaises(RiichiDamaAnalysisError):
+            parse_riichi_decision_features(broken)
+
+
 class JsonRoundTripTest(unittest.TestCase):
     def _features(self) -> list[RiichiDecisionFeatures]:
         return [
@@ -354,6 +423,7 @@ class JsonRoundTripTest(unittest.TestCase):
         value = riichi_decision_features_to_value(self._features()[0])
         cases = [
             {**value, "version": "riichi-dama-features-v0"},
+            {**value, "version": "riichi-dama-features-v1"},
             {key: item for key, item in value.items() if key != "version"},
             {**value, "extra": 1},
             {**value, "furiten": 0},
