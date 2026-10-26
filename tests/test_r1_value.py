@@ -609,13 +609,23 @@ class EvaluationTest(_Tmp):
 
 class BoundaryTest(unittest.TestCase):
     def test_no_ml_framework_or_arena_import(self) -> None:
+        import subprocess
         import sys
 
         for module in (core, policy_module, evaluation):
             text = Path(module.__file__).read_text(encoding="utf-8")
             self.assertNotIn("import torch", text)
             self.assertNotIn("lisjong_arena", text.split('"""', 2)[-1])
-        self.assertNotIn("torch", sys.modules)
+        # 他のtestがtorchを読み込んでいても影響しないよう、新しいprocessで確かめる
+        probe = (
+            "import sys, lisjong.learning.r1_value, lisjong.learning.r1_value_policy, "
+            "lisjong.learning.r1_value_evaluation; "
+            "print(sorted(m for m in ('torch', 'lisjong_arena') if m in sys.modules))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+        )
+        self.assertEqual(result.stdout.strip(), "[]")
 
 
 if __name__ == "__main__":
