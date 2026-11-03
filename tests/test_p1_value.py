@@ -8,9 +8,11 @@ import hashlib
 import json
 import random
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from test_placement_aware_speed_call_policy import PASS, _input, _tile
 
@@ -22,6 +24,7 @@ from lisjong.policies import PlacementAwareSpeedCallPolicy
 from lisjong.policy_contract import DecisionContext
 from lisjong.policy_contract.action import PonAction
 from lisjong.policy_contract.discard import Discard
+from lisjong.policy_contract.meld import MeldKind, PublicMeld
 from lisjong.policy_contract.riichi import RiichiState
 from lisjong.policy_contract.seat import Seat
 
@@ -200,6 +203,10 @@ def write_block(
     (directory / "summary.json").write_text(
         canonical_json_text(summary), encoding="utf-8"
     )
+    # readerが内容を読まないfileも、protocolのfile集合として置く
+    for name in ("hanchans.json", "timings.json"):
+        (directory / name).write_text("{}", encoding="utf-8")
+    (directory / "actions.jsonl").write_text("{}\n", encoding="utf-8")
     resum(directory)
     return directory
 
@@ -298,6 +305,52 @@ class SourceReaderTest(_Tmp):
         with self.assertRaises(core.P1ValueError):
             core.read_source_block(directory)
 
+    def test_the_protocol_file_set_is_required(self) -> None:
+        # SHA256SUMSと実directoryの双方から欠けていても、protocolのfile集合で拒否する
+        missing = write_block(self.tmp / "missing", "TRAIN-1", rows=3)
+        (missing / "actions.jsonl").unlink()
+        resum(missing)
+        with self.assertRaisesRegex(core.P1ValueError, "holds exactly"):
+            core.read_source_block(missing)
+        extra = write_block(self.tmp / "extra", "TRAIN-1", rows=3)
+        (extra / "features.jsonl").write_text("{}\n", encoding="utf-8")
+        resum(extra)
+        with self.assertRaisesRegex(core.P1ValueError, "holds exactly"):
+            core.read_source_block(extra)
+        self.assertEqual(
+            core.SOURCE_FILES,
+            {
+                "SHA256SUMS",
+                "actions.jsonl",
+                "branches.jsonl",
+                "hanchans.json",
+                "summary.json",
+                "timings.json",
+            },
+        )
+
+    def test_read_source_needs_one_allocation_per_split(self) -> None:
+        for split, names, artifact in (
+            (core.TRAIN, ("TRAIN-1", "TRAIN-2", "TRAIN-3"), None),
+            (core.TEST, ("TEST-1", "TEST-2", "TEST-3"), "1" * 64),
+        ):
+            with self.subTest(split=split):
+                root = self.tmp / split
+                blocks = [
+                    write_block(
+                        root,
+                        name,
+                        rows=3,
+                        artifact=artifact,
+                        header={"allocation_identity": "f" * 64}
+                        if name.endswith("-3")
+                        else {},
+                    )
+                    for name in names
+                ]
+                with self.assertRaisesRegex(core.P1ValueError, "different allocations"):
+                    core.read_source(blocks, split)
+
     def test_read_source_needs_all_three_blocks_and_one_artifact(self) -> None:
         blocks = [
             write_block(self.tmp, name, rows=3) for name in ("TRAIN-1", "TRAIN-2")
@@ -395,6 +448,38 @@ class EncodingTest(unittest.TestCase):
         )
         self.assertEqual(vector["opponent_riichi"], 1.0)
         self.assertEqual(vector["is_dealer"], 1.0)
+
+    def test_ankan_tiles_count_as_dora_and_the_hand_shanten(self) -> None:
+        # 門前（暗槓4m）: 手牌10枚 123599m1122z、Wの9mをPon（Honitsuのスピード鳴き）。
+        # ドラ表示牌3m・8m -> ドラ4m・9m。暗槓4枚 + 手の99m（消費牌は1回だけ）+ 鳴いた9m = 7
+        kan = _tile("4m")
+        meld = PublicMeld(
+            kind=MeldKind.ANKAN, tiles=(kan,) * 4, from_seat=None, called_tile=None
+        )
+        context = _input("123599m1122z", own_melds=(meld,), dora_indicators="3m8m")
+        players = list(context.players)
+        players[2] = replace(
+            players[2],
+            discards=(
+                Discard(
+                    tile=_tile("9m"),
+                    tsumogiri=False,
+                    order=CALLED_ORDER,
+                    called_by=None,
+                ),
+            ),
+        )
+        pon = _pon("9m")
+        decision = DecisionContext(
+            input=replace(context, players=tuple(players)), legal_actions=(PASS, pon)
+        )
+        route = core.derived_route(decision, pon)
+        self.assertEqual(route, "CallDecisionRoute.SPEED_CALL")
+        vector = dict(zip(core.COLUMNS, core.encode(decision, pon, route), strict=True))
+        # Pon前: 123m・99m・11z・22z・5m（暗槓1つ）で1向聴。Pon後: 5mを切って123m・11z・22zの聴牌
+        self.assertEqual(vector["shanten_before_pon"], 1.0)
+        self.assertEqual(vector["min_shanten_after_pon"], 0.0)
+        self.assertEqual(vector["dora_count"], 7.0)
 
     def test_route_must_re_derive(self) -> None:
         decision, pon = _decision(0)
@@ -548,14 +633,87 @@ class EvaluationTest(_Tmp):
         self.assertEqual(document["decision"], expected)
         self.assertTrue(document["not_a_strength_result"])
 
+    def _counting_reads(self, *, wait=None, fail=False):
+        """``read_source``の呼び出し回数を数える（TESTを読んだかの確認）。"""
+        calls = []
+        real = evaluation.read_source
+
+        def read(directories, split):
+            calls.append(split)
+            if wait is not None:
+                wait.wait(timeout=30)
+            if fail:
+                raise RuntimeError("synthetic failure while reading TEST")
+            return real(directories, split)
+
+        return calls, mock.patch.object(evaluation, "read_source", read)
+
     def test_test_is_read_once_and_bound_to_the_artifact(self) -> None:
-        record = self.tmp / "records"
-        evaluation.run_evaluation(self.artifact_dir, self._tests(), record)
-        with self.assertRaises(core.P1ValueError):
-            evaluation.run_evaluation(self.artifact_dir, self._tests_again(), record)
+        document = evaluation.run_evaluation(self.artifact_dir, self._tests())
+        destination = evaluation.evaluation_dir(
+            self.artifact_dir, self.artifact.identity
+        )
+        self.assertEqual(destination.parent, self.artifact_dir.resolve().parent)
+        self.assertEqual(
+            {item.name for item in destination.iterdir()},
+            {evaluation.START_FILENAME, evaluation.EVALUATION_FILENAME},
+        )
+        stored = json.loads((destination / evaluation.EVALUATION_FILENAME).read_text())
+        self.assertEqual(stored, document)
+        start = json.loads((destination / evaluation.START_FILENAME).read_text())
+        self.assertEqual(start["schema"], evaluation.START_SCHEMA)
+        self.assertEqual(start["artifact_identity"], self.artifact.identity)
+        # 別のTEST directory（出力先の指定はない）でも、TESTを読む前に止まる
+        calls, patch = self._counting_reads()
+        with patch, self.assertRaisesRegex(core.P1ValueError, "already been started"):
+            evaluation.run_evaluation(self.artifact_dir, self._tests_again())
+        self.assertEqual(calls, [])
         other = self._tests_other()
         with self.assertRaises(core.P1ValueError):
             evaluation.evaluate(self.artifact, core.read_source(other, core.TEST))
+
+    def test_failed_evaluation_is_not_retried(self) -> None:
+        tests = self._tests()
+        calls, patch = self._counting_reads(fail=True)
+        with patch, self.assertRaises(RuntimeError):
+            evaluation.run_evaluation(self.artifact_dir, tests)
+        self.assertEqual(calls, ["TEST"])
+        destination = evaluation.evaluation_dir(
+            self.artifact_dir, self.artifact.identity
+        )
+        self.assertEqual(
+            {item.name for item in destination.iterdir()}, {evaluation.START_FILENAME}
+        )
+        calls, patch = self._counting_reads()
+        with patch, self.assertRaisesRegex(core.P1ValueError, "already been started"):
+            evaluation.run_evaluation(self.artifact_dir, tests)
+        self.assertEqual(calls, [])
+
+    def test_concurrent_evaluation_stops_before_reading_test(self) -> None:
+        release = threading.Event()
+        calls, patch = self._counting_reads(wait=release)
+        results = []
+        tests = self._tests()
+        with patch:
+            first = threading.Thread(
+                target=lambda: results.append(
+                    evaluation.run_evaluation(self.artifact_dir, tests)
+                )
+            )
+            first.start()
+            try:
+                for _ in range(300):
+                    if calls:
+                        break
+                    threading.Event().wait(0.01)
+                self.assertEqual(calls, ["TEST"])  # 1つ目は開始記録を取ってTESTを読み中
+                with self.assertRaisesRegex(core.P1ValueError, "already been started"):
+                    evaluation.run_evaluation(self.artifact_dir, self._tests_again())
+                self.assertEqual(calls, ["TEST"])  # 2つ目はTESTを読んでいない
+            finally:
+                release.set()
+                first.join(timeout=60)
+        self.assertEqual(len(results), 1)
 
     def _tests_again(self):
         root = self.tmp / "again"

@@ -62,6 +62,17 @@ SOURCE_PROTOCOL = "pon-first-pass-source-v1"
 BRANCHES_SCHEMA = "arena-pon-first-pass-source-v1-branches-v1"
 SUMMARY_SCHEMA = "arena-pon-first-pass-source-v1-summary-v1"
 SOURCE_COMPLETE = "SOURCE-COMPLETE"
+SOURCE_FILES = frozenset(
+    {
+        "SHA256SUMS",
+        "actions.jsonl",
+        "branches.jsonl",
+        "hanchans.json",
+        "summary.json",
+        "timings.json",
+    }
+)
+"""Arena pon-first-pass-source-v1のblock directoryのfile集合（欠落・追加を拒否）。"""
 ESTABLISHED = "ESTABLISHED"
 CANCELLED_RON = "CANCELLED-RON"
 TRAIN = "TRAIN"
@@ -252,6 +263,11 @@ def _decision_input(line: dict, seat: int, context: str):
 def read_source_block(directory: str | Path) -> SourceBlock:
     """1つのblock directoryをstrictに読む。"""
     directory = Path(directory)
+    if (
+        not directory.is_dir()
+        or {item.name for item in directory.iterdir()} != SOURCE_FILES
+    ):
+        _fail(f"a source block holds exactly {sorted(SOURCE_FILES)}")
     sums = _check_sums_p1(directory)
     summary = parse_json_text(
         _read_text_p1(directory / "summary.json"), P1ValueError, "summary"
@@ -396,6 +412,9 @@ def read_source(directories, split: str) -> tuple[SourceBlock, ...]:
     expected = sorted(name for name, (owner, _) in BLOCKS.items() if owner == split)
     if sorted(block.block for block in blocks) != expected:
         _fail(f"{split} needs exactly the blocks {expected}")
+    # allocationはsplit単位（3ブロックで1つ）
+    if len({block.allocation_identity for block in blocks}) != 1:
+        _fail(f"{split} blocks belong to different allocations")
     if split == TEST and len({block.artifact_identity for block in blocks}) != 1:
         _fail("TEST blocks are bound to different artifacts")
     return tuple(sorted(blocks, key=lambda block: block.block))
@@ -439,7 +458,12 @@ def encode(decision: DecisionContext, pon: PonAction, route: str) -> tuple[float
     dora = [
         _dora_tile_type(tile.tile_type) for tile in policy_input.round.dora_indicators
     ]
-    tiles = (*concealed, pon.called_tile)
+    # 門前（暗槓だけ許す）なので自席の副露は暗槓。暗槓の4枚も自分の牌として数える。
+    # Ponの消費牌は手牌（concealed）側で1回だけ数え、鳴かれた牌を1枚足す
+    ankan = tuple(
+        tile for meld in policy_input.players[seat].melds for tile in meld.tiles
+    )
+    tiles = (*concealed, *ankan, pon.called_tile)
     dora_count = sum(dora.count(tile.tile_type) for tile in tiles) + sum(
         tile.is_red for tile in tiles
     )
@@ -658,6 +682,7 @@ __all__ = [
     "OBJECTIVE",
     "RIDGE_LAMBDA",
     "SELECTION_FIELDS",
+    "SOURCE_FILES",
     "SOURCE_PROTOCOL",
     "SPLIT_SEEDS",
     "SUMMARY_SCHEMA",

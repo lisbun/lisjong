@@ -3,6 +3,9 @@
 ```text
 fit       TRAIN-1〜3 -> artifact（immutable directory）
 evaluate  artifact + TEST-1〜3（headerがそのartifact identityを束縛）-> 評価記録（write-once、1回）
+          正規の評価先 = artifactと同じ親directoryの ``p1-value-evaluation-<artifact identity>/``。
+          TESTを読む前にこのdirectoryを排他的に作り（``mkdir``、既存なら失敗）、開始記録
+          ``started.json`` を書く。作れなければTESTを読まずに止まる（保存先の指定はない）
 ```
 
 推定量（TESTの全成立分岐、Δは100点単位、m = TRAIN平均、ŷ = 凍結ridgeの予測）:
@@ -15,12 +18,15 @@ evaluate  artifact + TEST-1〜3（headerがそのartifact identityを束縛）->
   分母（行数）を再計算する。P5 = 昇順500番目（nearest rank）。**P5 > 0で通過**
 - 判定: E2不通過 -> NOT-PREDICTIVE。E2通過・E3不通過 -> PREDICTIVE-ONLY。
   両方通過 -> DECISION-VALUE-SIGNAL（E4の設計候補で、採用の根拠ではない）
-- 同じartifactでの評価記録は1つだけ（write-once）。TESTで再fitしない
+- 同じartifactでの評価は1回だけ。開始記録は評価の成否にかかわらず残り、同時起動・途中失敗の後の
+  2回目もTESTを読む前に拒否する（途中失敗は再実行せず報告する）。TESTで再fitしない
 """
 
 import argparse
+import datetime
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -41,6 +47,9 @@ from lisjong.learning.p1_value import (
 from lisjong.learning.r1_value_evaluation import P5_RANK, cluster_bootstrap
 
 EVALUATION_SCHEMA = "lisjong-p1-value-evaluation-v1"
+START_SCHEMA = "lisjong-p1-value-evaluation-start-v1"
+START_FILENAME = "started.json"
+EVALUATION_FILENAME = "evaluation.json"
 BOOTSTRAP_SEED = 365
 BOOTSTRAP_REPLICATES = 10_000
 NOT_PREDICTIVE = "NOT-PREDICTIVE"
@@ -147,19 +156,52 @@ def evaluate(artifact, test_blocks) -> dict:
     return seal(body)
 
 
-def evaluation_path(record_dir: str | Path, artifact_identity: str) -> Path:
-    return Path(record_dir) / f"evaluation-{artifact_identity}.json"
+def evaluation_dir(artifact_dir: str | Path, artifact_identity: str) -> Path:
+    """正規の評価先（artifactの実体pathの親に、artifact identity単位で1つ）。"""
+    try:
+        parent = Path(artifact_dir).resolve(strict=True).parent
+    except OSError as error:
+        raise P1ValueError(f"cannot resolve the artifact directory: {error}") from error
+    return parent / f"p1-value-evaluation-{artifact_identity}"
 
 
-def run_evaluation(artifact_dir, test_dirs, record_dir) -> dict:
-    """同じartifactの評価記録が既にあれば拒否する（TESTを1回だけ読む）。"""
+def claim_evaluation(artifact_dir, artifact_identity: str, test_dirs) -> Path:
+    """TESTを読む前に評価先を排他的に作り、開始記録を書く（2回目は作れずに止まる）。"""
+    destination = evaluation_dir(artifact_dir, artifact_identity)
+    try:
+        os.mkdir(destination)
+    except FileExistsError:
+        _fail(
+            "this artifact's evaluation has already been started (completed, running "
+            f"or failed); TEST is read only once: {destination}"
+        )
+    except OSError as error:
+        raise P1ValueError(f"cannot create the evaluation record: {error}") from error
+    start = {
+        "artifact_dir": str(Path(artifact_dir).resolve(strict=True)),
+        "artifact_identity": artifact_identity,
+        "pid": os.getpid(),
+        "schema": START_SCHEMA,
+        "started_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+        "test_dirs": [str(Path(item).resolve(strict=False)) for item in test_dirs],
+    }
+    write_new_text(
+        destination / START_FILENAME, canonical_json_text(start), P1ValueError
+    )
+    return destination
+
+
+def run_evaluation(artifact_dir, test_dirs) -> dict:
+    """TESTを1回だけ評価する。開始記録を取得できなければTESTを読まずに止まる。"""
     artifact = load_artifact(artifact_dir)
-    destination = evaluation_path(record_dir, artifact.identity)
-    if destination.exists():
-        _fail(f"this artifact has already been evaluated: {destination}")
+    test_dirs = list(test_dirs)
+    destination = claim_evaluation(artifact_dir, artifact.identity, test_dirs)
     document = evaluate(artifact, read_source(test_dirs, TEST))
-    Path(record_dir).mkdir(parents=True, exist_ok=True)
-    write_new_text(destination, canonical_json_text(document), P1ValueError)
+    write_new_text(
+        destination / EVALUATION_FILENAME,
+        canonical_json_text(document),
+        P1ValueError,
+    )
     return document
 
 
@@ -182,15 +224,23 @@ def main(argv: list[str] | None = None) -> int:
     evaluation = sub.add_parser("evaluate", help="evaluate once on TEST-1..3")
     evaluation.add_argument("--artifact", required=True)
     evaluation.add_argument("--test", nargs="+", required=True)
-    evaluation.add_argument("--record-dir", required=True)
     args = parser.parse_args(argv)
     if args.command == "fit":
         document = run_fit(args.train, args.output)
         print(json.dumps({"identity": document["identity"], **document["diagnostics"]}))
         return 0
-    document = run_evaluation(args.artifact, args.test, args.record_dir)
+    document = run_evaluation(args.artifact, args.test)
     print(
-        json.dumps({"decision": document["decision"], "identity": document["identity"]})
+        json.dumps(
+            {
+                "decision": document["decision"],
+                "identity": document["identity"],
+                "record": str(
+                    evaluation_dir(args.artifact, document["artifact_identity"])
+                    / EVALUATION_FILENAME
+                ),
+            }
+        )
     )
     return 0
 
@@ -199,11 +249,15 @@ __all__ = [
     "BOOTSTRAP_REPLICATES",
     "BOOTSTRAP_SEED",
     "DECISION_VALUE_SIGNAL",
+    "EVALUATION_FILENAME",
     "EVALUATION_SCHEMA",
     "NOT_PREDICTIVE",
     "PREDICTIVE_ONLY",
+    "START_FILENAME",
+    "START_SCHEMA",
+    "claim_evaluation",
     "evaluate",
-    "evaluation_path",
+    "evaluation_dir",
     "evaluation_values",
     "main",
     "run_evaluation",
