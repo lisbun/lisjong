@@ -58,11 +58,14 @@ def _fail(message: str):
     raise R1ValueError(message)
 
 
-def cluster_bootstrap(seeds, rows_by_seed) -> dict:
-    """``rows_by_seed[seed]`` は (合計, 行数)。比 = 抽出seedの合計の和 / 行数の和。"""
+def cluster_bootstrap(seeds, rows_by_seed, *, rng_seed: int = BOOTSTRAP_SEED) -> dict:
+    """``rows_by_seed[seed]`` は (合計, 行数)。比 = 抽出seedの合計の和 / 行数の和。
+
+    ``rng_seed``の既定はR1の356。別の評価（P1 #366）は自分のseedを渡す。
+    """
     seeds = sorted(seeds)
     m = len(seeds)
-    rng = random.Random(BOOTSTRAP_SEED)
+    rng = random.Random(rng_seed)
     statistics = []
     for _ in range(BOOTSTRAP_REPLICATES):
         total = 0.0
