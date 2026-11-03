@@ -510,40 +510,57 @@ def _solve(matrix: list[list[float]], vector: list[float]) -> list[float]:
     return [rows[i][n] / rows[i][i] for i in range(n)]
 
 
-def standardization(matrix) -> list[list[float]]:
-    """連続列のTRAIN平均・母分散（nで割る）。分散0の列はエラー。"""
+def standardization(
+    matrix, *, continuous=CONTINUOUS, columns=COLUMNS, error=R1ValueError
+) -> list[list[float]]:
+    """連続列のTRAIN平均・母分散（nで割る）。分散0の列はエラー。
+
+    ``continuous`` / ``columns`` / ``error`` の既定はR1。別の価値モデル（P1 #366）は自分の列を渡す。
+    """
     n = len(matrix)
     result = []
-    for column in CONTINUOUS:
+    for column in continuous:
         values = [row[column] for row in matrix]
         mean = math.fsum(values) / n
         variance = math.fsum((value - mean) ** 2 for value in values) / n
         if not variance > 0:
-            _fail(f"the continuous column {COLUMNS[column]} has zero variance")
+            raise error(f"the continuous column {columns[column]} has zero variance")
         result.append([mean, variance])
     return result
 
 
-def standardize(vector, scaling) -> list[float]:
+def standardize(vector, scaling, *, continuous=CONTINUOUS) -> list[float]:
     out = list(vector)
-    for (mean, variance), column in zip(scaling, CONTINUOUS, strict=True):
+    for (mean, variance), column in zip(scaling, continuous, strict=True):
         out[column] = (vector[column] - mean) / math.sqrt(variance)
     return out
 
 
-def fit_ridge(matrix, targets) -> tuple[list[list[float]], float, list[float]]:
-    """``(scaling, intercept, coefficients)``。目的関数は ``OBJECTIVE``。"""
+def fit_ridge(
+    matrix,
+    targets,
+    *,
+    continuous=CONTINUOUS,
+    columns=COLUMNS,
+    ridge_lambda=RIDGE_LAMBDA,
+    error=R1ValueError,
+) -> tuple[list[list[float]], float, list[float]]:
+    """``(scaling, intercept, coefficients)``。目的関数は ``OBJECTIVE``（λの既定はR1の10）。"""
     if len(matrix) != len(targets) or len(matrix) < 2:
-        _fail("ridge needs at least two rows")
-    scaling = standardization(matrix)
-    design = [[1.0, *standardize(row, scaling)] for row in matrix]
+        raise error("ridge needs at least two rows")
+    scaling = standardization(
+        matrix, continuous=continuous, columns=columns, error=error
+    )
+    design = [
+        [1.0, *standardize(row, scaling, continuous=continuous)] for row in matrix
+    ]
     k = len(design[0])
     gram = [
         [math.fsum(row[i] * row[j] for row in design) for j in range(k)]
         for i in range(k)
     ]
     for index in range(1, k):
-        gram[index][index] += RIDGE_LAMBDA
+        gram[index][index] += ridge_lambda
     moment = [
         math.fsum(row[i] * float(t) for row, t in zip(design, targets, strict=True))
         for i in range(k)
