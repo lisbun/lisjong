@@ -92,8 +92,8 @@ passed(r)  r のリーチ宣言牌より後に、r 以外の席（自席を含�
 |---|---|---|
 | project標準のRuleSet（規則の定義） | lisjong `85c81f5` の規則文書 | 規則1は確認済み。規則2は規則文書に明文がなく、engineの規則で確認 |
 | lisjong-engine | `91af75e3aa11520c3b0543719dc74bb4c517ee06` | 確認済み（規則文書・実装・2026-11-06の固定局面test。下記参照） |
-| RiichiEnv | 0.4.10 | 確認済み（局面テスト） |
-| RiichiLab（対局server） | — | **未確認** |
+| RiichiEnv | 0.4.10 / 0.4.11 | 確認済み（各固定版の局面テスト。0.4.11はArena #561のCI） |
+| RiichiLab（4人用対局server） | 0.4.11（2026-11-06ユーザーによる稼働版表示の報告） | 規則確認済み（公式の共通core説明＋固定版実装＋CI局面test。live test未実施） |
 
 #### project標準のRuleSet
 
@@ -140,7 +140,6 @@ PYTHONPATH=src:tests:/path/to/extra-tests python -m unittest -v \
   test_riichi_passed_tile_rules
 ```
 
-
 #### RiichiEnv 0.4.10
 
 - **採用規則**：RiichiEnv 0.4.10の合法手生成（MJAI replayの `Kyoku.steps()` が各判断時点で
@@ -160,26 +159,43 @@ PYTHONPATH=src:tests:/path/to/extra-tests python -m unittest -v \
   フリテンのflagを更新しない（lisbun/lisjong-arena#247）。これはreplay経路の再現の差であり、
   対局中の規則の差ではない。Arena側のreplayが補っている。
 
-#### RiichiLab（対局server）
+#### RiichiEnv 0.4.11 / RiichiLab（4人用対局server）
 
-**未確認のまま。自動適用は解禁しない。** 2026-11-06 JSTに公開根拠を調べ直した。
+2026-11-06 JSTに、次の根拠を対応付けて**前提規則を確認済み**とした。
+確認対象は4人用coreの上記2規則であり、候補の棋力・稼働bot切替の承認ではない。
 
-- [公式Local Testing文書](https://riichi.dev/docs/local-testing) は、serverが
-  `riichienv-core`を使い、Python packageが同じRust coreを包むと説明している。
-  共通実装であることの根拠であり、稼働中serverが検証済み0.4.10そのものだという
-  versionの証拠にはしない。
-- [公式告知 #252（2026-10-28）](https://github.com/smly/RiichiEnv/discussions/252) は、
-  稼働engineのversion表示を追加したと説明している。ただし今回の取得では表示値を
-  確認できなかった。最新release番号から稼働versionを推測しない。
-- [upstream #192](https://github.com/smly/RiichiEnv/issues/192) にはreleaseとserverへの
-  deployに時間差があった事例もある。これは現在の不具合を示すものではなく、releaseと
-  deployを同一視しない理由である。
+1. **稼働版**：ユーザーがRiichiLab画面の表示を`RiichiEnv v0.4.11`と報告した
+   （[#302記録](https://github.com/lisbun/lisjong/issues/302#issuecomment-6663855284)）。
+   AIが画面を直接確認したものではなく、個別ページURLは未提供。
+   [公式告知 #252](https://github.com/smly/RiichiEnv/discussions/252) は2026-10-28に
+   稼働engineのversion表示を追加したと説明している。
+2. **serverと検証対象の対応**：
+   [公式Local Testing文書](https://riichi.dev/docs/local-testing) は、serverが
+   `riichienv-core`を使い、Python packageが同じRust coreを包むと説明している。
+   この説明と稼働版報告を組み合わせる。最新release番号だけから推測したものではない。
+3. **固定版実装**：upstream `v0.4.11`、commit
+   `cd450aef2cc3d0dc8654bf81f314c0c82f9c9829`の4人用stateを確認した。
+   - [state/mod.rs](https://github.com/smly/RiichiEnv/blob/cd450aef2cc3d0dc8654bf81f314c0c82f9c9829/riichienv-core/src/state/mod.rs#L897)：
+     WaitResponseでロン可能だったのにロンしなかった立直者に`missed_agari_riichi`を設定する。
+     自分の打牌で解除するのは`missed_agari_doujun`だけである。
+   - [state/player.rs](https://github.com/smly/RiichiEnv/blob/cd450aef2cc3d0dc8654bf81f314c0c82f9c9829/riichienv-core/src/state/player.rs#L66)：
+     `missed_agari_riichi`の解除は局resetで行う。
+   - [state/legal_actions.rs](https://github.com/smly/RiichiEnv/blob/cd450aef2cc3d0dc8654bf81f314c0c82f9c9829/riichienv-core/src/state/legal_actions.rs)：
+     67行以降で立直後はツモ切りだけを提示、176行以降でツモ牌を含む暗槓の前後の
+     待ち集合が同一かつ空でないときだけ暗槓を提示、275行以降で見逃しフリテンのロンを除外する。
+     この条件は`GameRule`の切替で緩められる分岐ではない。
+4. **0.4.11での局面test**：Arena [PR #561](https://github.com/lisbun/lisjong-arena/pull/561)
+   （merge `b2db57719e42169bd23b7e229c903d0bef208210`）で既にpinとtestを更新していた。
+   head `8bde1a189faf2408b8c152711feb0a47cf2a5fd5`のCI `tests-shard-2`
+   （[job `127275360878`](https://github.com/lisbun/lisjong-arena/actions/runs/42036120881/job/127275360878)）のlogで、`test_riichienv_riichi_safe_tile_rules`全8 testsのPASSを
+   今回確認した。各setUpはinstalled versionが0.4.11であることをassertする。
+   同牌・別待ちの見逃し、自己ツモ後の継続、見逃し前のロン提示、暗槓の待ち不変、
+   ツモ切り限定を検証する。0.4.10の結果の転用でも、今回のlocal再実行でもない。
 
-残る確認は、(1) serverに表示されるengine versionと確認日時・出典、(2) その版の
-見逃しフリテン継続と立直後の待ち不変の実装・設定、(3) 固定版での該当局面testの対応付け。
-版が0.4.10なら既存のreplay testとの対応を確認する。異なる版ならその版で確認し、
-0.4.10の結果をそのまま転用しない。現在のversionが分かっても、過去の#489の対局時点に
-遡って同じ版だったとは扱わない。bot接続・新規対局による確認は今回行っていない。
+**限界と適用範囲**：serverへのbot接続test、server binary hash・個別deployの独立検証は
+行っていない。実装と局面testの対応は公式の共通core説明とユーザーの版報告に基づく。
+現在の版を過去の#489の実戦時点へ遡及しない。版が変われば再確認し、未知の版へ
+自動適用しない。live稼働・候補評価・Champion変更は従来どおり別の判断である。
 
 ### 補助証拠の区別（2026-11-06 JST照合）
 
@@ -191,12 +207,12 @@ PYTHONPATH=src:tests:/path/to/extra-tests python -m unittest -v \
 | [Arena #493移行照合](https://github.com/lisbun/lisjong/issues/302#issuecomment-6234825958) | 同じ423席を更新後Adapterでoffline replay。67,090判断行、宣言位置の一意な比較15,517件、旧診断で複数候補の30行は照合対象外 | 宣言位置の不一致0件という報告 | ロン違反の計数。この実行では実施していない |
 | [Arena #503補助検査](https://github.com/lisbun/lisjong/issues/302#issuecomment-6245467517) | engine `91af75e`、lisjong `174bf48`、Arena `e7affd6`。1,300半荘中の記録対象席で、自席非リーチ・他家リーチ者がちょうど1人の49,294打牌（通った牌だけ7,253） | `safe(r)`の打牌を対象リーチ者にロンされた違反0件という報告 | RiichiLabの規則・実戦検査、規則の証明、候補の棋力 |
 
-#489はArena `50b8082ecf89bfeea0887138f7f0357201df1df5`、lisjong
+Arena #489はArena `50b8082ecf89bfeea0887138f7f0357201df1df5`、lisjong
 `51e832e50a0ee71eac65e4a017f46590e7438c04`、RiichiEnv 0.4.10 / Rustによる旧診断。
 出力正本はユーザーPCの
 `C:\Dev\lisjong-artifacts\issue-483-r1-choice-loss\issue-489-champion-play.json`（schema v3）。
-#493のAdapter供給開始はArena `1a1cce76b2a052986c9f6746702a237c63af9e7c`であり、
-#489の「0件」をこの更新後の再検査として扱わない。
+Arena #493のAdapter供給開始はArena `1a1cce76b2a052986c9f6746702a237c63af9e7c`であり、
+Arena #489の「0件」をこの更新後の再検査として扱わない。
 
 したがって、過去コメントの「実対局検査は未実施」と「423席は別途0件」は、
 **更新後Adapterでのロン検査は未実施／旧診断の限定710打牌では0件と報告済み**と
