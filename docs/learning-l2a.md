@@ -548,3 +548,6 @@ C0固有層ではM1 0.726に対しM0 0.423である（B-TSは定義上0）。こ
 [限定CALL診断](learning-l2a-call-diagnostic.md)を参照。
 
 #326の公開解析値を明示した限定開発比較は[公開解析値の限定開発比較](learning-l2a-public-call.md)を参照。
+
+旧runtime（`999553b`）と新runtimeでM1 / R1の判断を対局なしで照合する道具（#369、未実測）は
+[runtime互換確認tool](learning-l2a-runtime-compat.md)を参照。
