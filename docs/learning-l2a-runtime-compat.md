@@ -26,7 +26,7 @@ toolの`COMPLETE` / `MATCH`は道具の判定であり、互換PASSの記録は�
 | 分類 | `lisjong-l2a-decision-classification-v1` |
 | source（arena#506） | `ba02b59163e17e128b998c80f59dc386c49796fc3dd35f67b88dc2c756421aaa` |
 
-#326のpublic-call R1へは差し替えない。weights・source・reportはrepositoryへcommitしない。
+public-call R1（#326）へは差し替えない。weights・source・reportはrepositoryへcommitしない。
 
 ## 設計
 
