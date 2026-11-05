@@ -91,7 +91,7 @@ passed(r)  r のリーチ宣言牌より後に、r 以外の席（自席を含�
 | 環境 | 確認した version / revision | 状態 |
 |---|---|---|
 | project標準のRuleSet（規則の定義） | lisjong `85c81f5` の規則文書 | 規則1は確認済み。規則2は規則文書に明文がなく、engineの規則で確認 |
-| lisjong-engine | `91af75e3aa11520c3b0543719dc74bb4c517ee06` | 確認済み（規則文書と実装の確認。局面テストは本Issueでは実行していない） |
+| lisjong-engine | `91af75e3aa11520c3b0543719dc74bb4c517ee06` | 確認済み（規則文書・実装・2026-11-06の固定局面test。下記参照） |
 | RiichiEnv | 0.4.10 | 確認済み（局面テスト） |
 | RiichiLab（対局server） | — | **未確認** |
 
@@ -113,7 +113,33 @@ passed(r)  r のリーチ宣言牌より後に、r 以外の席（自席を含�
   `cleared_temporary_reason` は自分のツモ番で同巡フリテンだけを解除し、`RIICHI` を維持する。
 - **規則2の根拠**：`docs/rules.md` の「RiichiAnkanPolicy」。送り槓禁止（暗槓にツモ牌を含むこと）と
   待ち牌種類の不変は、全policy共通の必須条件である。
-- **確認方法**：公開仕様（規則文書）と実装確認。局面テストは本Issueでは実行していない。
+- **確認方法**：公開仕様（規則文書）と実装確認に加え、2026-11-06 JSTに固定revisionの
+  既存32 testsをCPython 3.14.9 / Linuxで実行し、すべてPASSした。
+  `test_furiten`、`test_kan.ValidateRiichiAnkanTest`、
+  `test_round_state.RoundStateFuritenTest`、
+  `RoundStateRiichiTest.test_an_established_riichi_seat_may_only_discard_the_drawn_tile`
+  が対象。待ち不変の暗槓の許可、待ちを変える暗槓・送り槓の拒否、成立後のツモ切り限定を含む。
+- **追加の局面test**：
+  [engine PR #65](https://github.com/lisbun/lisjong-engine/pull/65) の
+  `test_riichi_passed_tile_rules.py` は、5s/8s待ちの合成配牌から公開APIだけで進め、
+  立直成立→ロン可能な牌を見逃し→自分のツモ番とツモ切り→同じ待ち牌または別の待ち牌の
+  打牌、でロンが合法手に出ないことを確認する。5s→5s、5s→8s、8s→5sの3ケース。
+  各待ちが見逃し前にロン可能な正の対照も含む。
+  この1 test / 3 subcasesを、上記`91af75e`のsourceとfixture、および
+  `f11d925f8ce32fa487a4d2159939049d50fb4917`のsourceとfixtureで実行し、両方PASSした。
+  外部serverのテストでも、半荘対局による検査でもない。
+
+旧revisionでの再現は、追加testだけを別ディレクトリに置き、旧checkoutで次を実行する。
+`/path/to/extra-tests`には追加testだけを置く（新しいfixtureやsourceを混ぜない）。
+
+```sh
+PYTHONPATH=src:tests:/path/to/extra-tests python -m unittest -v \
+  test_furiten test_kan.ValidateRiichiAnkanTest \
+  test_round_state.RoundStateFuritenTest \
+  test_round_state.RoundStateRiichiTest.test_an_established_riichi_seat_may_only_discard_the_drawn_tile \
+  test_riichi_passed_tile_rules
+```
+
 
 #### RiichiEnv 0.4.10
 
@@ -136,15 +162,48 @@ passed(r)  r のリーチ宣言牌より後に、r 以外の席（自席を含�
 
 #### RiichiLab（対局server）
 
-- **未確認。** serverが採用する規則の公開仕様と、server実装のversionを確認できていない。
-- 確認できるまで、基盤の自動適用の対象に含めない。候補をRiichiLabで稼働・評価する前に、
-  確認方法（公開仕様の確認、または規則が現れる局面の対局記録の照合）を別に決める。
+**未確認のまま。自動適用は解禁しない。** 2026-11-06 JSTに公開根拠を調べ直した。
 
-### 補助証拠
+- [公式Local Testing文書](https://riichi.dev/docs/local-testing) は、serverが
+  `riichienv-core`を使い、Python packageが同じRust coreを包むと説明している。
+  共通実装であることの根拠であり、稼働中serverが検証済み0.4.10そのものだという
+  versionの証拠にはしない。
+- [公式告知 #252（2026-10-28）](https://github.com/smly/RiichiEnv/discussions/252) は、
+  稼働engineのversion表示を追加したと説明している。ただし今回の取得では表示値を
+  確認できなかった。最新release番号から稼働versionを推測しない。
+- [upstream #192](https://github.com/smly/RiichiEnv/issues/192) にはreleaseとserverへの
+  deployに時間差があった事例もある。これは現在の不具合を示すものではなく、releaseと
+  deployを同一視しない理由である。
 
-Champion実戦423席（RiichiLabでの対局。lisbun/lisjong-arena#489）では、通った牌を切った
-710 打牌のうち、ロンされたものは0件だった。0件であることは規則の成立を証明しないので、
-主な根拠にはしない。RiichiLabを確認済みとする根拠にもしない。
+残る確認は、(1) serverに表示されるengine versionと確認日時・出典、(2) その版の
+見逃しフリテン継続と立直後の待ち不変の実装・設定、(3) 固定版での該当局面testの対応付け。
+版が0.4.10なら既存のreplay testとの対応を確認する。異なる版ならその版で確認し、
+0.4.10の結果をそのまま転用しない。現在のversionが分かっても、過去の#489の対局時点に
+遡って同じ版だったとは扱わない。bot接続・新規対局による確認は今回行っていない。
+
+### 補助証拠の区別（2026-11-06 JST照合）
+
+次はGitHubの実行記録の照合であり、local artifactの再集計・hashの独立再検証ではない。
+
+| 記録 | 環境・入力と分母 | 確認できること | 確認できないこと |
+|---|---|---|---|
+| [Arena #489結果](https://github.com/lisbun/lisjong-arena/issues/489#issuecomment-6127205027) | RiichiLab実戦dev 209席・baseline 214席（共有66対局）。旧診断のR1 7,878打牌のうち、最小向聴1以上・合法打牌の現物が「通った牌だけ」で、実際に通った牌を切った710打牌（dev 324 / baseline 386） | この限定集合でロンされた打牌0件という実行報告 | 全423席の全打牌での検査、更新後Adapterでの`passed(r)`再検査、server規則の証明 |
+| [Arena #493移行照合](https://github.com/lisbun/lisjong/issues/302#issuecomment-6234825958) | 同じ423席を更新後Adapterでoffline replay。67,090判断行、宣言位置の一意な比較15,517件、旧診断で複数候補の30行は照合対象外 | 宣言位置の不一致0件という報告 | ロン違反の計数。この実行では実施していない |
+| [Arena #503補助検査](https://github.com/lisbun/lisjong/issues/302#issuecomment-6245467517) | engine `91af75e`、lisjong `174bf48`、Arena `e7affd6`。1,300半荘中の記録対象席で、自席非リーチ・他家リーチ者がちょうど1人の49,294打牌（通った牌だけ7,253） | `safe(r)`の打牌を対象リーチ者にロンされた違反0件という報告 | RiichiLabの規則・実戦検査、規則の証明、候補の棋力 |
+
+#489はArena `50b8082ecf89bfeea0887138f7f0357201df1df5`、lisjong
+`51e832e50a0ee71eac65e4a017f46590e7438c04`、RiichiEnv 0.4.10 / Rustによる旧診断。
+出力正本はユーザーPCの
+`C:\Dev\lisjong-artifacts\issue-483-r1-choice-loss\issue-489-champion-play.json`（schema v3）。
+#493のAdapter供給開始はArena `1a1cce76b2a052986c9f6746702a237c63af9e7c`であり、
+#489の「0件」をこの更新後の再検査として扱わない。
+
+したがって、過去コメントの「実対局検査は未実施」と「423席は別途0件」は、
+**更新後Adapterでのロン検査は未実施／旧診断の限定710打牌では0件と報告済み**と
+読み分ける。「423席すべてを検査して安全性確認済み」という要約は使わない。
+更新後AdapterでのRiichiLab補助検査は、対象artifactがこの作業環境にないため未実施。
+追加の実戦集計・再取得を暗黙に開始しない。いずれの0件も規則成立の主根拠にせず、
+RiichiLabを確認済みとする根拠にもしない。
 
 ## 情報境界
 
