@@ -4,10 +4,13 @@
 """
 
 import copy
+import importlib.metadata
 import importlib.util
 import io
 import json
 import math
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -576,6 +579,135 @@ class RuntimeBlockTests(unittest.TestCase):
             with self.subTest(values=values):
                 with self.assertRaises(tool.CompatError):
                     tool.float32_bytes(values, "v")
+
+
+_GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_EMAIL": "test@example.invalid",
+    "GIT_AUTHOR_NAME": "test",
+    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    "GIT_COMMITTER_NAME": "test",
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+}
+
+
+def _run_git(root, *arguments) -> str:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        env=_GIT_ENV,
+        text=True,
+    ).stdout.strip()
+
+
+def _commit_repository(root, files) -> str:
+    root.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    _run_git(root, "init", "-q")
+    _run_git(root, "add", "-A")
+    _run_git(root, "commit", "-q", "-m", "fixture")
+    return _run_git(root, "rev-parse", "HEAD")
+
+
+def _install_distribution(site, files, commit):
+    """site-packagesへVCS installされたlisjongとそのdist-infoを書く。"""
+    package = site / "lisjong"
+    package.mkdir(parents=True)
+    records = []
+    for name, data in files.items():
+        path = package / name
+        path.write_bytes(data)
+        records.append(f"lisjong/{name},{tool.record_hash(path)},{len(data)}")
+    info = site / "lisjong-0.1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Name: lisjong\nVersion: 0.1.0\n", encoding="utf-8")
+    (info / "direct_url.json").write_text(
+        json.dumps(
+            {
+                "url": "https://example.invalid/lisjong.git",
+                "vcs_info": {"commit_id": commit, "vcs": "git"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    records.append("lisjong-0.1.0.dist-info/METADATA,,")
+    records.append("lisjong-0.1.0.dist-info/RECORD,,")
+    (info / "RECORD").write_text("\n".join(records) + "\n", encoding="utf-8")
+    return package, importlib.metadata.PathDistribution(info)
+
+
+@unittest.skipUnless(shutil.which("git"), "requires git")
+class LisjongRevisionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.root = Path(self.directory.name)
+
+    def tearDown(self) -> None:
+        self.directory.cleanup()
+
+    def _venv_in_parent_checkout(self, name="parent"):
+        parent = self.root / name
+        parent_head = _commit_repository(
+            parent, {".gitignore": ".venv/\n", "README": "parent\n"}
+        )
+        site = parent / ".venv" / "lib" / "python3.14" / "site-packages"
+        package, distribution = _install_distribution(
+            site, {"__init__.py": b"VALUE = 1\n", "core.py": b"x = 1\n"}, "c" * 40
+        )
+        return parent_head, package, distribution
+
+    def test_ignored_venv_is_not_taken_for_the_parent_checkout(self) -> None:
+        parent_head, package, distribution = self._venv_in_parent_checkout()
+        value = tool.lisjong_revision(package, distribution=distribution)
+        self.assertEqual(value["method"], "vcs-install")
+        self.assertEqual(value["revision"], "c" * 40)
+        self.assertNotEqual(value["revision"], parent_head)
+        self.assertEqual(value["verified_files"], 2)
+
+    def test_changed_installed_package_is_rejected(self) -> None:
+        _, package, distribution = self._venv_in_parent_checkout()
+        (package / "core.py").write_bytes(b"x = 2\n")
+        with self.assertRaisesRegex(tool.CompatError, "RECORD hash"):
+            tool.lisjong_revision(package, distribution=distribution)
+
+        _, package, distribution = self._venv_in_parent_checkout("again")
+        (package / "injected.py").write_bytes(b"y = 1\n")
+        with self.assertRaisesRegex(tool.CompatError, "without a RECORD hash"):
+            tool.lisjong_revision(package, distribution=distribution)
+
+    def test_editable_checkout_is_accepted_only_when_clean(self) -> None:
+        checkout = self.root / "lisjong"
+        head = _commit_repository(
+            checkout,
+            {
+                ".gitignore": "__pycache__/\n*.local.py\n",
+                "src/lisjong/__init__.py": "VALUE = 1\n",
+                "src/lisjong/core.py": "x = 1\n",
+            },
+        )
+        package = checkout / "src" / "lisjong"
+        cache = package / "__pycache__"
+        cache.mkdir()
+        (cache / "core.cpython-314.pyc").write_bytes(b"cache")
+        self.assertEqual(
+            tool.lisjong_revision(package, distribution=None),
+            {"method": "git-checkout", "revision": head},
+        )
+
+        (package / "core.py").write_text("x = 2\n", encoding="utf-8")
+        with self.assertRaisesRegex(tool.CompatError, "uncommitted"):
+            tool.lisjong_revision(package)
+        _run_git(checkout, "checkout", "--", "src/lisjong/core.py")
+
+        (package / "extra.local.py").write_text("y = 1\n", encoding="utf-8")
+        with self.assertRaisesRegex(tool.CompatError, "does not track"):
+            tool.lisjong_revision(package)
 
 
 class ImportBoundaryTests(unittest.TestCase):

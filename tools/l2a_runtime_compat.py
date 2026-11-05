@@ -434,28 +434,69 @@ def _direct_url(distribution) -> dict:
     return value if type(value) is dict else {}
 
 
-def lisjong_revision(package_dir: Path) -> dict[str, object]:
-    """importしたlisjongのrevision。clean git checkoutかVCS installだけを受け付ける。"""
-    if _git(["rev-parse", "--show-toplevel"], package_dir) is not None:
-        revision = _git(["rev-parse", "HEAD"], package_dir)
-        status = _git(["status", "--porcelain", "--untracked-files=all"], package_dir)
-        if revision is None or status is None:
-            raise CompatError("cannot read the runtime git checkout")
-        if status:
-            raise CompatError("runtime git checkout has uncommitted changes")
-        return {"method": "git-checkout", "revision": revision}
-    try:
-        distribution = importlib.metadata.distribution("lisjong")
-    except importlib.metadata.PackageNotFoundError as exc:
-        raise CompatError("runtime lisjong is not an installed distribution") from exc
+def _package_files(package_dir: Path) -> list[Path]:
+    """package内のfile（bytecode cacheを除く）。"""
+    return sorted(
+        path
+        for path in package_dir.rglob("*")
+        if path.is_file() and "__pycache__" not in path.relative_to(package_dir).parts
+    )
+
+
+def _checkout_revision(package_dir: Path) -> dict[str, object] | None:
+    """packageがgit checkoutの追跡対象ならそのrevision。そうでなければ`None`。
+
+    ignoreされた`.venv/.../site-packages`等は親repositoryの中にあっても追跡対象では
+    ないため、親のHEADを採用せずinstalled distributionの検証へ進む。
+    """
+    toplevel = _git(["rev-parse", "--show-toplevel"], package_dir)
+    if toplevel is None:
+        return None
+    root = Path(toplevel).resolve()
+    package = package_dir.resolve()
+    relative = package.relative_to(root).as_posix()
+    tracked = _git(["ls-files", "-z", "--", relative], root)
+    tracked_files = {item for item in (tracked or "").split("\0") if item}
+    if f"{relative}/__init__.py" not in tracked_files:
+        return None
+    present = {path.relative_to(root).as_posix() for path in _package_files(package)}
+    if present - tracked_files:
+        raise CompatError(
+            "runtime checkout package has files git does not track: "
+            + ", ".join(sorted(present - tracked_files)[:5])
+        )
+    revision = _git(["rev-parse", "HEAD"], root)
+    status = _git(["status", "--porcelain", "--untracked-files=all"], root)
+    if revision is None or status is None:
+        raise CompatError("cannot read the runtime git checkout")
+    if status:
+        raise CompatError("runtime git checkout has uncommitted changes")
+    return {"method": "git-checkout", "revision": revision}
+
+
+def _installed_revision(package_dir: Path, distribution) -> dict[str, object]:
+    """VCS installのcommit idと、package内の全fileのRECORD hash照合。"""
     located = Path(distribution.locate_file("lisjong/__init__.py")).resolve()
     if located != (package_dir / "__init__.py").resolve():
         raise CompatError("imported lisjong is not the installed lisjong distribution")
     commit = _direct_url(distribution).get("vcs_info", {}).get("commit_id")
     if type(commit) is not str or len(commit) != 40:
         raise CompatError(
-            "cannot determine the runtime revision: neither a git checkout "
+            "cannot determine the runtime revision: neither a tracked git checkout "
             "nor a VCS install with a commit id"
+        )
+    hashed = {
+        Path(distribution.locate_file(entry)).resolve()
+        for entry in distribution.files or ()
+        if str(entry).startswith("lisjong/") and entry.hash is not None
+    }
+    unrecorded = [
+        path for path in _package_files(package_dir) if path.resolve() not in hashed
+    ]
+    if unrecorded:
+        raise CompatError(
+            "installed lisjong has files without a RECORD hash: "
+            + ", ".join(str(path) for path in unrecorded[:5])
         )
     verified = _record_entries(
         distribution, lambda entry: str(entry).startswith("lisjong/")
@@ -463,6 +504,27 @@ def lisjong_revision(package_dir: Path) -> dict[str, object]:
     if not verified:
         raise CompatError("installed lisjong has no RECORD hashes to verify")
     return {"method": "vcs-install", "revision": commit, "verified_files": verified}
+
+
+def lisjong_revision(package_dir: Path, *, distribution=None) -> dict[str, object]:
+    """importしたlisjongのrevision。
+
+    packageを追跡するclean git checkout（editable install）か、VCS install
+    （commit id＋全fileのRECORD hash）だけを受け付ける。`distribution`はtest用。
+    """
+    package_dir = Path(package_dir).resolve()
+    checkout = _checkout_revision(package_dir)
+    if checkout is not None:
+        return checkout
+    if distribution is None:
+        try:
+            distribution = importlib.metadata.distribution("lisjong")
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise CompatError(
+                "runtime lisjong is neither a tracked git checkout "
+                "nor an installed distribution"
+            ) from exc
+    return _installed_revision(package_dir, distribution)
 
 
 def wheel_module_digest(wheel: Path, module_name: str) -> str:

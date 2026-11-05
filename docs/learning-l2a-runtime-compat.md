@@ -85,7 +85,7 @@ captureは各scorer行で同じ入力を再scoreし、process内で値が一致�
 
 | 記録 | 内容 |
 | --- | --- |
-| lisjong | importした`lisjong`のrevision。clean git checkout（`git rev-parse HEAD`、未commit変更でSTOP）か、VCS install（`direct_url.json`のcommit idとRECORD hash照合）だけを受け付ける |
+| lisjong | importした`lisjong`のrevision。packageの`__init__.py`をそのcheckoutが追跡しているclean git checkout（editable install。package内の未追跡file・未commit変更でSTOP）か、VCS install（`direct_url.json`のcommit id。package内の全fileがRECORDにあり、hashが一致すること）だけを受け付ける。ignoreされた`.venv`等を親repositoryのcheckoutとみなさない |
 | native | `--native-wheel`で渡したwheelのSHA-256、installed moduleのSHA-256（wheel内の同名memberと一致しなければSTOP）、`SOURCE_REVISION`（lisjong revisionと一致しなければSTOP）、`API_VERSION` |
 | shanten backend | `rust`以外はSTOP（旧revisionでは`LISJONG_SHANTEN_BACKEND=rust`が必要） |
 | torch | version、`--torch-threads`で固定したthread数、interop thread数、deterministic algorithms（有効化する） |
