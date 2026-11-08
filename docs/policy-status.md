@@ -54,10 +54,11 @@ Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、
 
 ## Learning Champion — L2a (M1+R1) composite
 
-> **Promotion PR, not yet active in main.** This section becomes the current
-> Learning-family designation only when [project #127](https://github.com/lisbun/lisjong-project/issues/127)
-> records all serving-identity gates as PASS and this PR is merged. Until
-> then, the exact #211 Arm Y remains the published current designation.
+> This Learning-family designation takes effect only after
+> [project #127](https://github.com/lisbun/lisjong-project/issues/127)
+> records the exact serving-identity gates as PASS and the required serving
+> binding and current-role changes are merged. Until those conditions hold,
+> the exact #211 Arm Y remains the current published designation.
 
 The exact L2a M1+R1 composite, using the existing deterministic classification
 and forced/win/riichi/pass-response guards together with learned discard and
