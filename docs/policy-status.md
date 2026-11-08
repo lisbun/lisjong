@@ -17,7 +17,7 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-09-25**
+Snapshot date: **2026-11-08**
 
 ## Current strength baseline
 
@@ -51,6 +51,51 @@ Heuristic Champion promotion
 ```
 
 Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、このdesignationによってsilent migrationしない。Runtime profile deploymentも引き続き別責務とする。
+
+## Learning Champion — L2a (M1+R1) composite
+
+> **Promotion PR, not yet active in main.** This section becomes the current
+> Learning-family designation only when [project #127](https://github.com/lisbun/lisjong-project/issues/127)
+> records all serving-identity gates as PASS and this PR is merged. Until
+> then, the exact #211 Arm Y remains the published current designation.
+
+The exact L2a M1+R1 composite, using the existing deterministic classification
+and forced/win/riichi/pass-response guards together with learned discard and
+call scorers, has a formal family-internal **CANDIDATE SUPERIOR** result against
+the original Learning Champion #211 Arm Y.
+
+| Field | Promotion binding |
+| --- | --- |
+| Family | **Learning** (learned M1/R1 scorers affect action ranking) |
+| Policy | `L2aPolicy` with immutable `L2aRuntime` (`lisjong.learning.l2a_policy`) |
+| Evaluated lisjong revision | `a341257f199e284a3519e17b458e06ced9f04c67` |
+| Exact M1 artifact identity | `c976ed4a5cb667c406eb57f5cc79c128b1a221fb9b478f0dd017fcf48bde6e03` |
+| Exact R1 artifact identity | `d565713f51a2b9f9cbdd2146bf01cb4bfb13ff859b639de962c74562eaf01efc` |
+| Serving factory under review | `lisjong_arena.current_learning_champion:create_current_learning_champion_policy` ([Arena PR #584](https://github.com/lisbun/lisjong-arena/pull/584)) |
+| Promotion evidence | [Arena #582](https://github.com/lisbun/lisjong-arena/issues/582#issuecomment-6721820386), 100 seed blocks × six AABB placements = 600 half games, complete and independently verified |
+| Main rank difference | `mean_rank_ArmY − mean_rank_L2a = +1.9217`, 95% CI `[+1.8897, +1.9537]`; L2a rank 1.539 vs Arm Y 3.461 |
+| Lock/result SHA-256 identity | `e08c8b8129da2f874c507600d2da85e8d099e87788b2797e55505e252f50be21` / `dcb8248a18e447e26ac50c1097a2ec669da33bf3e9a7e845b38e4c4928865607` |
+| Previous Learning Champion | exact [#211 Arm Y](https://github.com/lisbun/lisjong-project/issues/54) checkpoint identity `ecb31fc6954095041423fcfc312d0b07f952ce550f5b05f5e94238bcce7bb45e` |
+
+The comparison evaluates the **completed composite Policy**, not imitation
+accuracy, either single learned scorer, or the inherent quality of the teacher.
+Arm Y's unusually low win rate in this evaluation makes the effect very large,
+but does not establish superiority over the Heuristic Champion, in RiichiLab,
+or in production. Prior L2a OFFLINE-EVAL conclusions remain unchanged.
+
+This is a **Learning-family promotion only**. The Heuristic Champion remains
+`placement-aware-speed-call`. Under [project #69](https://github.com/lisbun/lisjong-project/issues/69),
+once this Learning promotion becomes effective, the historical Overall direct
+comparison (#281, old Arm Y) and Heuristic-family inheritance (#80) cannot
+determine the **new pair**. A fresh direct Overall comparison is separately
+specified in [Arena #583](https://github.com/lisbun/lisjong-arena/issues/583).
+Historical evidence and predecessor serving bindings remain intact.
+
+The exact evaluated source implementation must be retained: a GitHub comparison
+from `a341257f` to main at promotion preparation found changes in documentation,
+tests and tools only, not `src/`. This static continuity **does not replace**
+the separate strict readback of the operator-retained M1/R1 model bytes and
+the fresh-process behavior/ML-runtime qualification required by project #127.
 
 ## Public Policy inventory
 
