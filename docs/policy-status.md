@@ -17,7 +17,7 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-11-08**
+Snapshot date: **2026-11-09**
 
 ## Current strength baseline
 
@@ -40,7 +40,7 @@ result identity         2936df10acc7d171b73451fe2ef3dd95ddd3d7ae1b626e4479db94c9
 
 `targeted-honor-release-terminal-progression` は predecessor Heuristic Champion / historical comparator として残す（Arena #270 / project #67 evidenceは変更しない）。`mechanism-riichi-defense` はさらに前の predecessor Heuristic Champion / historical strength baseline、`yakuhai-call` はさらに前の predecessor / historical anchor として、明示的にlockされたresearch-source roleを維持する。
 
-Overall Champion designationはこの文書では確立しない。lisjong-project #69の条件が満たされる場合のOverall designation（`INHERITED`）は、project #80 completion recordで別途扱う。`PlacementAwareSpeedCallPolicy` 自身は direct cross-family superiority を統計的に示していない。
+Overall Champion designationはこの文書では確立しない。project #80 completion recordの`INHERITED` designationは、Learning ChampionがArm Yだった時点のhistorical recordである。下記のLearning Champion昇格（project #127）により、lisjong-project #69に従い **current pairのOverall Championは未確立**（direct cross-family比較待ち、Arena #583）とする。`PlacementAwareSpeedCallPolicy` 自身は direct cross-family superiority を統計的に示していない。
 
 ```text
 Heuristic Champion promotion
@@ -54,15 +54,14 @@ Arena #211 `Arm Y` / `Arm R` 等のhistorically locked research populationは、
 
 ## Learning Champion — L2a (M1+R1) composite
 
-> This Learning-family designation takes effect only after
-> [project #127](https://github.com/lisbun/lisjong-project/issues/127)
-> records the exact serving-identity gates as PASS and the required serving
-> binding and current-role changes are merged. Until those conditions hold,
-> the exact #211 Arm Y remains the current published designation.
+The exact L2a M1+R1 composite is the **current Learning Champion**
+([project #127](https://github.com/lisbun/lisjong-project/issues/127)).
+The exact #211 Arm Y is the **predecessor Learning Champion** and remains
+reachable through its historical serving binding.
 
-The exact L2a M1+R1 composite, using the existing deterministic classification
-and forced/win/riichi/pass-response guards together with learned discard and
-call scorers, has a formal family-internal **CANDIDATE SUPERIOR** result against
+The composite uses the existing deterministic classification and
+forced/win/riichi/pass-response guards together with learned discard and call
+scorers. It has a formal family-internal **CANDIDATE SUPERIOR** result against
 the original Learning Champion #211 Arm Y.
 
 | Field | Promotion binding |
@@ -72,7 +71,9 @@ the original Learning Champion #211 Arm Y.
 | Evaluated lisjong revision | `a341257f199e284a3519e17b458e06ced9f04c67` |
 | Exact M1 artifact identity | `c976ed4a5cb667c406eb57f5cc79c128b1a221fb9b478f0dd017fcf48bde6e03` |
 | Exact R1 artifact identity | `d565713f51a2b9f9cbdd2146bf01cb4bfb13ff859b639de962c74562eaf01efc` |
-| Serving factory under review | `lisjong_arena.current_learning_champion:create_current_learning_champion_policy` ([Arena PR #584](https://github.com/lisbun/lisjong-arena/pull/584)) |
+| Exact M1 file SHA-256 | `manifest.json` `37ddf3b89f9a814341cb3ef067c5faf0322df3fe28df3b321a5e335c21d8bc5c`, `weights.f32` `74bd966ecdfeebee21eb09a53fdbf495d29eb22fcba382115aad53ff2e88ba8c` |
+| Exact R1 file SHA-256 | `manifest.json` `70962c2e620326b804eda78402bada06b1405684cb5aa381a438ba232b2367a9`, `weights.f32` `b996ea98c35aec7693e07d23e0fb886c6797f7490b3a2f2833bde16c74f94a13` |
+| Serving factory | `lisjong_arena.current_learning_champion:create_current_learning_champion_policy` ([Arena PR #584](https://github.com/lisbun/lisjong-arena/pull/584), merged `589208b11ae57c80a7b1c6c383969a7821367177`); both artifact directories are explicit operator settings and fail closed on mismatch |
 | Promotion evidence | [Arena #582](https://github.com/lisbun/lisjong-arena/issues/582#issuecomment-6721820386), 100 seed blocks × six AABB placements = 600 half games, complete and independently verified |
 | Main rank difference | `mean_rank_ArmY − mean_rank_L2a = +1.9217`, 95% CI `[+1.8897, +1.9537]`; L2a rank 1.539 vs Arm Y 3.461 |
 | Lock/result SHA-256 identity | `e08c8b8129da2f874c507600d2da85e8d099e87788b2797e55505e252f50be21` / `dcb8248a18e447e26ac50c1097a2ec669da33bf3e9a7e845b38e4c4928865607` |
@@ -86,17 +87,23 @@ or in production. Prior L2a OFFLINE-EVAL conclusions remain unchanged.
 
 This is a **Learning-family promotion only**. The Heuristic Champion remains
 `placement-aware-speed-call`. Under [project #69](https://github.com/lisbun/lisjong-project/issues/69),
-once this Learning promotion becomes effective, the historical Overall direct
-comparison (#281, old Arm Y) and Heuristic-family inheritance (#80) cannot
-determine the **new pair**. A fresh direct Overall comparison is separately
-specified in [Arena #583](https://github.com/lisbun/lisjong-arena/issues/583).
-Historical evidence and predecessor serving bindings remain intact.
+the historical Overall direct comparison (#281, old Arm Y) and
+Heuristic-family inheritance (#80) cannot determine the **new pair**: the
+current-pair Overall Champion is **not established** until a fresh direct
+comparison, separately specified in
+[Arena #583](https://github.com/lisbun/lisjong-arena/issues/583), is approved
+and run. Historical evidence and predecessor serving bindings remain intact.
 
-The exact evaluated source implementation must be retained: a GitHub comparison
-from `a341257f` to main at promotion preparation found changes in documentation,
-tests and tools only, not `src/`. This static continuity **does not replace**
-the separate strict readback of the operator-retained M1/R1 model bytes and
-the fresh-process behavior/ML-runtime qualification required by project #127.
+Serving continuity with the evaluated runtime was qualified before the
+promotion ([Arena PR #584 evidence](https://github.com/lisbun/lisjong-arena/pull/584#issuecomment-6723252254)):
+`a341257f..335ae788` changes documentation, tests and tools only, not `src/`;
+the retained M1/R1 files match the #582 lock; and on one machine the new
+factory (lisjong `335ae788`) and the evaluated runtime (lisjong `a341257f`)
+produce bit-identical classification, candidates, features, scores and actions
+on 1,151 fixed development decisions. Against the evaluation-host capture, only
+float32 scores differ (max `7.6e-6`), and the evaluated runtime itself shows the
+same difference across the two CPUs; no action differs. Serving on another CPU
+can therefore still differ from the evaluation host in near-tie decisions.
 
 ## Public Policy inventory
 
