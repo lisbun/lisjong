@@ -60,6 +60,7 @@ lisjong ecosystem全体のrepository責務、依存方向、長期ロードマ�
 - [Project architecture](https://github.com/lisbun/lisjong-project/blob/main/docs/architecture.md)
 - [Project roadmap](https://github.com/lisbun/lisjong-project/blob/main/docs/roadmap.md)
 - [Policy current status](docs/policy-status.md)
+- [研究ロードマップの現在地・Issue一覧](docs/research-status.md)
 - [kobalab 0004 tile-efficiency reference](docs/kobalab-0004-reference.md)
 - [kobalab 0004 profile / optimization / Belief paijia](docs/kobalab-0004-belief-paijia.md)
 - [lisjong architecture](docs/architecture.md)
@@ -147,14 +148,16 @@ estimatorのaccuracy / calibrationが改善しても、それだけでPolicy str
 
 | Repository | 主な責務 |
 | --- | --- |
-| `lisjong` | AI decision core、Policy / AI-side contract、action semantics、牌効率・belief・value / risk等のstable AI semantics |
+| `lisjong` | AI decision core、Policy / AI-side contract、action semantics、牌効率・belief・value / risk、canonical Learning（feature / dataset / teacher / training / artifact / inference） |
 | [`lisjong-engine`](https://github.com/lisbun/lisjong-engine) | 日本式立直麻雀のルール、状態遷移、合法手、round / hanchan progression |
-| [`lisjong-arena`](https://github.com/lisbun/lisjong-arena) | external / local execution、objective observation、experiment-local dataset / training / analysis、Policy strength evaluation |
+| [`lisjong-arena`](https://github.com/lisbun/lisjong-arena) | external / local execution、objective observation、reusable source record、Policy strength evaluation |
 | [`lisjong-play`](https://github.com/lisbun/lisjong-play) | Human Play / GUI / presentation consumer |
 
-`lisjong` がstableなAI-side semanticsを所有し、Arena内のbounded experimentが
-一時的なfeature layout、dataset schema、training harness、model artifactを所有する場合があります。
-experiment-localな成功を、そのままlisjongのproduction / stable contractへ昇格させません。
+`lisjong` はstableなAI-side semanticsとcanonical Learning capabilityを所有します。
+feature・dataset・teacher / label・training objective・artifact・inferenceの意味はlisjong、
+source生成・客観的観測・正式な棋力評価はArenaの責務です（project ADR 0008）。
+Arenaのhistorical Learning実装はreferenceとして保持し、lisjongからruntime依存を作りません。
+実験の成功を、そのままproduction / stable contractへ昇格させません。
 
 ## AI-side contract
 

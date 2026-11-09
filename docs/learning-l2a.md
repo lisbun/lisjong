@@ -1,10 +1,24 @@
 # L2a — first-party C0による小規模蒸留の実験仕様（設計）
 
+## 現在地（2026-11-10 JST）
+
+設計・学習・OFFLINE-EVAL・動作確認は完了済み。1〜9節は当時の事前登録・実装契約であり、未着手一覧ではない。
+10節の模倣評価（打牌・Chi NOT ESTABLISHED、Pon PARTIAL）は維持する。
+別の問いである完成Policyの棋力比較は、[#368](https://github.com/lisbun/lisjong/issues/368) →
+[Arena #582](https://github.com/lisbun/lisjong-arena/issues/582#issuecomment-6721820386)で600/600 VALID・CANDIDATE SUPERIOR。
+[project #127](https://github.com/lisbun/lisjong-project/issues/127#issuecomment-6743073814)で昇格が完了し、
+凍結済みM1+R1合成Policyがcurrent Learning Champion、Arm Yはpredecessorとなった。
+正確なartifact・serving binding・評価の適用範囲は[Policy current status](policy-status.md)を参照。
+
+これはguard込みのPolicy対Arm Yの結果であり、模倣成立・モデル単体の効果・教師C0超えではない。
+現pairのOverallは未確立で、[Arena #583](https://github.com/lisbun/lisjong-arena/issues/583)で別比較を準備する。
+OFFLINE-EVALの再利用・再学習・新規データ生成を指示するものではない。
+
 Issue: [#267](https://github.com/lisbun/lisjong/issues/267)（親: lisbun/lisjong-project#74、#84）
 
 固定教師C0（`PlacementAwareSpeedCallPolicy`）の行動を小規模モデルへ蒸留し、入力・合法手・教師label・
-推論経路が正しく、行動種別ごとに学習が成立するかを確認する実験の仕様である。本書は**設計だけ**であり、
-source生成・学習・対局は後続Issue（[9節](#9-担当と後続issue)）で行う。OFFLINE-EVALの結果は
+推論経路が正しく、行動種別ごとに学習が成立するかを確認する実験の仕様である。設計時には**設計だけ**を対象とし、
+source生成・学習・対局は後続Issue（[9節](#9-担当と後続issue)）へ分離した。OFFLINE-EVALの結果は
 [10節](#10-結果)に追記した。1〜9節の閾値・事前登録は結果を見た後も変更していない。
 
 本書は次を主張しない。
