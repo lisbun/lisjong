@@ -1,5 +1,15 @@
 # R1価値モデル：推定宣言牌・19列・ridge・gate Policy・E2 / E3（Issue #360）
 
+## 実験の現在地（2026-11-10 JST）
+
+[Arena #550](https://github.com/lisbun/lisjong-arena/issues/550)の今回実験は**NOT-PREDICTIVEで終了**。
+E4（Arena #551）はnot planned。下記の実装契約・判定式・CLIは再現用であり、再実行指示ではない。
+[R1系列の判断](https://github.com/lisbun/lisjong/issues/356#issuecomment-6545613343)は**再開条件付き保留**で、
+具体的な新仮説ができるまで作業を割り当てない。TRAIN限定分析も再開・終了の必須条件ではない。
+再検討はTRAIN（547000..547043）と既使用の開発データに限り、項目を事前固定する。
+使用済みTEST（547100..547143）を特徴・閾値・モデル調整や新しい独立評価に使わない。
+なお、本書のR1価値モデルとL2aの反応scorer R1は別実験である。
+
 設計の正本: [#356](https://github.com/lisbun/lisjong/issues/356)（[固定案](https://github.com/lisbun/lisjong/issues/356#issuecomment-6417097132)・
 [改訂・引継ぎ版](https://github.com/lisbun/lisjong/issues/356#issuecomment-6418811229)）。source producer: [Arena #548](https://github.com/lisbun/lisjong-arena/issues/548)。
 **本書は実装の契約で、生成・fit・TEST評価の実行は別の実行Issueで行う。** Championは変えない。強さ（E4）は範囲外。

@@ -1,5 +1,7 @@
 # Policy current status
 
+作業順序と未完了Issueの一覧は[研究ロードマップの現在地](research-status.md)を参照。
+
 ## Purpose
 
 本書は、`lisjong` が公開する Policy implementation の **current role** を示す repository-owned snapshot である。

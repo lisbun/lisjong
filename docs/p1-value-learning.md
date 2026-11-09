@@ -1,5 +1,15 @@
 # P1価値モデル：source reader・10列encoding・ridge・E2 / E3（Issue #366）
 
+## 実験の現在地（2026-11-10 JST）
+
+[Arena #558の結果レビュー](https://github.com/lisbun/lisjong-arena/issues/558#issuecomment-6661359139)により、
+今回の10特徴・ridge λ=10の実験は**NOT-PREDICTIVEで完了**。
+E2 ΔMSE −64.25、bootstrap P5 −127.63 / P95 −2.06で事前条件を満たさなかった。
+追加seed・再fit・TEST再評価・E4へは進まない。P1系列やLearning全体の不可能性は主張しない。
+TRAIN 556000..556119・TEST 556200..556319は使用済みで、TESTを調整や独立評価へ流用しない。
+下記は実装契約の記録であり再実行指示ではない。次の新学習仮説は
+[project #74](https://github.com/lisbun/lisjong-project/issues/74) / [#84](https://github.com/lisbun/lisjong-project/issues/84)で別に選定する。
+
 設計の正本: [#365](https://github.com/lisbun/lisjong/issues/365)（[設計案](https://github.com/lisbun/lisjong/issues/365#issuecomment-6599819983)・
 [予算と配分](https://github.com/lisbun/lisjong/issues/365#issuecomment-6600146234)・[完了記録](https://github.com/lisbun/lisjong/issues/365#issuecomment-6600644792)、DESIGN-READY）。
 source producer: [Arena #556](https://github.com/lisbun/lisjong-arena/issues/556)（`pon-first-pass-source-v1`）。pilot: Arena #555。
