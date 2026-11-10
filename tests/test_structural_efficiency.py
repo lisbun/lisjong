@@ -837,6 +837,7 @@ class CrossPolicyPrivateImportTest(unittest.TestCase):
             "placement_aware_speed_call.py",
             "placement_aware_speed_call_suited_paijia_tie.py",
             "riichi_dama_branch.py",
+            "riichi_response_placement_aware_speed_call.py",
             "single_open_genbutsu_placement_aware_speed_call.py",
             "speed_call_analysis.py",
             "targeted_honor_release_terminal_progression.py",
