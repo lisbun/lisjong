@@ -52,4 +52,9 @@ Aで想定した打牌は保存しない。鳴いた直後の実際の打牌は�
 
 ## 評価
 
-強さは未確定。評価計画と結果は [#375](https://github.com/lisbun/lisjong/issues/375) を正本とする。
+評価計画と結果は [#375](https://github.com/lisbun/lisjong/issues/375) を正本とする。
+
+#375のdevelopment screen（既使用seed 940000..940099、同一局の対比較）は **STOP-LOW-ACTIVATION**。
+Championと判断が分かれたのは400 seat-hanchans中19件（約0.05件/席・半荘）で、事前に固定した
+下限20件に届かなかった。強さは未確定で、この候補を既定の採用候補にしない。追加seed・閾値変更・
+条件緩和による救済はしない。
