@@ -830,6 +830,7 @@ class CrossPolicyPrivateImportTest(unittest.TestCase):
             "genbutsu_defense_two_step_ukeire.py",
             "hand_value_aware_two_step_ukeire.py",
             "hand_value_tradeoff_mechanism_riichi_defense.py",
+            "keiten_call_placement_aware_speed_call.py",
             "mechanism_riichi_defense_offensive_efficiency_diagnostic.py",
             "mechanism_riichi_defense_yakuhai_call.py",
             "one_shanten_defense_placement_aware_speed_call.py",
