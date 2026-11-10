@@ -25,6 +25,9 @@ from lisjong.policies.hand_value_tradeoff_mechanism_riichi_defense import (
 from lisjong.policies.hand_value_tradeoff_targeted_honor_release import (
     HandValueTradeoffTargetedHonorReleasePolicy,
 )
+from lisjong.policies.keiten_call_placement_aware_speed_call import (
+    KeitenCallPlacementAwareSpeedCallPolicy,
+)
 from lisjong.policies.kobalab_0004_reference import (
     Kobalab0004BeliefPaijiaPolicy,
     Kobalab0004ReferencePolicy,
@@ -79,6 +82,7 @@ __all__ = [
     "HandValueAwareTwoStepUkeirePolicy",
     "HandValueTradeoffMechanismRiichiDefensePolicy",
     "HandValueTradeoffTargetedHonorReleasePolicy",
+    "KeitenCallPlacementAwareSpeedCallPolicy",
     "Kobalab0004BeliefPaijiaPolicy",
     "Kobalab0004ReferencePolicy",
     "MechanismRiichiDefenseYakuhaiCallPolicy",
