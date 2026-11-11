@@ -81,3 +81,11 @@ cross-decision stateを持たない。
 
 - 強さ・変更頻度の評価、対局、seed予約、Champion変更。評価の手順と停止条件は lisbun/lisjong-arena#524 で扱う
 - #330 paijia、#312 確定安全牌、#254 聴牌PUSH/FOLDの再調整ではない
+
+## 評価（このIssueの範囲外で行われたもの）
+
+- lisbun/lisjong-arena#526: 変更頻度不足（STOP-LOW-ACTIVATION）で終了。効果は未測定
+- [#379](https://github.com/lisbun/lisjong/issues/379): 未使用seed 380000..385999の東1局6,000局の対比較（相手Champion 3席、lisjong-engine）。
+  標本1,498、平均 −147.8点、98.33%区間 [−328.7, +30.0]、Δ>0 / =0 / <0 は 161 / 1,157 / 180。
+  判定は **NOT-SUPPORTED-DEVELOPMENT**（平均が負）。東1局・点数平坦の1局収支だけの結果で、
+  半荘の強さは測っていない
