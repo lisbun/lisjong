@@ -101,5 +101,6 @@ CONFIRMの判定は **INCONCLUSIVE-DEVELOPMENT**（平均は正、95%区間が0�
 
 測ったのは東1局・点数平坦・相手Champion 3席の1局収支だけで、半荘順位、南場・オーラス、別の相手での
 再現性は測っていない。
-SUPPORTEDは半荘の強さやChampion変更の根拠にならない。半荘での確認は別Issue・別判断とする。
+SUPPORTEDは半荘の強さやChampion変更の根拠にならない。半荘での開発比較は
+[lisbun/lisjong-arena#591](https://github.com/lisbun/lisjong-arena/issues/591)（計画案）で扱う。
 #377の判定（INCONCLUSIVE-DEVELOPMENT）は当時の計画に対する結果として変更しない。
