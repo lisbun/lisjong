@@ -101,6 +101,22 @@ CONFIRMの判定は **INCONCLUSIVE-DEVELOPMENT**（平均は正、95%区間が0�
 
 測ったのは東1局・点数平坦・相手Champion 3席の1局収支だけで、半荘順位、南場・オーラス、別の相手での
 再現性は測っていない。
-SUPPORTEDは半荘の強さやChampion変更の根拠にならない。半荘での開発比較は
-[lisbun/lisjong-arena#591](https://github.com/lisbun/lisjong-arena/issues/591)（計画案）で扱う。
+SUPPORTEDは半荘の強さやChampion変更の根拠にならない。
 #377の判定（INCONCLUSIVE-DEVELOPMENT）は当時の計画に対する結果として変更しない。
+
+## 半荘の開発比較（lisbun/lisjong-arena#591）
+
+[lisbun/lisjong-arena#591](https://github.com/lisbun/lisjong-arena/issues/591)で、同じパラメータの候補を
+Championと半荘で1回比べた（engine AABB、候補2席・Champion 2席の6配置、未使用seed 591000..591499、
+事前固定の判定規則、development比較）。結果の正本は
+[#591の記録](https://github.com/lisbun/lisjong-arena/issues/591#issuecomment-6898904723)。
+
+| K（seed block） | 半荘 | 平均 D（候補 − Champion） | SD | 95%区間 | 判定 |
+| ---: | ---: | ---: | ---: | --- | --- |
+| 500 | 3,000 | +0.854 pt | 17.10 pt | [−0.645, +2.352] | **INCONCLUSIVE-DEVELOPMENT** |
+
+副指標（記述のみ）: 和了率 20.57% 対 20.45%、放銃率 12.34% 対 12.43%、平均順位差 −0.019
+（95% [−0.058, +0.020]）。流局時聴牌率は候補 35.6% 対 Champion 37.3% で、流局収支は候補が悪い。
+
+平均は正だが区間が0を含むため、半荘での優位は示せていない。Championは変更しない。
+追加seedでの救済や判定基準の変更はしない。正式評価へ進むかどうかは未決（lisbun/lisjong-project#84）。
