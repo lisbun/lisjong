@@ -55,6 +55,11 @@ from lisjong.policies.placement_aware_speed_call_kobalab_0004_discard import (
 from lisjong.policies.placement_aware_speed_call_suited_paijia_tie import (
     PlacementAwareSpeedCallSuitedPaijiaTiePolicy,
 )
+from lisjong.policies.riichi_response_hand_value import (
+    RiichiResponseHandValueParameters,
+    RiichiResponseHandValuePlacementAwareSpeedCallPolicy,
+    riichi_response_hand_value_search_space,
+)
 from lisjong.policies.riichi_response_placement_aware_speed_call import (
     RiichiResponseParameters,
     RiichiResponsePlacementAwareSpeedCallPolicy,
@@ -99,6 +104,8 @@ __all__ = [
     "PlacementAwareSpeedCallPolicy",
     "PlacementAwareSpeedCallSuitedPaijiaTiePolicy",
     "OneShantenDefensePlacementAwareSpeedCallPolicy",
+    "RiichiResponseHandValueParameters",
+    "RiichiResponseHandValuePlacementAwareSpeedCallPolicy",
     "RiichiResponseParameters",
     "RiichiResponsePlacementAwareSpeedCallPolicy",
     "ShantenPolicy",
@@ -109,5 +116,6 @@ __all__ = [
     "UkeirePolicy",
     "ValueAwareTwoStepUkeirePolicy",
     "YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
+    "riichi_response_hand_value_search_space",
     "riichi_response_search_space",
 ]
