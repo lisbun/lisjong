@@ -1048,6 +1048,8 @@ class PolicyGenerationTest(unittest.TestCase):
                 "PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy",
                 "PlacementAwareSpeedCallKobalab0004DiscardPolicy",
                 "PlacementAwareSpeedCallPolicy",
+                "RiichiResponseHandValueParameters",
+                "RiichiResponseHandValuePlacementAwareSpeedCallPolicy",
                 "RiichiResponseParameters",
                 "RiichiResponsePlacementAwareSpeedCallPolicy",
                 "ShantenPolicy",
@@ -1057,6 +1059,7 @@ class PolicyGenerationTest(unittest.TestCase):
                 "TwoStepUkeirePolicy",
                 "ValueAwareTwoStepUkeirePolicy",
                 "YakuhaiCallGenbutsuDefenseFiniteHorizonHandValueAwarePolicy",
+                "riichi_response_hand_value_search_space",
                 "riichi_response_search_space",
             },
         )
