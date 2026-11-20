@@ -19,7 +19,7 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-11-09**
+Snapshot date: **2026-11-15**
 
 ## Current strength baseline
 
@@ -28,8 +28,9 @@ Snapshot date: **2026-11-09**
 | Arena identity | `placement-aware-speed-call` |
 | Implementation class | `PlacementAwareSpeedCallPolicy` |
 | Family | placement-aware speed-call heuristic over `targeted-honor-release-terminal-progression` |
-| Role | **current Heuristic Champion / heuristic strength baseline (protocol-scoped)** |
-| Evidence scope | family-internal `arena-heuristic-candidate-aabb-half-v1` / `4p-red-half` |
+| Role | **current Heuristic Champion / current Overall Champion (DIRECT) / heuristic strength baseline (protocol-scoped)** |
+| Heuristic-family promotion evidence | Arena #375: `arena-heuristic-candidate-aabb-half-v1` / `4p-red-half` |
+| Overall DIRECT evidence | [Arena #583](https://github.com/lisbun/lisjong-arena/issues/583) / [#588 formal-588b](https://github.com/lisbun/lisjong-arena/issues/588#issuecomment-6886499017), `arena-overall-champion-aabb-half-v1` / `4p-red-half` |
 
 `PlacementAwareSpeedCallPolicy` は lisjong-project #80 により current Heuristic Champion へ昇格する。authoritative promotion evidence は Arena #375 であり、lisjong revision `2a9debebdbbe4d10841fa4371a6cf6bf19ce9de1` の exact candidate を exact incumbent `TargetedHonorReleaseTerminalProgressionPolicy` と frozen family-internal protocol `arena-heuristic-candidate-aabb-half-v1` で比較した。
 
@@ -42,7 +43,9 @@ result identity         2936df10acc7d171b73451fe2ef3dd95ddd3d7ae1b626e4479db94c9
 
 `targeted-honor-release-terminal-progression` は predecessor Heuristic Champion / historical comparator として残す（Arena #270 / project #67 evidenceは変更しない）。`mechanism-riichi-defense` はさらに前の predecessor Heuristic Champion / historical strength baseline、`yakuhai-call` はさらに前の predecessor / historical anchor として、明示的にlockされたresearch-source roleを維持する。
 
-Overall Champion designationはこの文書では確立しない。project #80 completion recordの`INHERITED` designationは、Learning ChampionがArm Yだった時点のhistorical recordである。下記のLearning Champion昇格（project #127）により、lisjong-project #69に従い **current pairのOverall Championは未確立**（direct cross-family比較待ち、Arena #583）とする。`PlacementAwareSpeedCallPolicy` 自身は direct cross-family superiority を統計的に示していない。
+**Current Overall Championは `placement-aware-speed-call`（Heuristic / `DIRECT`）**。project [#69の2026-11-15正式指定](https://github.com/lisbun/lisjong-project/issues/69#issuecomment-6886584183)により、現在の exact Learning Champion L2a (M1+R1) と [Arena #583 / #588](https://github.com/lisbun/lisjong-arena/issues/588#issuecomment-6886499017) の共通 `arena-overall-champion-aabb-half-v1` protocolで直接比較した根拠を持つ。100 seed blocks (588100..588199, COMMITTED)、400 hanchans、`D=Learning mean rank − Heuristic mean rank=+0.4775`、95%区間 `[+0.368,+0.587]`、分類 `HEURISTIC CHAMPION SUPERIOR`。formal result identityは `5f337edd57e7283db4106b081f39904911c0baa9bb2509057c0841a002b60edc`（Arena `b8a277565e950ca630a83ff73823621ff70b2b87`）。既定のrank判定のみを採用し、局単位の和了・放銃等は診断副指標に留める。
+
+過去のproject #80の`INHERITED` designationは、対戦相手が旧Arm Yだった時点のhistorical recordであり、Arena #281の古いdirect basisも保持する。今回の`DIRECT`はそれらの継承や統計的推移ではなく、**現行pairへの新しい直接比較**に基づく。Heuristic Championとしてのfamily内昇格の正本は引き続きArena #375 / project #80で、Overall designationとは別の証拠である。
 
 ```text
 Heuristic Champion promotion
@@ -87,14 +90,17 @@ Arm Y's unusually low win rate in this evaluation makes the effect very large,
 but does not establish superiority over the Heuristic Champion, in RiichiLab,
 or in production. Prior L2a OFFLINE-EVAL conclusions remain unchanged.
 
-This is a **Learning-family promotion only**. The Heuristic Champion remains
-`placement-aware-speed-call`. Under [project #69](https://github.com/lisbun/lisjong-project/issues/69),
-the historical Overall direct comparison (#281, old Arm Y) and
-Heuristic-family inheritance (#80) cannot determine the **new pair**: the
-current-pair Overall Champion is **not established** until a fresh direct
-comparison, separately specified in
-[Arena #583](https://github.com/lisbun/lisjong-arena/issues/583), is approved
-and run. Historical evidence and predecessor serving bindings remain intact.
+This remains a **Learning-family promotion only**, not an Overall promotion.
+The Heuristic Champion is still `placement-aware-speed-call`. At the time of
+[project #127](https://github.com/lisbun/lisjong-project/issues/127), the
+historical Overall comparison (#281 against old Arm Y) and succession (#80)
+were insufficient for the new pair; `not established` was correct then.
+That gap was subsequently resolved by the **new DIRECT cross-family result**
+[Arena #583 / #588](https://github.com/lisbun/lisjong-arena/issues/588#issuecomment-6886499017)
+and the separately approved [project #69 designation](https://github.com/lisbun/lisjong-project/issues/69#issuecomment-6886584183).
+L2a remains the current Learning Champion despite losing to the Heuristic
+Champion in this cross-family test. Historical evidence, model files and
+predecessor serving bindings remain intact.
 
 Serving continuity with the evaluated runtime was qualified before the
 promotion ([Arena PR #584 evidence](https://github.com/lisbun/lisjong-arena/pull/584#issuecomment-6723252254)):
@@ -130,7 +136,7 @@ can therefore still differ from the evaluation host in near-tie decisions.
 | `TerminalShantenProgressionMechanismRiichiDefensePolicy` | — | **evaluated experimental candidate; inconclusive; not promoted** | exact `mechanism-riichi-defense` parentの all-zero completion branch だけを expected terminal shanten 最小化へ置換 |
 | `TargetedHonorReleaseTerminalProgressionPolicy` | `targeted-honor-release-terminal-progression` | **predecessor Heuristic Champion / historical comparator** | far closed PUSH / all-zeroのtargeted honor-release conflictだけをexact R5で再判定。Arena #270でexact incumbentにCONFIRMED POSITIVE、project #67で昇格したが、Arena #375 / project #80で後継へ交代 |
 | `HandValueTradeoffTargetedHonorReleasePolicy` | — | **experimental candidate; evaluation pending** | predecessor Heuristic Champion `TargetedHonorReleaseTerminalProgressionPolicy` のconfirmed `R5_HONOR_ONLY_SWITCH`を保持し、それ以外のordinary discardへ#175 HandValue v2を合成 |
-| `PlacementAwareSpeedCallPolicy` | `placement-aware-speed-call` | **current Heuristic Champion / current heuristic strength baseline** | `TargetedHonorReleaseTerminalProgressionPolicy`をexact parentとし、Tanyao / Honitsu route確定型のスピード鳴き、役のない副露手のroute保持打牌、オーラス点数状況mode（トップ目SPEED / 大差ラス目VALUE）を追加（[#199](https://github.com/lisbun/lisjong/issues/199)）。Arena #375の`arena-heuristic-candidate-aabb-half-v1`でexact incumbentに対しCANDIDATE SUPERIOR、project #80で昇格 |
+| `PlacementAwareSpeedCallPolicy` | `placement-aware-speed-call` | **current Heuristic Champion / current Overall Champion (DIRECT) / heuristic strength baseline** | `TargetedHonorReleaseTerminalProgressionPolicy`をexact parentとし、Tanyao / Honitsu route確定型のスピード鳴き、役のない副露手のroute保持打牌、オーラス点数状況mode（トップ目SPEED / 大差ラス目VALUE）を追加（[#199](https://github.com/lisbun/lisjong/issues/199)）。Arena #375の`arena-heuristic-candidate-aabb-half-v1`でexact incumbentに対しCANDIDATE SUPERIOR、project #80で昇格 |
 | `PlacementAwareSpeedCallKobalab0004DiscardPolicy` | — | **experimental candidate; evaluation pending; not in strength hierarchy** | current Heuristic Champion `PlacementAwareSpeedCallPolicy`の打牌decisionのうち、候補制限後の`_classify_branch()`がPUSHと分類した攻撃打牌だけ、FiniteHorizon / HandValueAware / 限定R5の比較をkobalab 0004の牌効率（受入最大・paijia / source順、全候補向聴悪化時は最小向聴の候補から比較）へ置き換えた候補。守備・鳴き・立直等はChampionと同じ。強さは未評価（[#226](https://github.com/lisbun/lisjong/issues/226)、[記録](placement-aware-speed-call-kobalab-0004-discard.md)） |
 | `PlacementAwareSpeedCallKobalab0004BeliefPaijiaDiscardPolicy` | — | **experimental candidate; evaluation pending; not in strength hierarchy** | 上記0004合成版のPUSH打牌で、paijiaの入力だけを`Kobalab0004BeliefPaijiaPolicy`と同じBelief由来の残余期待枚数（条件付き一様HandBelief）へ替えた別候補。候補制限・向聴数・受入・合成版fallback・非PUSH・非打牌判断は合成版と同じ。一様推定器では差は量子化による同点崩れに限られ、強さの改善は主張しない。後続評価の比較対象は合成版（[#230](https://github.com/lisbun/lisjong/issues/230)、[記録](placement-aware-speed-call-kobalab-0004-belief-paijia-discard.md)） |
 | `PlacementAwareSpeedCallSuitedPaijiaTiePolicy` | — (identity案 `placement-aware-speed-call-suited-paijia-tie-v1`) | **experimental candidate (implemented; not evaluated); not promoted** | Championの門前・通常自摸・リーチなし・オーラス外のPUSHで、FH all-zeroかつ限定R5を実行していない打牌のうち、HandValueAwareの5段階で同点の数牌だけを、公開未見枚数のkobalab 0004 paijia最小で選び直す候補（Championの打牌も最小なら維持）。強さ・変更頻度は未評価（[#330](https://github.com/lisbun/lisjong/issues/330)、[仕様](placement-aware-speed-call-suited-paijia-tie.md)） |
