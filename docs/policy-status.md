@@ -19,7 +19,7 @@ bounded GitHub Issue / PR
 
 本書は historical evaluation log ではない。過去 run の数値や全経緯を複製せず、現在の役割と代表的 evidence だけを保持する。Policy strength comparison の規律は Arena-owned の [Policy strength evaluation policy](https://github.com/lisbun/lisjong-arena/blob/main/docs/policy-strength-evaluation.md) を正本とする。
 
-Snapshot date: **2026-11-09**
+Snapshot date: **2026-11-23**
 
 ## Current strength baseline
 
@@ -42,7 +42,7 @@ result identity         2936df10acc7d171b73451fe2ef3dd95ddd3d7ae1b626e4479db94c9
 
 `targeted-honor-release-terminal-progression` は predecessor Heuristic Champion / historical comparator として残す（Arena #270 / project #67 evidenceは変更しない）。`mechanism-riichi-defense` はさらに前の predecessor Heuristic Champion / historical strength baseline、`yakuhai-call` はさらに前の predecessor / historical anchor として、明示的にlockされたresearch-source roleを維持する。
 
-Overall Champion designationはこの文書では確立しない。project #80 completion recordの`INHERITED` designationは、Learning ChampionがArm Yだった時点のhistorical recordである。下記のLearning Champion昇格（project #127）により、lisjong-project #69に従い **current pairのOverall Championは未確立**（direct cross-family比較待ち、Arena #583）とする。`PlacementAwareSpeedCallPolicy` 自身は direct cross-family superiority を統計的に示していない。
+Overall Champion designationはこの文書では確立せず、project-levelの記録を写す。project #80 completion recordの`INHERITED` designationは、Learning ChampionがArm Yだった時点のhistorical recordである。下記のLearning Champion昇格（project #127）の後、current pair（`placement-aware-speed-call`対exact L2a M1+R1）のdirect cross-family比較[Arena #583](https://github.com/lisbun/lisjong-arena/issues/583) / [#588](https://github.com/lisbun/lisjong-arena/issues/588#issuecomment-6886499017) `formal-588b`が`HEURISTIC CHAMPION SUPERIOR`（`D=mean(L rank−H rank)=+0.4775`、95% `[+0.368, +0.587]`、result identity `5f337edd57e7283db4106b081f39904911c0baa9bb2509057c0841a002b60edc`）となり、ユーザー承認により **current Overall Champion = `placement-aware-speed-call`（Heuristic / DIRECT）** と指定された（正本: [project #69の2026-11-15記録](https://github.com/lisbun/lisjong-project/issues/69#issuecomment-6886584183)）。このdesignationはこのexact pairのDIRECT結果に限る。RiichiLab bot profile、serving default、production deploymentの変更は含まない。
 
 ```text
 Heuristic Champion promotion
@@ -90,11 +90,14 @@ or in production. Prior L2a OFFLINE-EVAL conclusions remain unchanged.
 This is a **Learning-family promotion only**. The Heuristic Champion remains
 `placement-aware-speed-call`. Under [project #69](https://github.com/lisbun/lisjong-project/issues/69),
 the historical Overall direct comparison (#281, old Arm Y) and
-Heuristic-family inheritance (#80) cannot determine the **new pair**: the
-current-pair Overall Champion is **not established** until a fresh direct
-comparison, separately specified in
-[Arena #583](https://github.com/lisbun/lisjong-arena/issues/583), is approved
-and run. Historical evidence and predecessor serving bindings remain intact.
+Heuristic-family inheritance (#80) could not determine the **new pair**. The
+fresh direct comparison [Arena #583](https://github.com/lisbun/lisjong-arena/issues/583) /
+[#588](https://github.com/lisbun/lisjong-arena/issues/588#issuecomment-6886499017)
+was classified `HEURISTIC CHAMPION SUPERIOR`, and the current Overall Champion is
+`placement-aware-speed-call` (Heuristic / DIRECT;
+[project #69 record](https://github.com/lisbun/lisjong-project/issues/69#issuecomment-6886584183)).
+L2a remains the Learning Champion. Historical evidence and predecessor serving
+bindings remain intact.
 
 Serving continuity with the evaluated runtime was qualified before the
 promotion ([Arena PR #584 evidence](https://github.com/lisbun/lisjong-arena/pull/584#issuecomment-6723252254)):
