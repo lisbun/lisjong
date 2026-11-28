@@ -759,6 +759,7 @@ privileged ground truthをoffline label / validationへ利用する場合も、o
 - [Model-facing action vocabulary](action-vocabulary.md)
 - [Learning L0 — canonical player-safe dataset / BC artifact / LearnedPolicy](learning-l0.md)
 - [Policy current status](policy-status.md)
+- [通常ツモDLVAT型補正のV1・p・単位補正](draw-correction.md)
 - [RiichiEnv investigation — historical / validation reference](riichienv-investigation.md)
 - [RiichiLab client — historical migration pointer](riichilab-client.md)
 - [RiichiLab Adapter — historical migration pointer](riichilab-adapter.md)
